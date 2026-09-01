@@ -110,6 +110,7 @@ Scalpel uses the most reliable deterministic tool available for each language:
 | TypeScript / JavaScript | tsserver (LSP) | Tree-sitter | Semantic (full) |
 | Go | gopls (LSP) | Tree-sitter | Semantic (full) |
 | Python | pylsp / pyright (LSP) | Tree-sitter | Semantic (limited) |
+| Emacs Lisp (elisp) | Built-in `elisp-mode` (semantic location via `elisp--describe`) | Tree-sitter (if grammar available) | Semantic (limited) |
 | C / C++ | clangd (LSP) | Tree-sitter + Ripgrep | Semantic (requires compile_commands.json) |
 | JSON / YAML / TOML | Tree-sitter | Ripgrep | Structural |
 | Other languages | Tree-sitter (if available) | Ripgrep | Structural |
