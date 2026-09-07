@@ -25,15 +25,23 @@ they often edit code you did not ask to touch.
 Scalpel exists at the intersection: a full coding agent, **inside Emacs**, with
 a strict boundary lock that makes unwanted edits almost impossible.
 
-| | Aider | Claude Code / OpenCode | Scalpel |
-| --- | --- | --- | --- |
-| Interaction | terminal chat | terminal chat | Emacs `*scalpel*` console |
-| Multi-file refactors | yes | yes | yes |
-| Target discovery | repository-wide search | agent-owned context | open Emacs buffers + project files |
-| Location method | LLM writes SEARCH/REPLACE | agent walks the repo | **deterministic locator** |
-| Precision failure mode | whitespace / matching | scope creep | designed out |
-| Revert | git history | session replay | `scalpel/autosave` + session-level rollback |
-| Ecosystem | standalone | standalone | Emacs-native (LSP, magit, gptel) |
+**Key differences from Aider and newer coding agents (Claude Code, OpenCode, etc.)**
+
+- **Interaction and ecosystem**: Scalpel is not a standalone CLI; it lives inside
+  Emacs as a buffer. It reuses gptel, LSP, and magit, so there is no need to switch
+  to another window outside Emacs.
+- **Location without text guessing**: Aider asks the LLM to produce SEARCH/REPLACE
+  blocks for matching; Scalpel instead resolves symbols directly to exact byte
+  ranges using LSP/tree-sitter/structural scanning, and asks the LLM only for
+  *what* to change.
+- **No scope creep**: Newer agents often change files you did not ask to touch.
+  Scalpel's boundary lock makes that impossible -- replacements land only on the
+  confirmed byte range.
+- **Auditable sessions**: Every modification is recorded as a trackable session on
+  `scalpel/autosave`, with one-shot rollback -- no hunting through scattered diffs.
+- **Surgical precision, not bulk replace**: Multi-file refactoring is supported,
+  but each step can be confirmed before it is applied; Scalpel never silently edits
+  the whole repo.
 
 The user story is simple: **you talk to a coding assistant from inside Emacs,
 but every actual edit is a controlled act.**
@@ -71,32 +79,32 @@ but every actual edit is a controlled act.**
                          │               User                   │
                          │   cursor on target; speaks intent    │
                          ╰──────────────┬───────────────────────╯
-                                        │ ① instruction
+                                        │ 1. instruction
                                         ▼
                          ╭──────────────────────────────────────╮
                          │           *scalpel* console          │
                          │       persistent agent session       │
                          ╰──────────────┬───────────────────────╯
-                                        │ ② request
+                                        │ 2. request
                                         ▼
    ╭───────────────╮    ╭──────────────────────────────────────╮
    │     gptel     │◀───│           scalpel-agent              │
    │  (LLM calls)  │    │   LLM: plan → structured actions     │
    ╰───────────────╯    ╰───────────────┬──────────────────────╯
-                                        │ ③ action list, e.g.
-                                        │   {edit, file, symbol}
+                                        │ 3. action list, e.g.
+                                        │  {edit, file, symbol}
                                         ▼
    ╭───────────────╮    ╭──────────────────────────────────────╮
    │     LSP /     │◀───│          scalpel-locate              │
    │ tree-sitter / │    │  resolve action to exact byte range  │
    │ syntax-ppss   │    ╰───────────────┬──────────────────────╯
-   ╰───────────────╯                    │ ④ (beg . end)
+   ╰───────────────╯                    │ 4. (beg . end)
                                         ▼
                          ╭──────────────────────────────────────╮
                          │          scalpel-execute             │
                          │     boundary-locked replacement      │
                          ╰───────┬──────────────────┬───────────╯
-                                 │ ⑤ replace       │ ⑥ record
+                                 │ 5. replace       │ 6. record
                                  ▼                  ▼
           ╭──────────────────────────────╮  ╭──────────────────────────────╮
           │    edited Emacs buffer       │  │       scalpel-lineage        │
