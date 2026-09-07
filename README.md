@@ -19,7 +19,7 @@ Unlike other AI assistants that rely on fuzzy `SEARCH/REPLACE` blocks or over-ea
 
 | Traditional Tools (Aider, OpenCode) | Scalpel |
 | :--- | :--- |
-| LLM writes `SEARCH` blocks – fails on formatting differences | **Location is resolved by LSP / Tree-sitter – 100% deterministic** |
+| LLM writes `SEARCH` blocks – fails on formatting differences | **Location is resolved by LSP / Tree-sitter, with a structure-locking fallback – always deterministic** |
 | Agents often modify code you didn't ask for | **Boundary lock** guarantees *only* the target block is replaced |
 | Users must configure plugins or write adapters | **Zero-config** – Scalpel knows your language out of the box |
 | Coupled "plan + act" – high error rate | **Decoupled generation and positioning** – each part does what it does best |
@@ -115,6 +115,13 @@ Scalpel uses the most reliable deterministic tool available for each language:
 | JSON / YAML / TOML | Tree-sitter | Ripgrep | Structural |
 | Other languages | Tree-sitter (if available) | Ripgrep | Structural |
 
+When neither LSP nor Tree-sitter is available, Scalpel falls back to
+**bracket/indentation structure locking**: block boundaries are derived from
+`syntax-ppss` bracket-depth scanning (strings and comments are skipped) and
+cross-validated with `beginning-of-defun`. In this mode only
+"replace the block under the cursor" is supported — instruction-driven
+location and symbol-level refactoring require LSP or Tree-sitter.
+
 ---
 
 ## Installation
@@ -165,6 +172,15 @@ Then add to your init.el:
 5. Confirm with `y` – Scalpel calls the LLM, generates new code, and replaces *only* the target block.
 6. An `ediff` buffer shows you the before/after diff.
 7. Accept the change (`y`) or reject (`n`).
+
+### Locating targets
+
+- **Cursor-driven** (default): place point on or inside the target symbol.
+- **Instruction-driven**: if your instruction names a symbol (e.g. "rename
+  `parse_config` to ...") while point is elsewhere, Scalpel resolves the name
+  via LSP symbol queries. If multiple candidates match, you pick one from a
+  completion list — Scalpel never guesses.
+- Anonymous targets ("the second if branch") always require the cursor.
 
 ### Advanced features
 
