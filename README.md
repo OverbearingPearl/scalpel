@@ -186,11 +186,52 @@ never speculative whole-file changes.
 - Git (used for local undo/rollback)
 - optionally `lsp-mode`/`eglot` and language servers for richer semantics
 
-### Install
+### Install with use-package
+
+Since Scalpel is not yet on MELPA, point use-package at its source directory.
+
+First, install and configure `gptel`. A minimal setup using `use-package` is:
 
 ```elisp
-;; until this is on MELPA:
-(add-to-list 'load-path "~/path/to/scalpel")
+(use-package gptel
+  :ensure t
+  :config
+  ;; Example: DeepSeek via an OpenAI-compatible backend.
+  ;;
+  ;; Store the API key in `~/.authinfo`:
+  ;;   machine api.deepseek.com login api-key password YOUR_DEEPSEEK_API_KEY
+  (setq gptel-backend
+        (gptel-make-openai "DeepSeek-V4-Flash"
+          :host "api.deepseek.com"
+          :endpoint "/chat/completions"
+          :stream t
+          :key (auth-source-pick-first-password :host "api.deepseek.com")
+          :models '("deepseek-v4-flash")))
+  )
+```
+
+Then install Scalpel itself:
+
+```elisp
+(use-package scalpel
+  :load-path "~/path/to/scalpel"   ; replace with the actual path
+  :after (gptel)
+  :commands (scalpel-console))
+```
+
+After evaluating the above, run `M-x scalpel-console`.
+
+If `gptel` is missing, loading Scalpel fails with a clear message explaining
+how to install it, instead of an opaque "Cannot open load file" error.
+
+If you prefer not to use `use-package`, you can manually add both packages to
+`load-path` and require them in order:
+
+```elisp
+(add-to-list 'load-path "/path/to/gptel")
+(add-to-list 'load-path "/path/to/scalpel")
+(require 'gptel)
+;; configure gptel here
 (require 'scalpel)
 ```
 
@@ -209,8 +250,10 @@ M-x scalpel-console
 
 Inside the console:
 
-- `C-c C-c` – send the current input line to Scalpel
+- `RET` – send the current input line to Scalpel
+- `C-c C-c` – also send the current input line
 - `C-c C-x` – interrupt a running agent operation
+- `C-c C-b` – switch the active gptel backend (model) for future requests
 - `M-x scalpel-history` – show previous Scalpel sessions
 - `M-x scalpel-revert-session` – revert one session completely
 

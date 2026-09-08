@@ -1,0 +1,138 @@
+;;; scalpel-agent.el --- LLM planning and action execution -*- lexical-binding: t; -*-
+
+;; Copyright (C) 2026 OverbearingPearl
+;; Author: OverbearingPearl <OverbearingPearl@outlook.com>
+;; Assisted-by: DeepSeek:deepseek-v4-flash, GLM:glm-5.3-flash, Laguna:laguna-s-2.1
+;; URL: https://github.com/OverbearingPearl/scalpel
+;; SPDX-License-Identifier: Apache-2.0
+
+;;; Commentary:
+;; Provides context, structured-plan parsing, and action dispatch.
+
+;;; Code:
+
+(require 'json)
+(require 'subr-x)
+(require 'scalpel-llm)
+(require 'scalpel-locate)
+(require 'scalpel-execute)
+
+(defcustom scalpel-agent-system-prompt
+  (if (boundp 'scalpel-system-prompt)
+      scalpel-system-prompt
+    "You are a precise code transformation tool. The user gives you
+context and an instruction. Return ONLY a JSON array of actions.
+Each action is either {\"tool\":\"edit\",\"file\":\"/abs/path.el\",\"symbol\":\"name\",\"instruction\":\"...\"}
+or {\"tool\":\"reply\",\"text\":\"...\"}. Never emit code or diff text in this response.")
+  "System prompt for the Scalpel agent planner."
+  :type 'string
+  :group 'scalpel)
+
+(defun scalpel-agent--top-symbols ()
+  "Return comma-separated top-level symbols in the current Emacs Lisp buffer."
+  (let (syms)
+    (save-excursion
+      (goto-char (point-min))
+      (while (re-search-forward
+              "^(\\(def\\(?:un\\|macro\\|var\\|custom\\|const\\)[ \t]+\\)\\([^ \t\n()]+\\)"
+              nil t)
+        (push (match-string-no-properties 2) syms)))
+    (string-join (nreverse syms) ", ")))
+
+(defun scalpel-agent-context ()
+  "List open Emacs Lisp files and their symbols."
+  (let (files)
+    (dolist (buf (buffer-list))
+      (when-let ((file (buffer-file-name buf))
+                 ((string-match-p "\\.el\\'" file)))
+        (with-current-buffer buf
+          (push (format "FILE: %s\nSYMBOLS: %s" file (scalpel-agent--top-symbols))
+                files))))
+    (string-join (nreverse files) "\n\n")))
+
+(defun scalpel-agent--parse-json (raw)
+  "Parse RAW to a list of plists, one per action."
+  (condition-case nil
+      (let ((parsed (json-parse-string raw
+                     :object-type 'plist
+                     :array-type 'list)))
+        parsed)
+    (error
+     (user-error "Scalpel: planner returned invalid JSON: %S" raw))))
+
+(defun scalpel-agent-plan (instruction)
+  "Ask the LLM for a structured plan for INSTRUCTION.
+Return a list of plists with keys :tool :file :symbol :instruction :text."
+  (let* ((prompt (format "%s\n\nUser instruction:\n%s"
+                         (scalpel-agent-context) instruction))
+         (raw (scalpel-llm-request prompt scalpel-agent-system-prompt))
+         (actions (scalpel-agent--parse-json raw)))
+    (mapcar
+     (lambda (item)
+       (list :tool (plist-get item :tool)
+             :file (plist-get item :file)
+             :symbol (plist-get item :symbol)
+             :instruction (plist-get item :instruction)
+             :text (plist-get item :text)))
+     actions)))
+
+(defun scalpel-agent--apply-if-unchanged (file symbol expected-body new-text)
+  "Replace SYMBOL in FILE with NEW-TEXT only if EXPECTED-BODY is unchanged.
+Return a human-readable report string.  Signal `user-error' if the target
+region was modified while an LLM request was in flight."
+  (with-current-buffer (find-file-noselect file)
+    (let* ((current-range (scalpel-locate-range file symbol))
+           (current-body (buffer-substring-no-properties
+                          (car current-range) (cdr current-range))))
+      (unless (string= expected-body current-body)
+        (user-error
+         (concat "Scalpel: target region changed while editing %s; "
+                 "aborting.  Re-run after reviewing the buffer")
+         symbol))
+      (scalpel-execute-replace (car current-range) (cdr current-range) new-text)
+      (format "Edited %s in %s" symbol (buffer-name (current-buffer))))))
+
+(defun scalpel-agent-edit (file symbol instruction)
+  "Edit SYMBOL in FILE per INSTRUCTION using boundary-locked apply.
+Return human-readable report string."
+  (unless (and file symbol instruction)
+    (user-error "Scalpel: malformed edit action"))
+  (let ((range (scalpel-locate-range file symbol)))
+    (unless range
+      (user-error "Scalpel: can't locate %s in %s" symbol file))
+    (with-current-buffer (find-file-noselect file)
+      (let* ((beg (car range))
+             (end (cdr range))
+             (body (buffer-substring-no-properties beg end))
+             (signature (save-excursion
+                          (goto-char beg)
+                          (buffer-substring-no-properties
+                           beg (line-end-position))))
+             (prompt (format "Signature: %s\n\nCurrent block:\n%s\n\nInstruction: %s"
+                             signature body instruction))
+             (new-text (scalpel-llm-request prompt)))
+        (scalpel-agent--apply-if-unchanged
+         file symbol body (string-trim new-text))))))
+
+(defun scalpel-agent-execute-action (action)
+  "Execute a single ACTION plist and return a report string."
+  (let ((tool (plist-get action :tool)))
+    (pcase tool
+      ("edit"
+       (scalpel-agent-edit
+        (plist-get action :file)
+        (plist-get action :symbol)
+        (plist-get action :instruction)))
+      ("reply"
+       (format "%s" (or (plist-get action :text) "")))
+      (_
+       (format "Unknown action: %S" tool)))))
+
+(defun scalpel-agent-run (instruction)
+  "Run a full agent cycle for INSTRUCTION and return the combined report."
+  (mapconcat #'scalpel-agent-execute-action
+             (scalpel-agent-plan instruction)
+             "\n"))
+
+(provide 'scalpel-agent)
+;;; scalpel-agent.el ends here
