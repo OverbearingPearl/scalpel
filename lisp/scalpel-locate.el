@@ -1,4 +1,4 @@
-;;; scalpel-locate.el --- Deterministic Emacs-Lisp block locator -*- lexical-binding: t; -*-
+;;; scalpel-locate.el --- Deterministic block locator dispatch -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026 OverbearingPearl
 ;; Author: OverbearingPearl <OverbearingPearl@outlook.com>
@@ -7,36 +7,67 @@
 ;; SPDX-License-Identifier: Apache-2.0
 
 ;;; Commentary:
-;; Bracket-level locator for Emacs Lisp top-level definitions.
+;; Dispatch to per-language locator providers by file-name regexp.
 
 ;;; Code:
 
-(defconst scalpel-locate--def-header-regex
-  "^(def\\(?:un\\|macro\\|var\\|custom\\|const\\)[ \t]+"
-  "Regex matching the start of an Emacs Lisp top-level definer.")
+(require 'cl-lib)
+(require 'scalpel-locate-elisp)
 
-(defun scalpel-locate--top-definition-range (symbol)
-  "Return (BEG . END) of top-level form named SYMBOL in current buffer.
-Signal an error when SYMBOL cannot be found."
-  (save-excursion
-    (goto-char (point-min))
-    (let* ((case-fold-search nil)
-           (pattern (format "%s%s\\(?:[ \t\n\r]\\|\\'\\)"
-                            scalpel-locate--def-header-regex
-                            (regexp-quote symbol))))
-      (when (re-search-forward pattern nil t)
-        (goto-char (match-beginning 0))
-        (let ((beg (point)))
-          (forward-list 1)
-          (cons beg (point)))))))
+(defvar scalpel-locate-providers nil
+  "Alist of (REGEXP . PROVIDER-PLIST) for registered locator providers.
+
+PROVIDER-PLIST keys:
+:locate -- function (FILE SYMBOL), returns (BEG . END) or nil.
+:list-symbols -- function (FILE), returns list of symbol name strings.")
+
+(defun scalpel-locate-register-provider (regexp provider)
+  "Register PROVIDER for file names matching REGEXP.
+PROVIDER is a plist with :locate and :list-symbols entries.
+Registering the same REGEXP replaces the previous provider."
+  (setq scalpel-locate-providers
+        (cons (cons regexp provider)
+              (cl-remove-if (lambda (entry)
+                              (string= (car entry) regexp))
+                            scalpel-locate-providers))))
+
+(defun scalpel-locate-provider-for-file (file)
+  "Return provider plist for FILE, or nil."
+  (let ((entry (cl-find-if (lambda (entry)
+                             (string-match-p (car entry) file))
+                           scalpel-locate-providers)))
+    (and entry (cdr entry))))
 
 (defun scalpel-locate-range (file symbol)
-  "Return byte range of SYMBOL in FILE.
-Raise user-error if FILE is not loaded or SYMBOL is not found."
+  "Return byte range (BEG . END) of SYMBOL in FILE.
+Open FILE if needed.  Signal `user-error' when no locator is
+registered for FILE or SYMBOL cannot be found."
   (find-file-noselect file)
-  (with-current-buffer (get-file-buffer file)
-    (or (scalpel-locate--top-definition-range symbol)
-        (user-error "Scalpel: symbol %s not found in %s" symbol file))))
+  (let* ((provider (scalpel-locate-provider-for-file file))
+         (locate (and provider (plist-get provider :locate))))
+    (unless locate
+      (user-error "Scalpel: no locator registered for %s" file))
+    (with-current-buffer (get-file-buffer file)
+      (or (funcall locate file symbol)
+          (user-error "Scalpel: symbol %s not found in %s" symbol file)))))
+
+(defun scalpel-locate-list-symbols (file)
+  "Return a list of top-level symbol names in FILE.
+Open FILE if needed.  Signal `user-error' when no locator is
+registered for FILE."
+  (find-file-noselect file)
+  (let* ((provider (scalpel-locate-provider-for-file file))
+         (list-symbols (and provider (plist-get provider :list-symbols))))
+    (unless list-symbols
+      (user-error "Scalpel: no locator registered for %s" file))
+    (with-current-buffer (get-file-buffer file)
+      (funcall list-symbols file))))
+
+;; Built-in Emacs Lisp provider.
+(scalpel-locate-register-provider
+ "\\.el\\'"
+ (list :locate #'scalpel-locate-elisp-range
+       :list-symbols #'scalpel-locate-elisp-list-symbols))
 
 (provide 'scalpel-locate)
 ;;; scalpel-locate.el ends here

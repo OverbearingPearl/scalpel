@@ -28,25 +28,15 @@ or {\"tool\":\"reply\",\"text\":\"...\"}. Never emit code or diff text in this r
   :type 'string
   :group 'scalpel)
 
-(defun scalpel-agent--top-symbols ()
-  "Return comma-separated top-level symbols in the current Emacs Lisp buffer."
-  (let (syms)
-    (save-excursion
-      (goto-char (point-min))
-      (while (re-search-forward
-              "^(\\(def\\(?:un\\|macro\\|var\\|custom\\|const\\)[ \t]+\\)\\([^ \t\n()]+\\)"
-              nil t)
-        (push (match-string-no-properties 2) syms)))
-    (string-join (nreverse syms) ", ")))
-
 (defun scalpel-agent-context ()
-  "List open Emacs Lisp files and their symbols."
+  "List open files that have a registered locator, with their symbols."
   (let (files)
     (dolist (buf (buffer-list))
-      (when-let ((file (buffer-file-name buf))
-                 ((string-match-p "\\.el\\'" file)))
-        (with-current-buffer buf
-          (push (format "FILE: %s\nSYMBOLS: %s" file (scalpel-agent--top-symbols))
+      (let ((file (buffer-file-name buf)))
+        (when (and file (scalpel-locate-provider-for-file file))
+          (push (format "FILE: %s\nSYMBOLS: %s"
+                        file
+                        (string-join (scalpel-locate-list-symbols file) ", "))
                 files))))
     (string-join (nreverse files) "\n\n")))
 

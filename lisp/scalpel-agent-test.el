@@ -7,6 +7,7 @@
 (require 'scalpel-agent)
 (require 'scalpel-execute)
 (require 'scalpel-locate)
+(require 'scalpel-locate-elisp)
 
 (ert-deftest scalpel-agent-test-parse-json ()
   "Parse a valid JSON array of actions into a list of plists."
@@ -32,7 +33,7 @@
           (with-temp-file file
             (insert "(defun foo (x)\n  (+ x 1))\n"))
           (let* ((range (with-current-buffer (find-file-noselect file)
-                          (scalpel-locate--top-definition-range "foo")))
+                          (scalpel-locate-elisp--top-definition-range "foo")))
                  (beg (car range))
                  (end (cdr range))
                  (body (with-current-buffer (find-file-noselect file)
