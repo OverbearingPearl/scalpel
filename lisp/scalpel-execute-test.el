@@ -1,5 +1,8 @@
 ;;; scalpel-execute-test.el --- Tests for scalpel-execute -*- lexical-binding: t; -*-
 ;;; Commentary:
+
+;; Tests for scalpel-execute.
+
 ;;; Code:
 
 (require 'ert)
@@ -28,4 +31,5 @@
      :type 'error)))
 
 (provide 'scalpel-execute-test)
+
 ;;; scalpel-execute-test.el ends here

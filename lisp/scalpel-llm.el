@@ -8,6 +8,8 @@
 
 ;;; Commentary:
 
+;; Scalpel LLM gateway implementation notes.
+
 ;;; Code:
 
 (unless (require 'gptel nil t)
@@ -63,4 +65,5 @@ Waits synchronously but calls `accept-process-output' so user interrupts work."
          (signal (car err) (cdr err)))))))
 
 (provide 'scalpel-llm)
+
 ;;; scalpel-llm.el ends here

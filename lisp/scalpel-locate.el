@@ -70,4 +70,5 @@ registered for FILE."
        :list-symbols #'scalpel-locate-elisp-list-symbols))
 
 (provide 'scalpel-locate)
+
 ;;; scalpel-locate.el ends here

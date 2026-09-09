@@ -111,4 +111,5 @@ in `*scalpel*' and press RET."
           (scalpel-console--add-text (format "Scalpel: %s\n\n" report)))))))
 
 (provide 'scalpel-console)
+
 ;;; scalpel-console.el ends here

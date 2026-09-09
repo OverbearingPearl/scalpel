@@ -1,5 +1,8 @@
 ;;; scalpel-locate-test.el --- Tests for scalpel-locate -*- lexical-binding: t; -*-
 ;;; Commentary:
+
+;; Tests for scalpel-locate.
+
 ;;; Code:
 
 (require 'ert)
@@ -74,4 +77,5 @@
         (delete-file file)))))
 
 (provide 'scalpel-locate-test)
+
 ;;; scalpel-locate-test.el ends here

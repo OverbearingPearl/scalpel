@@ -1,5 +1,8 @@
 ;;; scalpel-llm-test.el --- Tests for scalpel-llm -*- lexical-binding: t; -*-
 ;;; Commentary:
+
+;; Tests for scalpel-llm.
+
 ;;; Code:
 
 (require 'ert)
@@ -11,4 +14,5 @@
   (should-not (scalpel-llm--api-key-error-p "Scalpel: LLM request timed out")))
 
 (provide 'scalpel-llm-test)
+
 ;;; scalpel-llm-test.el ends here

@@ -1,5 +1,8 @@
 ;;; scalpel-agent-test.el --- Tests for scalpel-agent -*- lexical-binding: t; -*-
 ;;; Commentary:
+
+;; Tests for scalpel-agent.
+
 ;;; Code:
 
 (require 'ert)
@@ -129,4 +132,5 @@
         (delete-file file)))))
 
 (provide 'scalpel-agent-test)
+
 ;;; scalpel-agent-test.el ends here

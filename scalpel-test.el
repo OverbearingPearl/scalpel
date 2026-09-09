@@ -76,4 +76,5 @@
     (ert "scalpel-")))
 
 (provide 'scalpel-test)
+
 ;;; scalpel-test.el ends here

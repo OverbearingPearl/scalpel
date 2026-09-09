@@ -50,4 +50,5 @@ Current buffer is the Emacs Lisp file referenced by FILE."
     (nreverse syms)))
 
 (provide 'scalpel-locate-elisp)
+
 ;;; scalpel-locate-elisp.el ends here

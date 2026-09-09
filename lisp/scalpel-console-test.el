@@ -1,5 +1,8 @@
 ;;; scalpel-console-test.el --- Tests for scalpel-console -*- lexical-binding: t; -*-
 ;;; Commentary:
+
+;; Tests for scalpel-console.
+
 ;;; Code:
 
 (require 'ert)
@@ -52,4 +55,5 @@
         (kill-buffer scalpel-console-buffer-name)))))
 
 (provide 'scalpel-console-test)
+
 ;;; scalpel-console-test.el ends here

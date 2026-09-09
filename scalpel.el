@@ -48,4 +48,5 @@ or {\"tool\":\"reply\",\"text\":\"...\"}. Never emit code or diff text in this r
   (scalpel-console-open))
 
 (provide 'scalpel)
+
 ;;; scalpel.el ends here

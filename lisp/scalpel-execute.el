@@ -32,4 +32,5 @@ Signal user-error when NEW-TEXT is structurally unbalanced."
     (insert new-text)))
 
 (provide 'scalpel-execute)
+
 ;;; scalpel-execute.el ends here

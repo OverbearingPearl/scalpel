@@ -152,4 +152,5 @@ Return human-readable report string."
              "\n"))
 
 (provide 'scalpel-agent)
+
 ;;; scalpel-agent.el ends here
