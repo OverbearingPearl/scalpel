@@ -121,9 +121,15 @@ Components live in focused modules:
 
 - `scalpel-console` – persistent agent UI loop
 - `scalpel-agent` – LLM planning integration and structured action parser
-- `scalpel-locate` – deterministic locator implementation
+- `scalpel-locate` – locator dispatch; resolves actions to byte ranges via per-language providers
+- `scalpel-locate-elisp` – built-in structural locator provider for Emacs Lisp
 - `scalpel-execute` – boundary-locked edit application
 - `scalpel-lineage` – session tracking and Git-backed rollback
+
+Every additional language arrives as a `scalpel-locate-<lang>.el` provider
+module, registered through `scalpel-locate-register-provider`. Planned
+providers cover the languages in the table below: Rust, TypeScript /
+JavaScript, Go, Python, C / C++, and data formats (JSON / YAML / TOML).
 
 ---
 
