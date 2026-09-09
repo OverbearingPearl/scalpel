@@ -92,6 +92,18 @@ region was modified while an LLM request was in flight."
       (scalpel-execute-replace (car current-range) (cdr current-range) new-text)
       (format "Edited %s in %s" symbol (buffer-name (current-buffer))))))
 
+(defun scalpel-agent--single-definition-p (text)
+  "Return non-nil when TEXT is exactly one top-level defining form."
+  (condition-case nil
+      (let* ((parsed (read-from-string text))
+             (form (car parsed))
+             (end (cdr parsed)))
+        (and (listp form)
+             (memq (car form)
+                   '(defun defmacro defvar defcustom defconst))
+             (= end (length text))))
+    (error nil)))
+
 (defun scalpel-agent-edit (file symbol instruction)
   "Edit SYMBOL in FILE per INSTRUCTION using boundary-locked apply.
 Return human-readable report string."
@@ -108,11 +120,26 @@ Return human-readable report string."
                           (goto-char beg)
                           (buffer-substring-no-properties
                            beg (line-end-position))))
-             (prompt (format "Signature: %s\n\nCurrent block:\n%s\n\nInstruction: %s"
-                             signature body instruction))
-             (new-text (scalpel-llm-request prompt)))
-        (scalpel-agent--apply-if-unchanged
-         file symbol body (string-trim new-text))))))
+             (prompt (concat "Signature: %s\n\nCurrent block:\n%s\n\n"
+                             "Instruction: %s\n\n"
+                             "Return only the full replacement definition, as plain "
+                             "Emacs Lisp text. Do not include markdown fences or "
+                             "explanations. If the requested change is impossible or "
+                             "unnecessary for this block, return exactly: NO_CHANGE"))
+             (new-text (string-trim (scalpel-llm-request
+                                     (format prompt signature body instruction)))))
+        (cond
+         ((string= new-text "NO_CHANGE")
+          (format "No change needed: %s in %s" symbol
+                  (buffer-name (current-buffer))))
+         ((scalpel-agent--single-definition-p new-text)
+          (scalpel-agent--apply-if-unchanged
+           file symbol body new-text))
+         (t
+          (user-error
+           (concat "Scalpel: planner returned no usable replacement for %s. "
+                   "Refusing to edit. Reply was: %S")
+           symbol new-text)))))))
 
 (defun scalpel-agent-execute-action (action)
   "Execute a single ACTION plist and return a report string."

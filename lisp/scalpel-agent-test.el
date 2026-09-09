@@ -104,5 +104,28 @@
    (scalpel-agent-edit nil nil nil)
    :type 'error))
 
+(ert-deftest scalpel-agent-test-edit-rejects-prose-response ()
+  "When LLM returns prose instead of code, no edit is applied."
+  (let ((file (make-temp-file "scalpel-test-" nil ".el")))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert "(defun foo (x)\n  (+ x 1))\n"))
+          (cl-letf (((symbol-function 'scalpel-llm-request)
+                     (lambda (&rest _ignore)
+                       "There are no occurrences of `(+ x 1)` in the body.")))
+            (should-error
+             (scalpel-agent-edit file "foo" "replace x with y")
+             :type 'user-error)
+            (with-current-buffer (find-file-noselect file)
+              (should (string= (buffer-string)
+                               "(defun foo (x)\n  (+ x 1))\n")))))
+      (when (get-file-buffer file)
+        (with-current-buffer (get-file-buffer file)
+          (set-buffer-modified-p nil))
+        (kill-buffer (get-file-buffer file)))
+      (when (file-exists-p file)
+        (delete-file file)))))
+
 (provide 'scalpel-agent-test)
 ;;; scalpel-agent-test.el ends here
