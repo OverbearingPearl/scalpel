@@ -175,6 +175,7 @@ returned buffer when done."
               (should (eq (get-text-property pos 'face)
                           'scalpel-console-context-removed-face)))))
       (when (buffer-live-p buf) (kill-buffer buf)))))
+
 (ert-deftest scalpel-console-test-context-diff-face-covers-name-only ()
   "The change face starts at the file name, never at the tree graphics."
   (let ((scalpel-agent--context-files '("/tmp/scalpel-diff-name.el"))
@@ -195,6 +196,23 @@ returned buffer when done."
               (should (eq (get-text-property pos 'face)
                           'scalpel-console-context-removed-face))
               (should (null (get-text-property (1- pos) 'face))))))
+      (when (buffer-live-p buf) (kill-buffer buf)))))
+
+(ert-deftest scalpel-console-test-send-line-does-not-duplicate-input ()
+  "The typed instruction is rewritten into the User line, not repeated."
+  (let ((buf (scalpel-console-test--new-console-buffer)))
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'scalpel-llm-request)
+                     (lambda (_prompt &optional _system)
+                       "[{\"tool\":\"reply\",\"text\":\"done\"}]")))
+            (with-current-buffer buf
+              (erase-buffer)
+              (insert "echo me\n")
+              (goto-char (point-min))
+              (scalpel-console-send-line))
+            (with-current-buffer buf
+              (should (= (how-many "echo me" (point-min) (point-max)) 1)))))
       (when (buffer-live-p buf) (kill-buffer buf)))))
 
 (provide 'scalpel-console-test)

@@ -259,10 +259,13 @@ that path."
         (if (string-empty-p instr)
             (message "Scalpel: nothing to send on this line.")
           (progn
-            ;; Close the input line before echoing the user message
-            (goto-char (line-end-position))
-            (newline)
-            (let ((inhibit-read-only t))
+            ;; Rewrite the typed input line into the logged user message, so
+            ;; the instruction is not shown twice (once raw, once prefixed).
+            (let ((inhibit-read-only t)
+                  (beg (line-beginning-position))
+                  (end (line-end-position)))
+              (delete-region beg end)
+              (goto-char beg)
               (insert (format "User: %s\n" instr)))
             (let ((scalpel-console--busy t)
                   (spinner (scalpel-console--spinner-start)))
