@@ -105,6 +105,7 @@ The agent will process the instruction and append its reply to this buffer."
 
 (defun scalpel-console-send-line ()
   "Send the current line to the Scalpel agent and append the reply."
+  (interactive)
   (let ((buf (get-buffer-create scalpel-console-buffer-name)))
     (unless (eq (current-buffer) buf)
       (switch-to-buffer buf))
