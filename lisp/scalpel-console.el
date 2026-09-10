@@ -22,6 +22,9 @@
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "RET") #'scalpel-console-send-line)
     (define-key map (kbd "C-c C-b") 'scalpel-set-backend)
+    (define-key map (kbd "C-c C-a") #'scalpel-console-add-file)
+    (define-key map (kbd "C-c C-d") #'scalpel-console-remove-file)
+    (define-key map (kbd "C-c C-r") #'scalpel-console-reset-context)
     map)
   "Keymap used in Scalpel console buffers.")
 
@@ -81,6 +84,34 @@ The agent will process the instruction and append its reply to this buffer."
           (goto-char (point-max))
           (insert (format "%s\n\n" text)))))))
 
+(defun scalpel-console--show-context ()
+  "Append a one-line context summary to the console buffer."
+  (scalpel-console--append
+   (format "Context: %s" (scalpel-agent-context-summary))))
+
+(defun scalpel-console-add-file ()
+  "Prompt for a file or directory and add it to the agent context."
+  (interactive)
+  (let ((file (read-file-name "Add to Scalpel context: ")))
+    (scalpel-agent-context-add file)
+    (scalpel-console--show-context)))
+
+(defun scalpel-console-remove-file ()
+  "Prompt for a context file and remove it from the agent context."
+  (interactive)
+  (if (null scalpel-agent--context-files)
+      (message "Scalpel: context is empty")
+    (let ((file (completing-read "Remove from Scalpel context: "
+                                 scalpel-agent--context-files nil t)))
+      (scalpel-agent-context-remove file)
+      (scalpel-console--show-context))))
+
+(defun scalpel-console-reset-context ()
+  "Reset the agent context to currently open located files."
+  (interactive)
+  (scalpel-agent-context-reset)
+  (scalpel-console--show-context))
+
 (defun scalpel-console-open ()
   "Open (or switch to) the Scalpel console buffer and clear its contents."
   (let ((buf (get-buffer-create scalpel-console-buffer-name)))
@@ -94,7 +125,10 @@ The agent will process the instruction and append its reply to this buffer."
       (insert "Scalpel console.\n")
       (insert "Type an instruction on its own line and press RET.\n")
       (insert "\n")
-      (goto-char (point-max)))))
+      (goto-char (point-max)))
+    (scalpel-agent-context-reset)
+    (scalpel-console--show-context)
+    (goto-char (point-max))))
 
 (defun scalpel-console-send-line ()
   "Send the current line to the Scalpel agent and append the reply."

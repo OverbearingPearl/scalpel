@@ -150,6 +150,60 @@
     (should (= (length actions) 1))
     (should (equal (plist-get (car actions) :text) "hi"))))
 
+(ert-deftest scalpel-agent-test-context-files-default ()
+  "Default context collects only open buffers with a registered locator."
+  (let ((file (make-temp-file "scalpel-test-" nil ".el")))
+    (unwind-protect
+        (let ((buf (find-file-noselect file)))
+          (unwind-protect
+              (with-temp-buffer
+                (insert "unrelated")
+                (cl-letf (((symbol-function 'buffer-list)
+                           (lambda () (list buf))))
+                  (should (equal (scalpel-agent--context-files-default)
+                                 (list (expand-file-name file))))))
+            (kill-buffer buf)))
+      (when (file-exists-p file) (delete-file file)))))
+
+(ert-deftest scalpel-agent-test-context-add-remove ()
+  "Add dedupes and normalizes; remove of absent file does not error."
+  (let ((scalpel-agent--context-files nil)
+        (file (make-temp-file "scalpel-test-" nil ".el")))
+    (unwind-protect
+        (progn
+          (scalpel-agent-context-add file)
+          (scalpel-agent-context-add file)  ; dedupe
+          (should (equal scalpel-agent--context-files
+                         (list (expand-file-name file))))
+          (scalpel-agent-context-remove (concat file "/nope"))
+          (should (= (length scalpel-agent--context-files) 1))
+          (scalpel-agent-context-remove file)
+          (should (null scalpel-agent--context-files)))
+      (when (file-exists-p file) (delete-file file)))))
+
+(ert-deftest scalpel-agent-test-context-add-directory ()
+  "Adding a directory expands to contained located files."
+  (let ((scalpel-agent--context-files nil)
+        (dir (make-temp-file "scalpel-test-dir-" t))
+        (other (make-temp-file "scalpel-test-" nil ".unknown")))
+    (unwind-protect
+        (progn
+          (let ((file (expand-file-name "foo.el" dir)))
+            (with-temp-file file (insert "(defun foo ())"))
+            (scalpel-agent-context-add dir)
+            (should (equal scalpel-agent--context-files
+                           (list file)))))
+      (delete-directory dir t)
+      (when (file-exists-p other) (delete-file other)))))
+
+(ert-deftest scalpel-agent-test-context-summary-and-empty ()
+  "Summary joins file names; empty context reports 'none'."
+  (let ((scalpel-agent--context-files nil))
+    (should (string= (scalpel-agent-context-summary) "none"))
+    (should (string= (scalpel-agent-context) "No files in context."))
+    (let ((scalpel-agent--context-files '("/a.el" "/b.el")))
+      (should (string= (scalpel-agent-context-summary) "/a.el, /b.el")))))
+
 (provide 'scalpel-agent-test)
 
 ;;; scalpel-agent-test.el ends here

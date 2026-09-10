@@ -29,6 +29,22 @@
             (intern (file-name-base file)))
           (scalpel-test--lisp-files)))
 
+(defun scalpel-test--kill-temp-file-buffers ()
+  "Kill all file buffers visiting files under the temp directory.
+The directory is the value of the variable `temporary-file-directory'.
+Clear the modified flag first so killing never prompts.  This is a
+safety net for tests interrupted before their own cleanup ran."
+  (dolist (buf (buffer-list))
+    (let ((file (buffer-file-name buf)))
+      (when (and file
+                 (file-name-absolute-p file)
+                 (string-prefix-p (file-name-as-directory
+                                   (expand-file-name temporary-file-directory))
+                                  (expand-file-name file)))
+        (with-current-buffer buf
+          (set-buffer-modified-p nil))
+        (kill-buffer buf)))))
+
 (defun scalpel-test-reload-modules ()
   "Reload all Scalpel modules so that ERT can exercise the latest code."
   (interactive)
@@ -65,15 +81,18 @@
   "Reload Scalpel modules, then run every Scalpel ERT test."
   (interactive)
   (ert-delete-all-tests)
+  (scalpel-test--kill-temp-file-buffers)
   (scalpel-test-reload-modules)
   (dolist (file (scalpel-test--lisp-files))
     (when (string-match-p "-test\\.el$" file)
       (load-file (expand-file-name file
                                    (expand-file-name "lisp"
                                                      scalpel-test--package-root)))))
+  (scalpel-test--kill-temp-file-buffers)
   (if noninteractive
       (ert-run-tests-batch-and-exit "scalpel-")
-    (ert "scalpel-")))
+    (ert "scalpel-")
+    (scalpel-test--kill-temp-file-buffers)))
 
 (provide 'scalpel-test)
 

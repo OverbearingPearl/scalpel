@@ -28,6 +28,10 @@
               (should (search-forward "User: test instruction" nil t))
               (should (search-forward "Scalpel: done" nil t))
               (should-not (search-forward "thinking" nil t)))))
+      (when (get-file-buffer "/tmp/a.el")
+        (with-current-buffer (get-file-buffer "/tmp/a.el")
+          (set-buffer-modified-p nil))
+        (kill-buffer (get-file-buffer "/tmp/a.el")))
       (when (get-buffer scalpel-console-buffer-name)
         (with-current-buffer scalpel-console-buffer-name
           (set-buffer-modified-p nil))
@@ -94,6 +98,63 @@
         (with-current-buffer scalpel-console-buffer-name
           (set-buffer-modified-p nil))
         (kill-buffer scalpel-console-buffer-name)))))
+
+(ert-deftest scalpel-console-test-open-shows-context ()
+  "Opening the console shows a Context line and does not repeat it on send."
+  (let ((buf (get-buffer-create scalpel-console-buffer-name))
+        (scalpel-agent--context-files '("/tmp/a.el")))
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'scalpel-agent-context-reset)
+                     (lambda () nil))
+                    ((symbol-function 'scalpel-llm-request)
+                     (lambda (_p &optional _s)
+                       "[{\"tool\":\"reply\",\"text\":\"done\"}]")))
+            (scalpel-console-open)
+            (with-current-buffer buf
+              (goto-char (point-min))
+              (should (search-forward "Context: /tmp/a.el" nil t)))
+            (with-current-buffer buf
+              (goto-char (point-max))
+              (insert "hello")
+              (scalpel-console-send-line))
+            (with-current-buffer buf
+              (goto-char (point-min))
+              (should (search-forward "Scalpel: done" nil t))
+              ;; Only one Context line total.
+              (should (= (how-many "Context:" (point-min) (point-max)) 1)))))
+      (when (get-buffer scalpel-console-buffer-name)
+        (with-current-buffer scalpel-console-buffer-name
+          (set-buffer-modified-p nil))
+        (kill-buffer scalpel-console-buffer-name)))))
+
+(ert-deftest scalpel-console-test-add-file-updates-context-line ()
+  "Adding a file appends an updated Context line."
+  (let ((buf (get-buffer-create scalpel-console-buffer-name))
+        (scalpel-agent--context-files nil)
+        (file (make-temp-file "scalpel-test-" nil ".el")))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "(defun foo ())"))
+          (cl-letf (((symbol-function 'scalpel-agent-context-reset)
+                     (lambda () nil))
+                    ((symbol-function 'read-file-name)
+                     (lambda (&rest _) file)))
+            (scalpel-console-open)
+            (with-current-buffer buf
+              (scalpel-console-add-file))
+            (with-current-buffer buf
+              (should (search-forward
+                       (concat "Context: " (expand-file-name file)) nil t)))))
+      (when (get-buffer scalpel-console-buffer-name)
+        (with-current-buffer scalpel-console-buffer-name
+          (set-buffer-modified-p nil))
+        (kill-buffer scalpel-console-buffer-name))
+      (when (get-file-buffer file)
+        (with-current-buffer (get-file-buffer file)
+          (set-buffer-modified-p nil))
+        (kill-buffer (get-file-buffer file)))
+      (when (file-exists-p file) (delete-file file)))))
 
 (provide 'scalpel-console-test)
 
