@@ -57,7 +57,9 @@ or signal a `user-error' when there is none."
 (defvar scalpel-console-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "RET") #'scalpel-console-send-line)
-    (define-key map (kbd "C-c C-b") 'scalpel-set-backend)
+    (define-key map (kbd "C-c C-c") #'scalpel-console-send-line)
+    (define-key map (kbd "C-c C-x") #'scalpel-console-interrupt)
+    (define-key map (kbd "C-c C-b") #'scalpel-llm-select-backend)
     (define-key map (kbd "C-c C-a") #'scalpel-console-add-file)
     (define-key map (kbd "C-c C-o") #'scalpel-console-add-readonly-file)
     (define-key map (kbd "C-c C-d") #'scalpel-console-remove-file)
@@ -188,6 +190,18 @@ that path."
     (scalpel-agent-context-reset)
     (scalpel-console--show-context)
     (goto-char (point-max))))
+
+(defun scalpel-console-interrupt ()
+  "Interrupt a running agent request in the Scalpel console."
+  (interactive)
+  (let ((buf (scalpel-console--target-buffer)))
+    (unless (eq (current-buffer) buf)
+      (switch-to-buffer buf))
+    (if (not scalpel-console--busy)
+        (message "Scalpel: nothing to interrupt")
+      (let ((inhibit-read-only t))
+        (insert "Scalpel: interrupting...\n\n"))
+      (run-with-timer 0 nil (lambda () (signal 'quit nil)) buf))))
 
 (defun scalpel-console-send-line ()
   "Send the current line to the Scalpel agent and append the reply."

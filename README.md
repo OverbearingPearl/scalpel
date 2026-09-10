@@ -222,7 +222,10 @@ Then install Scalpel itself:
 (use-package scalpel
   :load-path "~/path/to/scalpel"   ; replace with the actual path
   :after (gptel)
-  :commands (scalpel-open))
+  :commands (scalpel-open)
+  ;; Scalpel ships no global prefix (Emacs reserves that space);
+  ;; pick your own and bind the command map:
+  :bind-keymap ("C-c s" . scalpel-command-map))
 ```
 
 After evaluating the above, run `M-x scalpel-open`.
@@ -260,6 +263,10 @@ Inside the console:
 - `C-c C-c` – also send the current input line
 - `C-c C-x` – interrupt a running agent operation
 - `C-c C-b` – switch the active gptel backend (model) for future requests
+- `C-c C-a` – add a file or directory as writable context
+- `C-c C-o` – add a file or directory as read-only reference
+- `C-c C-d` – remove a file or directory from the context
+- `C-c C-r` – reset the context to currently open located files
 - `M-x scalpel-history` – show previous Scalpel sessions
 - `M-x scalpel-revert-session` – revert one session completely
 

@@ -62,7 +62,7 @@ safety net for tests interrupted before their own cleanup ran."
   ;; bindings would otherwise survive.  User configuration (defcustom etc.)
   ;; is intentionally left untouched.
   (mapatoms (lambda (sym)
-              (when (and (string-match-p "^scalpel-.*-mode-map$" (symbol-name sym))
+              (when (and (string-match-p "^scalpel-.*-map$" (symbol-name sym))
                          (boundp sym))
                 (makunbound sym))))
   ;; Load main module, then lisp sources (tests are excluded here; they are

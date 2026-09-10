@@ -50,12 +50,23 @@ edit action for them."
   (interactive)
   (scalpel-console-open))
 
-;;;###autoload
-(defun scalpel-set-backend ()
-  "Interactively switch the gptel backend used for future Scalpel requests."
-  (interactive)
-  (require 'gptel)
-  (call-interactively #'gptel-menu))
+(defalias 'scalpel-set-backend #'scalpel-llm-select-backend
+  "Interactively switch the gptel backend used for future Scalpel requests.")
+
+(defvar scalpel-command-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "o") #'scalpel-open)
+    (define-key map (kbd "b") #'scalpel-set-backend)
+    map)
+  "Keymap for Scalpel package-level commands.
+
+`o' opens the console (`scalpel-open'); `b' switches the gptel
+backend (`scalpel-set-backend').
+
+This map carries no default prefix: Emacs reserves most prefix
+keys for users and for major modes, so Scalpel does not install a
+global binding.  Install one yourself with `global-set-key' using
+a prefix of your choice.")
 
 (provide 'scalpel)
 

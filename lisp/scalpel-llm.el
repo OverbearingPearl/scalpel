@@ -70,6 +70,14 @@ Waits synchronously but calls `accept-process-output' so user interrupts work."
                                "in the *scalpel* buffer to choose a backend and enter credentials"))
          (signal (car err) (cdr err)))))))
 
+;;;###autoload
+(defun scalpel-llm-select-backend ()
+  "Interactively switch the gptel backend used for Scalpel requests.
+Delegates to `gptel-menu'."
+  (interactive)
+  (require 'gptel)
+  (call-interactively #'gptel-menu))
+
 (provide 'scalpel-llm)
 
 ;;; scalpel-llm.el ends here
