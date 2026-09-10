@@ -34,11 +34,6 @@ user configuration.")
 Structural contract shared by the replacement prompt in
 `scalpel-agent-edit' and its no-op check.")
 
-(defconst scalpel-agent--defining-forms
-  '(defun defmacro defvar defcustom defconst)
-  "Top-level forms accepted as a single complete replacement.
-Structural contract consumed by `scalpel-agent--single-definition-p'.")
-
 (defcustom scalpel-agent-system-prompt
   "You are a precise code transformation tool. The user gives you
 context and an instruction. Return ONLY a JSON array of actions.
@@ -573,17 +568,6 @@ region was modified while an LLM request was in flight."
       (scalpel-execute-replace (car current-range) (cdr current-range) new-text)
       (format "Edited %s in %s" symbol (buffer-name (current-buffer))))))
 
-(defun scalpel-agent--single-definition-p (text)
-  "Return non-nil when TEXT is exactly one top-level defining form."
-  (condition-case nil
-      (let* ((parsed (read-from-string text))
-             (form (car parsed))
-             (end (cdr parsed)))
-        (and (listp form)
-             (memq (car form) scalpel-agent--defining-forms)
-             (= end (length text))))
-    (error nil)))
-
 (defun scalpel-agent-edit (file symbol instruction)
   "Edit SYMBOL in FILE per INSTRUCTION using boundary-locked apply.
 Return human-readable report string."
@@ -614,7 +598,7 @@ Return human-readable report string."
          ((string= new-text scalpel-agent--no-change-sentinel)
           (format "No change needed: %s in %s" symbol
                   (buffer-name (current-buffer))))
-         ((scalpel-agent--single-definition-p new-text)
+         ((scalpel-locate-single-definition-p file new-text)
           (scalpel-agent--apply-if-unchanged
            file symbol body new-text))
          (t

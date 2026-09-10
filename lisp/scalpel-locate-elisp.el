@@ -11,12 +11,25 @@
 
 ;;; Code:
 
+(defconst scalpel-locate-elisp--defining-forms
+  '(defun defmacro defvar defcustom defconst)
+  "Top-level defining forms recognised as one complete definition.
+Structural contract shared by the definition regexes below and by
+`scalpel-locate-elisp--single-definition-p'.")
+
+(defconst scalpel-locate-elisp--definer-regexp
+  (regexp-opt (mapcar #'symbol-name scalpel-locate-elisp--defining-forms))
+  "Regexp matching a single top-level Emacs Lisp definer keyword.
+Rendered as a non-capturing group, so inserting it does not shift
+any capture used by callers.")
+
 (defconst scalpel-locate-elisp--def-header-prefix
-  "^(def\\(?:un\\|macro\\|var\\|custom\\|const\\)[ \t]+"
+  (concat "^(" scalpel-locate-elisp--definer-regexp "[ \t]+")
   "Regex matching a top-level Emacs Lisp definer up to its name.")
 
 (defconst scalpel-locate-elisp--def-name-regex
-  "^(\\(def\\(?:un\\|macro\\|var\\|custom\\|const\\)[ \t]+\\)\\([^ \t\n()]+\\)"
+  (concat "^(" "\\(" scalpel-locate-elisp--definer-regexp "[ \t]+\\)"
+          "\\([^ \t\n()]+\\)")
   "Regex matching a top-level Emacs Lisp definer and capturing its name.")
 
 (defun scalpel-locate-elisp--top-definition-range (symbol)
@@ -38,6 +51,17 @@ Return nil when SYMBOL is absent."
   "Return byte range of SYMBOL definition as (BEG . END) in current buffer.
 Current buffer is the Emacs Lisp file referenced by FILE."
   (scalpel-locate-elisp--top-definition-range symbol))
+
+(defun scalpel-locate-elisp--single-definition-p (text)
+  "Return non-nil when TEXT is exactly one top-level defining form."
+  (condition-case nil
+      (let* ((parsed (read-from-string text))
+             (form (car parsed))
+             (end (cdr parsed)))
+        (and (listp form)
+             (memq (car form) scalpel-locate-elisp--defining-forms)
+             (= end (length text))))
+    (error nil)))
 
 (defun scalpel-locate-elisp-list-symbols (_file)
   "Return a list of top-level definition names in current buffer."

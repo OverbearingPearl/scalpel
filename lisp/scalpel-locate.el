@@ -19,7 +19,9 @@
 
 PROVIDER-PLIST keys:
 :locate -- function (FILE SYMBOL), returns (BEG . END) or nil.
-:list-symbols -- function (FILE), returns list of symbol name strings.")
+:list-symbols -- function (FILE), returns list of symbol name strings.
+:single-definition-p -- function (TEXT), returns non-nil when TEXT is
+exactly one complete top-level definition in this language.")
 
 (defun scalpel-locate-register-provider (regexp provider)
   "Register PROVIDER for file names matching REGEXP.
@@ -51,6 +53,16 @@ registered for FILE or SYMBOL cannot be found."
       (or (funcall locate file symbol)
           (user-error "Scalpel: symbol %s not found in %s" symbol file)))))
 
+(defun scalpel-locate-single-definition-p (file text)
+  "Return non-nil when TEXT is one complete top-level definition in FILE.
+Dispatch to FILE's provider.  Signal `user-error' when no provider
+handles FILE or the provider does not validate replacements."
+  (let* ((provider (scalpel-locate-provider-for-file file))
+         (pred (and provider (plist-get provider :single-definition-p))))
+    (unless pred
+      (user-error "Scalpel: no replacement validator registered for %s" file))
+    (funcall pred text)))
+
 (defun scalpel-locate-list-symbols (file)
   "Return a list of top-level symbol names in FILE.
 Open FILE if needed.  Signal `user-error' when no locator is
@@ -67,7 +79,8 @@ registered for FILE."
 (scalpel-locate-register-provider
  "\\.el\\'"
  (list :locate #'scalpel-locate-elisp-range
-       :list-symbols #'scalpel-locate-elisp-list-symbols))
+       :list-symbols #'scalpel-locate-elisp-list-symbols
+       :single-definition-p #'scalpel-locate-elisp--single-definition-p))
 
 (provide 'scalpel-locate)
 

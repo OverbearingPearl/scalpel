@@ -55,6 +55,25 @@
     (let ((syms (scalpel-locate-list-symbols this-file)))
       (should (equal syms '("foo" "bar"))))))
 
+(ert-deftest scalpel-locate-test-elisp-single-definition-p ()
+  "Only one complete top-level defining form is accepted."
+  (should (scalpel-locate-elisp--single-definition-p
+           "(defun foo (x) (+ x 1))"))
+  (should-not (scalpel-locate-elisp--single-definition-p
+               "(defun foo (x) (+ x 1))\n(defun bar ())"))
+  (should-not (scalpel-locate-elisp--single-definition-p
+               "(message \"hello\")"))
+  (should-not (scalpel-locate-elisp--single-definition-p
+               "There is nothing to change here.")))
+
+(ert-deftest scalpel-locate-test-single-definition-p-dispatches ()
+  "The public predicate dispatches by file type and rejects unknown types."
+  (scalpel-utils-test-with-temp-file ".el"
+    (should (scalpel-locate-single-definition-p this-file "(defvar x 1)")))
+  (scalpel-utils-test-with-temp-file ".unknown"
+    (should-error (scalpel-locate-single-definition-p this-file "(defvar x 1)")
+                  :type 'user-error)))
+
 (provide 'scalpel-locate-test)
 
 ;;; scalpel-locate-test.el ends here
