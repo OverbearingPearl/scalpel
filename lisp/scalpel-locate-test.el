@@ -1,4 +1,5 @@
 ;;; scalpel-locate-test.el --- Tests for scalpel-locate -*- lexical-binding: t; -*-
+
 ;;; Commentary:
 
 ;; Tests for scalpel-locate.

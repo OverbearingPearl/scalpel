@@ -1,4 +1,5 @@
 ;;; scalpel-console-test.el --- Tests for scalpel-console -*- lexical-binding: t; -*-
+
 ;;; Commentary:
 
 ;; Tests for scalpel-console.

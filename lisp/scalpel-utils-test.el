@@ -1,4 +1,5 @@
 ;;; scalpel-utils-test.el --- Shared test infrastructure for Scalpel -*- lexical-binding: t; -*-
+
 ;;; Commentary:
 
 ;; Common helpers for Scalpel tests: temporary file creation and
