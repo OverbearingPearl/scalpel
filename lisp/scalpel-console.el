@@ -25,6 +25,12 @@
     map)
   "Keymap used in Scalpel console buffers.")
 
+(defvar scalpel-console--busy nil
+  "Non-nil while an agent request is in flight.")
+
+(defvar scalpel-console--pending-logs nil
+  "Log lines deferred while `scalpel-console--busy' is non-nil, newest first.")
+
 (define-derived-mode scalpel-console-mode text-mode "Scalpel Console"
   "Major mode for Scalpel's interactive console buffer.
 
@@ -33,6 +39,21 @@ The agent will process the instruction and append its reply to this buffer."
   (setq-local electric-indent-mode nil)
   (setq-local comment-start "")
   (setq buffer-read-only nil))
+
+(defun scalpel-console--append (text)
+  "Append TEXT to the end of the console buffer."
+  (let ((buf (get-buffer-create scalpel-console-buffer-name)))
+    (with-current-buffer buf
+      (let ((inhibit-read-only t))
+        (save-excursion
+          (goto-char (point-max))
+          (insert (format "%s\n\n" text)))))))
+
+(defun scalpel-console--log (text)
+  "Append TEXT to the console buffer, or queue it while busy."
+  (if scalpel-console--busy
+      (push text scalpel-console--pending-logs)
+    (scalpel-console--append text)))
 
 (defun scalpel-console-open ()
   "Open (or switch to) the Scalpel console buffer and clear its contents."
@@ -65,15 +86,28 @@ The agent will process the instruction and append its reply to this buffer."
           (newline)
           (let ((inhibit-read-only t))
             (insert (format "User: %s\n" instr)))
-          (condition-case err
-              (let ((report (scalpel-agent-run instr)))
-                (let ((inhibit-read-only t))
-                  (insert (format "Scalpel: %s\n\n" report))))
-            (error
-             (let ((inhibit-read-only t))
-               (insert (format "Scalpel error: %s\n\n"
-                               (error-message-string err))))))
-          (goto-char (point-max)))))))
+          (let ((scalpel-console--busy t))
+            (condition-case err
+                (let ((report (scalpel-agent-run instr)))
+                  (let ((inhibit-read-only t))
+                    (insert (format "Scalpel: %s\n\n" report)))
+                  (dolist (line (nreverse scalpel-console--pending-logs))
+                    (scalpel-console--append line))
+                  (setq scalpel-console--pending-logs nil))
+              (error
+               (let ((inhibit-read-only t))
+                 (insert (format "Scalpel error: %s\n\n"
+                                 (error-message-string err))))
+               (dolist (line (nreverse scalpel-console--pending-logs))
+                 (scalpel-console--append line))
+               (setq scalpel-console--pending-logs nil)))
+            (unwind-protect
+                (setq scalpel-console--busy nil)
+              (dolist (line (nreverse scalpel-console--pending-logs))
+                (scalpel-console--append line))
+              (setq scalpel-console--pending-logs nil))))
+          (goto-char (point-max))
+          (message "Scalpel: instruction sent.")))))
 
 (provide 'scalpel-console)
 

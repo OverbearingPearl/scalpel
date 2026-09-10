@@ -54,6 +54,31 @@
           (set-buffer-modified-p nil))
         (kill-buffer scalpel-console-buffer-name)))))
 
+(ert-deftest scalpel-console-test-log-deferred-while-busy ()
+  "Log lines during a busy request are queued and flushed after."
+  (let ((buf (get-buffer-create scalpel-console-buffer-name)))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (erase-buffer))
+          (let ((scalpel-console--busy t))
+            (scalpel-console--log "deferred line 1")
+            (scalpel-console--log "deferred line 2"))
+          (with-current-buffer buf
+            (should (string= (buffer-string) "")))
+          (let ((scalpel-console--busy nil))
+            (dolist (line (nreverse scalpel-console--pending-logs))
+              (scalpel-console--append line))
+            (setq scalpel-console--pending-logs nil))
+          (with-current-buffer buf
+            (goto-char (point-min))
+            (should (search-forward "deferred line 1" nil t))
+            (should (search-forward "deferred line 2" nil t))))
+      (when (get-buffer scalpel-console-buffer-name)
+        (with-current-buffer scalpel-console-buffer-name
+          (set-buffer-modified-p nil))
+        (kill-buffer scalpel-console-buffer-name)))))
+
 (provide 'scalpel-console-test)
 
 ;;; scalpel-console-test.el ends here
