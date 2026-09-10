@@ -42,10 +42,17 @@ or {\"tool\":\"reply\",\"text\":\"...\"}. Never emit code or diff text in this r
   :group 'scalpel)
 
 ;;;###autoload
-(defun scalpel-console ()
+(defun scalpel-open ()
   "Open the Scalpel agent console."
   (interactive)
   (scalpel-console-open))
+
+;;;###autoload
+(defun scalpel-set-backend ()
+  "Interactively switch the gptel backend used for future Scalpel requests."
+  (interactive)
+  (require 'gptel)
+  (call-interactively #'gptel-menu))
 
 (provide 'scalpel)
 

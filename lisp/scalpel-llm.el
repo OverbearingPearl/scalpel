@@ -60,7 +60,7 @@ Waits synchronously but calls `accept-process-output' so user interrupts work."
       (error
        (if (scalpel-llm--api-key-error-p (error-message-string err))
            (user-error (concat "Scalpel: gptel has no valid API key.  "
-                               "Run `M-x scalpel-console-set-backend' or press `C-c C-b' "
+                               "Run `M-x scalpel-set-backend' or press `C-c C-b' "
                                "in the *scalpel* buffer to choose a backend and enter credentials"))
          (signal (car err) (cdr err)))))))
 

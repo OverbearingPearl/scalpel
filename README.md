@@ -222,10 +222,10 @@ Then install Scalpel itself:
 (use-package scalpel
   :load-path "~/path/to/scalpel"   ; replace with the actual path
   :after (gptel)
-  :commands (scalpel-console))
+  :commands (scalpel-open))
 ```
 
-After evaluating the above, run `M-x scalpel-console`.
+After evaluating the above, run `M-x scalpel-open`.
 
 If `gptel` is missing, loading Scalpel fails with a clear message explaining
 how to install it, instead of an opaque "Cannot open load file" error.
@@ -247,7 +247,7 @@ If you prefer not to use `use-package`, you can manually add both packages to
 
 ```elisp
 ;; Open a project and an Emacs Lisp / Rust / TS file.
-M-x scalpel-console
+M-x scalpel-open
 ;; In the console:
 ;;   "in parser.el, make parse-config return nil on missing file"
 ;;   "add a with-timeout helper next to the current function"
