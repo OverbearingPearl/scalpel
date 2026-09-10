@@ -58,7 +58,6 @@ or signal a `user-error' when there is none."
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "RET") #'scalpel-console-send-line)
     (define-key map (kbd "C-c C-c") #'scalpel-console-send-line)
-    (define-key map (kbd "C-c C-x") #'scalpel-console-interrupt)
     (define-key map (kbd "C-c C-b") #'scalpel-llm-select-backend)
     (define-key map (kbd "C-c C-a") #'scalpel-console-add-file)
     (define-key map (kbd "C-c C-o") #'scalpel-console-add-readonly-file)
@@ -124,9 +123,19 @@ The agent will process the instruction and append its reply to this buffer."
           (insert (format "%s\n\n" text)))))))
 
 (defun scalpel-console--show-context ()
-  "Append a one-line context summary to the console buffer."
-  (scalpel-console--append
-   (format "Context: %s" (scalpel-agent-context-summary))))
+  "Append a context summary to the console buffer.
+Paths are shown relative to the console root when available.
+Files git would ignore are marked in the tree."
+  (let* ((root (and (bound-and-true-p scalpel-console--root)
+                    scalpel-console--root))
+         (ignored (scalpel-agent--git-ignored-files
+                   (append scalpel-agent--context-files
+                           scalpel-agent--context-readonly-files)))
+         (summary (scalpel-agent-context-summary root ignored)))
+    (scalpel-console--append
+     (if (string= summary "none")
+         "Context: none"
+       (concat "Context:\n" summary)))))
 
 (defun scalpel-console-add-file (&optional ignore-gitignore)
   "Prompt for a file or directory and add it as writable context.
@@ -190,18 +199,6 @@ that path."
     (scalpel-agent-context-reset)
     (scalpel-console--show-context)
     (goto-char (point-max))))
-
-(defun scalpel-console-interrupt ()
-  "Interrupt a running agent request in the Scalpel console."
-  (interactive)
-  (let ((buf (scalpel-console--target-buffer)))
-    (unless (eq (current-buffer) buf)
-      (switch-to-buffer buf))
-    (if (not scalpel-console--busy)
-        (message "Scalpel: nothing to interrupt")
-      (let ((inhibit-read-only t))
-        (insert "Scalpel: interrupting...\n\n"))
-      (run-with-timer 0 nil (lambda () (signal 'quit nil)) buf))))
 
 (defun scalpel-console-send-line ()
   "Send the current line to the Scalpel agent and append the reply."

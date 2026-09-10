@@ -12,15 +12,8 @@
 
 ;;; Code:
 
-(unless (require 'gptel nil t)
-  (user-error (concat "Scalpel requires `gptel'.  Install it with "
-                      "(use-package gptel :ensure t) and configure a backend")))
-
-;; `gptel-auth-source' may be defined in one of gptel's auxiliary libraries;
-;; loading only the main gptel module does not guarantee it is loaded,
-;; which previously caused gptel-request to read a void variable.
-(dolist (lib '(gptel-auth gptel-request gptel-transient))
-  (require lib nil t))
+(require 'gptel)
+(require 'gptel-transient)
 
 (defvar scalpel-llm-timeout 30
   "Maximum seconds to wait for an LLM response before raising an error.")
@@ -48,12 +41,13 @@ Waits synchronously but calls `accept-process-output' so user interrupts work."
                         (setq response resp)
                         (setq done t)))
           (while (not done)
-            (when (> (- (float-time) start) scalpel-llm-timeout)
-              (user-error "Scalpel: LLM request timed out after %s seconds" scalpel-llm-timeout))
-            (accept-process-output nil 0.1)
-            (when scalpel-llm--progress-callback
-              (funcall scalpel-llm--progress-callback))
-            (redisplay)
+            (let ((inhibit-quit t))
+              (when (> (- (float-time) start) scalpel-llm-timeout)
+                (user-error "Scalpel: LLM request timed out after %s seconds" scalpel-llm-timeout))
+              (accept-process-output nil 0.1)
+              (when scalpel-llm--progress-callback
+                (funcall scalpel-llm--progress-callback))
+              (redisplay))
             (when quit-flag
               (setq quit-flag nil)
               (user-error "Scalpel: LLM request interrupted")))
@@ -75,7 +69,6 @@ Waits synchronously but calls `accept-process-output' so user interrupts work."
   "Interactively switch the gptel backend used for Scalpel requests.
 Delegates to `gptel-menu'."
   (interactive)
-  (require 'gptel)
   (call-interactively #'gptel-menu))
 
 (provide 'scalpel-llm)

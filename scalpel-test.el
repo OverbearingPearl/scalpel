@@ -8,6 +8,8 @@
 
 ;;; Code:
 
+(require 'package)
+(package-initialize)
 (require 'ert)
 
 (defvar scalpel-test--package-root

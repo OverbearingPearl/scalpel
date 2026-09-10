@@ -120,9 +120,9 @@ returned buffer when done."
             (setq buf (current-buffer))
             (with-current-buffer buf
               (goto-char (point-min))
-              (should (search-forward
-                       (concat "Context: " (expand-file-name this-file))
-                       nil t)))
+              (should (search-forward "Context:" nil t))
+              (should (search-forward (file-name-nondirectory this-file)
+                                      nil t)))
             (with-current-buffer buf
               (goto-char (point-max))
               (insert "hello")
@@ -150,9 +150,9 @@ returned buffer when done."
               (with-current-buffer buf
                 (scalpel-console-add-file))
               (with-current-buffer buf
-                (should (search-forward
-                         (concat "Context: " (expand-file-name this-file))
-                         nil t))))
+                (should (search-forward "Context:" nil t))
+                (should (search-forward (file-name-nondirectory this-file)
+                                        nil t))))
           (when (buffer-live-p buf) (kill-buffer buf)))))))
 
 (provide 'scalpel-console-test)

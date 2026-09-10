@@ -179,15 +179,164 @@ it.  No-op with a message when nothing matched."
             (cl-remove-if match-p scalpel-agent--context-readonly-files))
       (message "Scalpel: removed %d file(s)" (length removed)))))
 
-(defun scalpel-agent-context-summary ()
-  "Return a one-line summary of the session context files."
-  (let ((w scalpel-agent--context-files)
-        (r scalpel-agent--context-readonly-files))
-    (if (and (null w) (null r))
+(defun scalpel-agent--path-components (path)
+  "Split PATH into tree components for the context tree.
+Absolute paths (starting with \"/\" or \"~\") yield a single
+component, so they render as flat leaves; other paths are split on
+\"/\" with empty components dropped."
+  (if (string-match-p "\\`[/~]" path)
+      (list path)
+    (split-string path "/" t)))
+
+(defun scalpel-agent--context-entry-lessp (a b)
+  "Return non-nil when context tree entry A should sort before B.
+Entries are (NAME . NODE) pairs.  Directories sort before files;
+names compare case-insensitively."
+  (let ((fa (plist-get (cdr a) :file))
+        (fb (plist-get (cdr b) :file)))
+    (cond
+     ((and fa (not fb)) nil)
+     ((and fb (not fa)) t)
+     (t (string< (downcase (car a)) (downcase (car b)))))))
+
+(defun scalpel-agent--context-marker (node)
+  "Return the attribute suffix for file NODE, e.g. \" (read-only)\"."
+  (let ((tags (delq nil (list (and (plist-get node :readonly) "read-only")
+                              (and (plist-get node :ignored) "gitignored")))))
+    (if tags (format " (%s)" (string-join tags ", ")) "")))
+
+(defun scalpel-agent--context-tree-insert (tree components flags)
+  "Insert COMPONENTS into TREE, marking the leaf with FLAGS.
+TREE is an alist of names to nodes; a node is either
+\(:children ALIST) for a directory or a file node carrying :file
+plus FLAGS.  Return the updated TREE."
+  (if (null components)
+      tree
+    (let* ((name (car components))
+           (rest (cdr components))
+           (cell (assoc name tree)))
+      (cond
+       ((null cell)
+        (if rest
+            (cons (cons name
+                        (list :children
+                              (scalpel-agent--context-tree-insert
+                               nil rest flags)))
+                  tree)
+          (cons (cons name (append (list :file t) flags)) tree)))
+       (rest
+        (setcdr cell (list :children
+                           (scalpel-agent--context-tree-insert
+                            (plist-get (cdr cell) :children) rest flags)))
+        tree)
+       (t tree)))))
+
+(defun scalpel-agent--context-tree-render (tree prefix)
+  "Return TREE rendered as box-drawing lines prefixed with PREFIX."
+  (let* ((entries (sort (copy-sequence tree)
+                        #'scalpel-agent--context-entry-lessp))
+         (n (length entries)))
+    (cl-loop
+     for entry in entries
+     for i from 1
+     append
+     (let* ((name (car entry))
+            (node (cdr entry))
+            (last-p (= i n))
+            (connector (if last-p "└── " "├── ")))
+       (cons (concat prefix connector name
+                     (if (plist-get node :file)
+                         (scalpel-agent--context-marker node)
+                       "/"))
+             (unless (plist-get node :file)
+               (scalpel-agent--context-tree-render
+                (plist-get node :children)
+                (concat prefix (if last-p "    " "│   ")))))))))
+
+(defun scalpel-agent--git-ignored-in-repo (root files)
+  "Return the members of FILES that git would ignore in repository ROOT.
+FILES are absolute names at or below ROOT.  Return nil and log a
+warning when git fails, so callers degrade to \"nothing ignored\"."
+  (with-temp-buffer
+    (let ((default-directory (file-name-as-directory (expand-file-name root)))
+          (process-environment (scalpel-agent--git-environment)))
+      (insert (string-join
+               (mapcar (lambda (file) (file-relative-name file root)) files)
+               "\n")
+              "\n")
+      ;; core.quotePath=false keeps non-ASCII names unquoted in the output.
+      (let ((status (condition-case err
+                        (call-process-region
+                         (point-min) (point-max)
+                         "git" t t nil
+                         "-c" "core.quotePath=false"
+                         "check-ignore" "--stdin")
+                      (error (format "%S" err)))))
+        (if (member status '(0 1))
+            (mapcar (lambda (rel) (expand-file-name rel root))
+                    (split-string (buffer-string) "\n" t))
+          (message
+           (concat "Scalpel: git check-ignore failed in %s (%S); "
+                   "not marking gitignored files")
+           root status)
+          nil)))))
+
+(defun scalpel-agent--git-ignored-files (files)
+  "Return the subset of FILES that git would ignore.
+FILES is a list of absolute file names.  Files without a `.git'
+ancestor are never reported, so files outside any repository cost
+no subprocess; each repository is queried once."
+  (let (groups)
+    (dolist (file files)
+      (let ((root (locate-dominating-file file ".git")))
+        (when root
+          (let* ((root (file-name-as-directory (expand-file-name root)))
+                 (cell (assoc root groups)))
+            (if cell
+                (setcdr cell (cons file (cdr cell)))
+              (push (cons root (list file)) groups))))))
+    (cl-loop for (root . members) in groups
+             append (scalpel-agent--git-ignored-in-repo
+                     root (nreverse members)))))
+
+(defun scalpel-agent-context-summary (&optional root ignored-files)
+  "Return the session context as a tree of files.
+ROOT, when non-nil, is the directory that in-repo paths are shown
+relative to; files outside it are shown as flat abbreviated
+absolute paths.  IGNORED-FILES lists absolute names that git
+ignores, marked \"(gitignored)\"; read-only entries are marked
+\"(read-only)\".  Return the string \"none\" when the context is
+empty."
+  (let* ((root (and root
+                    (file-name-as-directory (expand-file-name root))))
+         (display
+          (lambda (file)
+            (if (and root
+                     (string-prefix-p root (expand-file-name file)))
+                (file-relative-name file root)
+              (abbreviate-file-name file))))
+         (flags
+          (lambda (file readonly)
+            (list :readonly readonly
+                  :ignored (and (member (expand-file-name file) ignored-files)
+                                t))))
+         (entries
+          (append
+           (mapcar (lambda (file)
+                     (cons (funcall display file) (funcall flags file nil)))
+                   scalpel-agent--context-files)
+           (mapcar (lambda (file)
+                     (cons (funcall display file) (funcall flags file t)))
+                   scalpel-agent--context-readonly-files))))
+    (if (null entries)
         "none"
-      (string-join
-       (append w (mapcar (lambda (f) (concat f " (read-only)")) r))
-       ", "))))
+      (let ((tree nil))
+        (dolist (entry entries)
+          (setq tree (scalpel-agent--context-tree-insert
+                      tree
+                      (scalpel-agent--path-components (car entry))
+                      (cdr entry))))
+        (string-join (scalpel-agent--context-tree-render tree "") "\n")))))
 
 (defun scalpel-agent--readonly-block (file)
   "Return the LLM context block for read-only FILE."

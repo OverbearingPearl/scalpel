@@ -236,12 +236,51 @@
       (scalpel-utils-test-delete-file other))))
 
 (ert-deftest scalpel-agent-test-context-summary-and-empty ()
-  "Summary joins file names; empty context reports 'none'."
+  "Summary renders a tree; empty context reports 'none'."
   (let ((scalpel-agent--context-files nil))
     (should (string= (scalpel-agent-context-summary) "none"))
     (should (string= (scalpel-agent-context) "No files in context."))
     (let ((scalpel-agent--context-files '("/a.el" "/b.el")))
-      (should (string= (scalpel-agent-context-summary) "/a.el, /b.el")))))
+      (should (string= (scalpel-agent-context-summary)
+                       "├── /a.el\n└── /b.el")))))
+
+(ert-deftest scalpel-agent-test-context-summary-tree ()
+  "Summary nests files, orders directories first, marks attributes."
+  (let ((scalpel-agent--context-files
+         '("/repo/lisp/a.el" "/repo/lisp/c.el" "/repo/z.el"))
+        (scalpel-agent--context-readonly-files '("/repo/lisp/notes.txt")))
+    (should (string=
+             (scalpel-agent-context-summary "/repo" '("/repo/lisp/a.el"))
+             (string-join
+              '("├── lisp/"
+                "│   ├── a.el (gitignored)"
+                "│   ├── c.el"
+                "│   └── notes.txt (read-only)"
+                "└── z.el")
+              "\n")))))
+
+(ert-deftest scalpel-agent-test-git-ignored-files ()
+  "Files matched by .gitignore are reported; others are not."
+  (skip-unless (executable-find "git"))
+  (let ((dir (file-name-as-directory
+              (make-temp-file "scalpel-test-repo-" t))))
+    (unwind-protect
+        (progn
+          (let ((default-directory dir)
+                (process-environment (scalpel-agent--git-environment)))
+            (call-process "git" nil nil nil "init" "-q"))
+          (with-temp-file (expand-file-name ".gitignore" dir)
+            (insert "*.log\n"))
+          (with-temp-file (expand-file-name "keep.el" dir)
+            (insert "(defun keep ())\n"))
+          (with-temp-file (expand-file-name "drop.log" dir)
+            (insert "noise\n"))
+          (should (equal (scalpel-agent--git-ignored-files
+                          (list (expand-file-name "drop.log" dir)))
+                         (list (expand-file-name "drop.log" dir))))
+          (should (null (scalpel-agent--git-ignored-files
+                         (list (expand-file-name "keep.el" dir))))))
+      (delete-directory dir t))))
 
 (provide 'scalpel-agent-test)
 

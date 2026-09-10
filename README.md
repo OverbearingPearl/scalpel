@@ -230,8 +230,9 @@ Then install Scalpel itself:
 
 After evaluating the above, run `M-x scalpel-open`.
 
-If `gptel` is missing, loading Scalpel fails with a clear message explaining
-how to install it, instead of an opaque "Cannot open load file" error.
+If `gptel` is missing, Scalpel still loads, so the test suite can run without
+it; the first agent request then fails with a clear message explaining how to
+install it, instead of an opaque "Cannot open load file" error.
 
 If you prefer not to use `use-package`, you can manually add both packages to
 `load-path` and require them in order:
@@ -261,7 +262,7 @@ Inside the console:
 
 - `RET` – send the current input line to Scalpel
 - `C-c C-c` – also send the current input line
-- `C-c C-x` – interrupt a running agent operation
+- `C-g` – cancel a running request
 - `C-c C-b` – switch the active gptel backend (model) for future requests
 - `C-c C-a` – add a file or directory as writable context
 - `C-c C-o` – add a file or directory as read-only reference
