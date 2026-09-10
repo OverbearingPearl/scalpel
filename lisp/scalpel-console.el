@@ -15,8 +15,44 @@
 
 (require 'scalpel-agent)
 
-(defvar scalpel-console-buffer-name "*scalpel*"
-  "Buffer name for the Scalpel console.")
+(defcustom scalpel-console-buffer-name-format "*scalpel: %s*"
+  "Format string for the Scalpel console buffer name.
+The single `%s' is substituted with the abbreviated console root,
+so a console opened at /home/me/proj is named \"*scalpel: ~/proj*\"."
+  :type 'string
+  :group 'scalpel)
+
+(defvar-local scalpel-console--root nil
+  "Absolute directory this console session is anchored to.
+Set by `scalpel-console-open'; while non-nil, `default-directory'
+in the console buffer is pinned to this value.")
+
+(defun scalpel-console--buffer-name (root)
+  "Return the Scalpel console buffer name for ROOT.
+ROOT is expanded, normalized with `file-name-as-directory' and
+`directory-file-name', then abbreviated with `abbreviate-file-name'."
+  (format scalpel-console-buffer-name-format
+          (abbreviate-file-name
+           (directory-file-name
+            (file-name-as-directory (expand-file-name root))))))
+
+(defun scalpel-console--target-buffer ()
+  "Return the console buffer the current command should write to.
+Return the current buffer when it is a console buffer; otherwise
+return the console buffer whose root contains `default-directory',
+or signal a `user-error' when there is none."
+  (if (derived-mode-p 'scalpel-console-mode)
+      (current-buffer)
+    (let ((dir (file-name-as-directory (expand-file-name default-directory)))
+          found)
+      (dolist (buf (buffer-list))
+        (unless found
+          (with-current-buffer buf
+            (when (and (bound-and-true-p scalpel-console--root)
+                       (string-prefix-p scalpel-console--root dir))
+              (setq found buf)))))
+      (or found
+          (user-error "Scalpel: no console for %s; run `scalpel-open'" dir)))))
 
 (defvar scalpel-console-mode-map
   (let ((map (make-sparse-keymap)))
@@ -78,7 +114,7 @@ The agent will process the instruction and append its reply to this buffer."
 
 (defun scalpel-console--append (text)
   "Append TEXT to the end of the console buffer."
-  (let ((buf (get-buffer-create scalpel-console-buffer-name)))
+  (let ((buf (scalpel-console--target-buffer)))
     (with-current-buffer buf
       (let ((inhibit-read-only t))
         (save-excursion
@@ -128,12 +164,20 @@ filter directory expansion through gitignore rules."
   (scalpel-console--show-context))
 
 (defun scalpel-console-open ()
-  "Open (or switch to) the Scalpel console buffer and clear its contents."
-  (let ((buf (get-buffer-create scalpel-console-buffer-name)))
+  "Open (or switch to) the Scalpel console buffer and clear its contents.
+The console is anchored to `default-directory' at call time: the
+buffer name embeds the path and the buffer's `default-directory' is
+pinned to it, so any file-system command run inside the console uses
+that path."
+  (interactive)
+  (let* ((root (file-name-as-directory (expand-file-name default-directory)))
+         (buf (get-buffer-create (scalpel-console--buffer-name root))))
     (switch-to-buffer buf)
     (setq buffer-read-only nil)
     (unless (eq major-mode 'scalpel-console-mode)
       (scalpel-console-mode))
+    (setq-local scalpel-console--root root)
+    (setq-local default-directory root)
     (let ((inhibit-read-only t))
       (erase-buffer)
       (goto-char (point-min))
@@ -152,7 +196,7 @@ filter directory expansion through gitignore rules."
       (progn
         (message "Scalpel: still working on the previous instruction...")
         (ding))
-    (let ((buf (get-buffer-create scalpel-console-buffer-name)))
+    (let ((buf (scalpel-console--target-buffer)))
       (unless (eq (current-buffer) buf)
         (switch-to-buffer buf))
       (let* ((instr (string-trim
