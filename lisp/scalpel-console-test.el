@@ -41,7 +41,7 @@ returned buffer when done."
                        "[{\"tool\":\"reply\",\"text\":\"done\"}]")))
             (with-current-buffer buf
               (erase-buffer)
-              (insert "test instruction\n")
+              (insert "test instruction")
               (goto-char (point-min))
               (scalpel-console-send-line))
             (with-current-buffer buf
@@ -49,7 +49,9 @@ returned buffer when done."
               (should (search-forward "User: test instruction" nil t))
               (ert-info ((format "Console contents:\n%S" (buffer-string)))
                 (should (search-forward "Scalpel: done" nil t)))
-              (should-not (search-forward "thinking" nil t)))))
+              (should-not (search-forward "thinking" nil t))
+              (should (string= (buffer-string)
+                               "User: test instruction\nScalpel: done\n\n")))))
       (when (buffer-live-p buf) (kill-buffer buf)))))
 
 (ert-deftest scalpel-console-test-send-line-error ()
@@ -214,6 +216,58 @@ returned buffer when done."
               (scalpel-console-send-line))
             (with-current-buffer buf
               (should (= (how-many "echo me" (point-min) (point-max)) 1)))))
+      (when (buffer-live-p buf) (kill-buffer buf)))))
+
+(ert-deftest scalpel-console-test-status-line-shows-counters ()
+  "The status line shows token counters and elapsed time."
+  (let ((buf (scalpel-console-test--new-console-buffer))
+        (seen nil))
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'scalpel-llm-request)
+                     (lambda (_prompt &optional _system)
+                       (setq seen (functionp scalpel-llm--progress-callback))
+                       "[{\"tool\":\"reply\",\"text\":\"done\"}]")))
+            (with-current-buffer buf
+              (erase-buffer)
+              (insert "status instruction\n")
+              (goto-char (point-min))
+              (scalpel-console-send-line))
+            (should seen)
+            (with-current-buffer buf
+              (goto-char (point-min))
+              (should (search-forward "Scalpel: done" nil t)))))
+      (when (buffer-live-p buf) (kill-buffer buf)))))
+
+(ert-deftest scalpel-console-test-status-line-own-line-and-clean-stop ()
+  "Status line sits on its own line; STOP leaves no residue.
+Regression: `beg' was derived by subtracting a hard-coded length,
+so non-zero counters made STOP delete a character inside
+\"Scalpel:\" instead of the whole line."
+  (let ((buf (scalpel-console-test--new-console-buffer))
+        (scalpel-llm--tokens-uploaded 12)
+        (scalpel-llm--tokens-received 34))
+    (unwind-protect
+        (with-current-buffer buf
+          (erase-buffer)
+          (insert "User: hi\n")
+          (goto-char (point-max))
+          (let* ((status (scalpel-console--status-start))
+                 (refresh (car status))
+                 (stop (cdr status)))
+            (should (= (point) (point-max)))
+            (should (eq (char-before) ?\n))
+            (save-excursion
+              (goto-char (point-min))
+              (should (search-forward
+                       "Scalpel: 12 up, 34 down, 0s\n" nil t)))
+            ;; Refreshing rewrites the same single line.
+            (funcall refresh)
+            (funcall refresh)
+            (should (= (how-many "^Scalpel:" (point-min) (point-max)) 1))
+            ;; STOP removes the whole line, leaving no residue.
+            (funcall stop)
+            (should (string= (buffer-string) "User: hi\n"))))
       (when (buffer-live-p buf) (kill-buffer buf)))))
 
 (provide 'scalpel-console-test)

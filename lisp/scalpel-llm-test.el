@@ -7,6 +7,7 @@
 ;;; Code:
 
 (require 'ert)
+(require 'cl-lib)
 (require 'scalpel-llm)
 
 (ert-deftest scalpel-llm-test-api-key-error-p ()
@@ -51,6 +52,41 @@ directly, so a stale byte-compiled copy cannot mask the result."
            (format (concat "scalpel-llm must fail with file-missing when "
                            "gptel is absent: status=%S output=%S")
                    status output)))))))
+
+(ert-deftest scalpel-llm-test-streaming-accumulates-response-and-tokens ()
+  "Streaming chunks accumulate into the response and update token counters.
+Uses the real gptel streaming protocol: content chunks are strings,
+the end of the stream is signaled by RESPONSE = t, and reasoning
+chunks arrive as (reasoning . TEXT) conses."
+  (cl-letf (((symbol-function 'gptel-request)
+             (lambda (_prompt &rest args)
+               (let ((cb (plist-get args :callback)))
+                 (funcall cb "Hello" nil)
+                 (funcall cb " world" nil)
+                 (funcall cb t nil))
+               'fake-fsm)))
+    (let ((result (scalpel-llm-request "test prompt")))
+      (should (string= result "Hello world"))
+      (should (> scalpel-llm--tokens-received 0))
+      (should (> scalpel-llm--tokens-uploaded 0)))))
+
+(ert-deftest scalpel-llm-test-reasoning-buffer-collects-chunks ()
+  "Reasoning chunks are collected in the reasoning buffer.
+Uses the real gptel streaming protocol: reasoning arrives as
+conses of the form (reasoning . TEXT) in the RESPONSE argument."
+  (unwind-protect
+      (cl-letf (((symbol-function 'gptel-request)
+                 (lambda (_prompt &rest args)
+                   (let ((cb (plist-get args :callback)))
+                     (funcall cb '(reasoning . "step 1 ") nil)
+                     (funcall cb '(reasoning . "step 2") nil)
+                     (funcall cb t nil))
+                   'fake-fsm)))
+        (scalpel-llm-request "test prompt")
+        (with-current-buffer (get-buffer scalpel-llm-reasoning-buffer-name)
+          (should (string= (buffer-string) "step 1 step 2"))))
+    (when (get-buffer scalpel-llm-reasoning-buffer-name)
+      (kill-buffer scalpel-llm-reasoning-buffer-name))))
 
 (provide 'scalpel-llm-test)
 

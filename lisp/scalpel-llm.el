@@ -21,9 +21,35 @@
 (defvar scalpel-llm--progress-callback nil
   "Optional zero-arg function called once per wait-loop iteration.")
 
+(defvar scalpel-llm--tokens-uploaded 0
+  "Approximate number of tokens sent in the current request.")
+
+(defvar scalpel-llm--tokens-received 0
+  "Approximate number of tokens received in the current request.")
+
+(defconst scalpel-llm-reasoning-buffer-name "*scalpel-thinking*"
+  "Buffer name for collecting streaming reasoning chunks.")
+
 (defun scalpel-llm--api-key-error-p (message)
   "Return non-nil when MESSAGE indicates gptel needs an API key."
   (string-match-p "gptel-api-key.*is not valid" message))
+
+(defun scalpel-llm--count-tokens (text)
+  "Return an approximate token count for TEXT.
+Uses a 4-characters-per-token heuristic; accurate enough for
+status display."
+  (/ (length text) 4))
+
+(defun scalpel-llm--reset-reasoning-buffer ()
+  "Clear the reasoning buffer for a new request."
+  (with-current-buffer (get-buffer-create scalpel-llm-reasoning-buffer-name)
+    (erase-buffer)))
+
+(defun scalpel-llm--append-reasoning (chunk)
+  "Append CHUNK to the reasoning buffer."
+  (with-current-buffer (get-buffer-create scalpel-llm-reasoning-buffer-name)
+    (goto-char (point-max))
+    (insert chunk)))
 
 (defun scalpel-llm-request (prompt &optional system)
   "Send PROMPT to the configured gptel backend.
@@ -31,15 +57,49 @@ SYSTEM overrides the default system message.  Returns the response string.
 Waits synchronously but calls `accept-process-output' so user interrupts work."
   (let* ((response nil)
          (done nil)
-         (start (float-time)))
+         (start (float-time))
+         (accumulated "")
+         (upload-tokens (scalpel-llm--count-tokens prompt))
+         (received-tokens 0))
+    (setq scalpel-llm--tokens-uploaded upload-tokens)
+    (setq scalpel-llm--tokens-received 0)
+    (scalpel-llm--reset-reasoning-buffer)
     (condition-case err
         (progn
           (gptel-request prompt
             :system system
-            :stream nil
-            :callback (lambda (resp _info)
-                        (setq response resp)
-                        (setq done t)))
+            :stream t
+            :callback (lambda (resp info)
+                        (cond
+                         ;; End of streamed response: gptel signals success
+                         ;; by calling back with RESPONSE = t.
+                         ((eq resp t)
+                          (setq response accumulated)
+                          (setq done t))
+                         ;; Failure: gptel calls back with a nil RESPONSE;
+                         ;; the human-readable cause is in INFO's :status.
+                         ((null resp)
+                          (setq response
+                                (cons 'error
+                                      (or (plist-get info :status) "unknown")))
+                          (setq done t))
+                         ;; Content chunk.
+                         ((stringp resp)
+                          (setq accumulated (concat accumulated resp))
+                          (setq received-tokens
+                                (+ received-tokens
+                                   (scalpel-llm--count-tokens resp)))
+                          (setq scalpel-llm--tokens-received received-tokens)
+                          (when scalpel-llm--progress-callback
+                            (funcall scalpel-llm--progress-callback)))
+                         ;; Reasoning chunk: delivered as the RESPONSE
+                         ;; argument (a (reasoning . TEXT) cons), never as
+                         ;; an INFO key.
+                         ((and (consp resp) (eq (car resp) 'reasoning))
+                          (when (stringp (cdr resp))
+                            (scalpel-llm--append-reasoning (cdr resp))
+                            (when scalpel-llm--progress-callback
+                              (funcall scalpel-llm--progress-callback)))))))
           (while (not done)
             (let ((inhibit-quit t))
               (when (> (- (float-time) start) scalpel-llm-timeout)
@@ -55,6 +115,8 @@ Waits synchronously but calls `accept-process-output' so user interrupts work."
            ((stringp response) response)
            ((null response)
             (user-error "Scalpel: LLM request did not return a result"))
+           ((and (consp response) (eq (car response) 'error))
+            (user-error "Scalpel: LLM returned error: %S" (cdr response)))
            (t
             (user-error "Scalpel: LLM returned error: %S" response))))
       (error

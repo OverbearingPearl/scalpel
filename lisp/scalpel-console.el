@@ -84,40 +84,40 @@ or signal a `user-error' when there is none."
 (defvar scalpel-console--busy nil
   "Non-nil while an agent request is in flight.")
 
-(defconst scalpel-console--spinner-frames ["|" "/" "-" "\\"]
-  "Frames for the busy spinner shown while waiting for the LLM.")
-
-(defun scalpel-console--spinner-start ()
-  "Insert a spinner line at point-max.
-Return a cons (ADVANCE . STOP) of zero-arg functions: ADVANCE rotates
-the frame char, STOP removes the whole spinner line."
+(defun scalpel-console--status-start ()
+  "Insert a one-line status display at point-max.
+Return a cons (REFRESH . STOP) of zero-arg functions.  REFRESH
+rewrites the line with the current token counters and whole
+elapsed seconds; STOP removes the line together with its trailing
+newline, so the cursor returns to the line the status occupied."
   (let ((inhibit-read-only t)
-        (i 0))
+        (start (float-time))
+        beg)
     (goto-char (point-max))
-    (insert "Scalpel: thinking |")
-    (let* ((beg (copy-marker (- (point) 1) nil))
-           (label (copy-marker (- (marker-position beg)
-                                  (length "Scalpel: thinking ")) nil))
-           (advance
-            (lambda ()
-              (when (marker-buffer beg)
-                (let ((inhibit-read-only t))
-                  (save-excursion
-                    (goto-char beg)
-                    (delete-char 1)
-                    (insert (aref scalpel-console--spinner-frames
-                                  (setq i (% (1+ i)
-                                             (length
-                                              scalpel-console--spinner-frames))))))))))
-           (stop
-            (lambda ()
-              (when (marker-buffer beg)
-                (with-current-buffer (marker-buffer beg)
-                  (let ((inhibit-read-only t))
-                    (delete-region label (1+ (marker-position beg)))))
-                (set-marker beg nil)
-                (set-marker label nil)))))
-      (cons advance stop))))
+    (setq beg (point-marker))
+    (insert (format "Scalpel: %d up, %d down, 0s\n"
+                    scalpel-llm--tokens-uploaded
+                    scalpel-llm--tokens-received))
+    (let ((refresh
+           (lambda ()
+             (when (marker-buffer beg)
+               (with-current-buffer (marker-buffer beg)
+                 (let ((inhibit-read-only t))
+                   (goto-char beg)
+                   (delete-region (point) (1+ (line-end-position)))
+                   (insert (format "Scalpel: %d up, %d down, %ds\n"
+                                   scalpel-llm--tokens-uploaded
+                                   scalpel-llm--tokens-received
+                                   (round (- (float-time) start)))))))))
+          (stop
+           (lambda ()
+             (when (marker-buffer beg)
+               (with-current-buffer (marker-buffer beg)
+                 (let ((inhibit-read-only t))
+                   (goto-char beg)
+                   (delete-region (point) (1+ (line-end-position)))))
+               (set-marker beg nil)))))
+      (cons refresh stop))))
 
 (define-derived-mode scalpel-console-mode text-mode "Scalpel Console"
   "Major mode for Scalpel's interactive console buffer.
@@ -268,12 +268,12 @@ that path."
               (goto-char beg)
               (insert (format "User: %s\n" instr)))
             (let ((scalpel-console--busy t)
-                  (spinner (scalpel-console--spinner-start)))
-              (let ((advance (car spinner))
-                    (stop (cdr spinner)))
+                  (status (scalpel-console--status-start)))
+              (let ((refresh (car status))
+                    (stop (cdr status)))
                 (unwind-protect
                     (condition-case err
-                        (let* ((scalpel-llm--progress-callback advance)
+                        (let* ((scalpel-llm--progress-callback refresh)
                                (report (scalpel-agent-run instr)))
                           (funcall stop)
                           (let ((inhibit-read-only t))
