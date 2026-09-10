@@ -207,7 +207,7 @@ First, install and configure `gptel`. A minimal setup using `use-package` is:
   ;; Store the API key in `~/.authinfo`:
   ;;   machine api.deepseek.com login api-key password YOUR_DEEPSEEK_API_KEY
   (setq gptel-backend
-        (gptel-make-openai "DeepSeek-V4-Flash"
+        (gptel-make-openai "DeepSeek"
           :host "api.deepseek.com"
           :endpoint "/chat/completions"
           :stream t
