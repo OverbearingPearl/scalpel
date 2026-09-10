@@ -56,26 +56,40 @@
           (set-buffer-modified-p nil))
         (kill-buffer scalpel-console-buffer-name)))))
 
-(ert-deftest scalpel-console-test-log-deferred-while-busy ()
-  "Log lines during a busy request are queued and flushed after."
+(ert-deftest scalpel-console-test-send-line-rejected-while-busy ()
+  "A new instruction is rejected while a request is in flight."
   (let ((buf (get-buffer-create scalpel-console-buffer-name)))
     (unwind-protect
         (progn
-          (with-current-buffer buf
-            (erase-buffer))
+          (with-current-buffer buf (erase-buffer))
           (let ((scalpel-console--busy t))
-            (scalpel-console--log "deferred line 1")
-            (scalpel-console--log "deferred line 2"))
+            (with-current-buffer buf
+              (insert "second instruction\n")
+              (goto-char (point-max))
+              (scalpel-console-send-line)))
           (with-current-buffer buf
-            (should (string= (buffer-string) "")))
-          (let ((scalpel-console--busy nil))
-            (dolist (line (nreverse scalpel-console--pending-logs))
-              (scalpel-console--append line))
-            (setq scalpel-console--pending-logs nil))
-          (with-current-buffer buf
-            (goto-char (point-min))
-            (should (search-forward "deferred line 1" nil t))
-            (should (search-forward "deferred line 2" nil t))))
+            (should-not (search-forward "User: second instruction" nil t))))
+      (when (get-buffer scalpel-console-buffer-name)
+        (with-current-buffer scalpel-console-buffer-name
+          (set-buffer-modified-p nil))
+        (kill-buffer scalpel-console-buffer-name)))))
+
+(ert-deftest scalpel-console-test-progress-callback-bound-during-request ()
+  "The progress callback must be bound while the agent request runs."
+  (let ((buf (get-buffer-create scalpel-console-buffer-name))
+        (seen nil))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf (erase-buffer))
+          (cl-letf (((symbol-function 'scalpel-llm-request)
+                     (lambda (_prompt &optional _system)
+                       (setq seen (functionp scalpel-llm--progress-callback))
+                       "[{\"tool\":\"reply\",\"text\":\"done\"}]")))
+            (with-current-buffer buf
+              (insert "tick instruction\n")
+              (goto-char (point-min))
+              (scalpel-console-send-line)))
+          (should seen))
       (when (get-buffer scalpel-console-buffer-name)
         (with-current-buffer scalpel-console-buffer-name
           (set-buffer-modified-p nil))

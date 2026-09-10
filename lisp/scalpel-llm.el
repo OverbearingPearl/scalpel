@@ -25,6 +25,9 @@
 (defvar scalpel-llm-timeout 30
   "Maximum seconds to wait for an LLM response before raising an error.")
 
+(defvar scalpel-llm--progress-callback nil
+  "Optional zero-arg function called once per wait-loop iteration.")
+
 (defun scalpel-llm--api-key-error-p (message)
   "Return non-nil when MESSAGE indicates gptel needs an API key."
   (string-match-p "gptel-api-key.*is not valid" message))
@@ -48,6 +51,9 @@ Waits synchronously but calls `accept-process-output' so user interrupts work."
             (when (> (- (float-time) start) scalpel-llm-timeout)
               (user-error "Scalpel: LLM request timed out after %s seconds" scalpel-llm-timeout))
             (accept-process-output nil 0.1)
+            (when scalpel-llm--progress-callback
+              (funcall scalpel-llm--progress-callback))
+            (redisplay)
             (when quit-flag
               (setq quit-flag nil)
               (user-error "Scalpel: LLM request interrupted")))

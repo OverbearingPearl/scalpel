@@ -11,6 +11,7 @@
 
 ;;; Code:
 
+(require 'cl-lib)
 (require 'json)
 (require 'subr-x)
 (require 'scalpel-llm)
@@ -22,6 +23,7 @@
       scalpel-system-prompt
     "You are a precise code transformation tool. The user gives you
 context and an instruction. Return ONLY a JSON array of actions.
+The top-level response must be a JSON array, never a single object.
 Each action is either {\"tool\":\"edit\",\"file\":\"/abs/path.el\",\"symbol\":\"name\",\"instruction\":\"...\"}
 or {\"tool\":\"reply\",\"text\":\"...\"}. Never emit code or diff text in this response.")
   "System prompt for the Scalpel agent planner."
@@ -40,15 +42,35 @@ or {\"tool\":\"reply\",\"text\":\"...\"}. Never emit code or diff text in this r
                 files))))
     (string-join (nreverse files) "\n\n")))
 
+(defun scalpel-agent--strip-fences (raw)
+  "Strip markdown code fences surrounding RAW, if present."
+  (let ((text (string-trim raw)))
+    (when (string-match-p "```" text)
+      (setq text (string-trim
+                  (replace-regexp-in-string
+                   "```[a-zA-Z]*\n?\\|\n?```\\'" "" text))))
+    text))
+
 (defun scalpel-agent--parse-json (raw)
-  "Parse RAW to a list of plists, one per action."
-  (condition-case nil
-      (let ((parsed (json-parse-string raw
-                     :object-type 'plist
-                     :array-type 'list)))
-        parsed)
-    (error
-     (user-error "Scalpel: planner returned invalid JSON: %S" raw))))
+  "Parse RAW to a list of action plists.
+Signal `user-error' when RAW is not valid JSON or not a JSON array
+of objects."
+  (let ((parsed (condition-case nil
+                    (json-parse-string (scalpel-agent--strip-fences raw)
+                                       :object-type 'plist
+                                       :array-type 'list)
+                  (error
+                   (user-error "Scalpel: planner returned invalid JSON: %S"
+                               raw)))))
+    (when (and (plistp parsed) (plist-get parsed :tool))
+      (setq parsed (list parsed)))
+    (unless (and (listp parsed)
+                 (cl-every (lambda (item) (plist-get item :tool)) parsed))
+      (user-error
+       (concat "Scalpel: planner returned unexpected structure "
+               "(expected a JSON array of action objects): %S")
+       raw))
+    parsed))
 
 (defun scalpel-agent-plan (instruction)
   "Ask the LLM for a structured plan for INSTRUCTION.

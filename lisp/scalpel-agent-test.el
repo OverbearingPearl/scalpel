@@ -28,6 +28,18 @@
    (scalpel-agent--parse-json "not json")
    :type 'error))
 
+(ert-deftest scalpel-agent-test-parse-json-object-not-array ()
+  "A JSON object (not an array of actions) should signal user-error."
+  (should-error
+   (scalpel-agent--parse-json "{\"actions\":[{\"tool\":\"reply\",\"text\":\"hi\"}]}")
+   :type 'user-error))
+
+(ert-deftest scalpel-agent-test-parse-json-fenced ()
+  "Markdown-fenced JSON should be parsed after stripping fences."
+  (let ((actions (scalpel-agent--parse-json
+                  "```json\n[{\"tool\":\"reply\",\"text\":\"hi\"}]\n```")))
+    (should (equal (plist-get (car actions) :text) "hi"))))
+
 (ert-deftest scalpel-agent-test-apply-if-unchanged ()
   "Apply replacement when body is unchanged; abort when it changed."
   (let ((file (make-temp-file "scalpel-test-" nil ".el")))
@@ -130,6 +142,13 @@
         (kill-buffer (get-file-buffer file)))
       (when (file-exists-p file)
         (delete-file file)))))
+
+(ert-deftest scalpel-agent-test-parse-json-single-object ()
+  "A single JSON action object should be accepted and wrapped."
+  (let ((actions (scalpel-agent--parse-json
+                  "{\"tool\":\"reply\",\"text\":\"hi\"}")))
+    (should (= (length actions) 1))
+    (should (equal (plist-get (car actions) :text) "hi"))))
 
 (provide 'scalpel-agent-test)
 
