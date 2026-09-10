@@ -128,20 +128,80 @@
     (should (= (length actions) 1))
     (should (equal (plist-get (car actions) :text) "hi"))))
 
-(ert-deftest scalpel-agent-test-context-files-default ()
-  "Default context collects only open buffers with a registered locator."
-  (let ((file (make-temp-file "scalpel-test-" nil ".el")))
+(ert-deftest scalpel-agent-test-context-add-readonly-single-file ()
+  "Adding a single file as read-only places it in the readonly list only."
+  (let ((scalpel-agent--context-files nil)
+        (scalpel-agent--context-readonly-files nil))
+    (scalpel-utils-test-with-temp-file ".el"
+      (with-temp-file this-file (insert "(defun foo ())"))
+      (scalpel-agent-context-add-readonly this-file)
+      (should (equal scalpel-agent--context-readonly-files
+                     (list (expand-file-name this-file))))
+      (should (null scalpel-agent--context-files)))))
+
+(ert-deftest scalpel-agent-test-context-renders-readonly-content ()
+  "Read-only files render with their full contents in the context."
+  (let ((scalpel-agent--context-files nil)
+        (scalpel-agent--context-readonly-files nil))
+    (scalpel-utils-test-with-temp-file ".el"
+      (with-temp-file this-file (insert "hello"))
+      (setq scalpel-agent--context-readonly-files
+            (list (expand-file-name this-file)))
+      (let ((ctx (scalpel-agent-context)))
+        (should (string-match-p "FILE (READONLY): " ctx))
+        (should (string-match-p "CONTENT:\nhello" ctx))))))
+
+(ert-deftest scalpel-agent-test-context-add-moves-between-lists ()
+  "Adding a file as writable removes it from the readonly list and vice versa."
+  (let ((scalpel-agent--context-files nil)
+        (scalpel-agent--context-readonly-files nil))
+    (scalpel-utils-test-with-temp-file ".el"
+      (with-temp-file this-file (insert "(defun foo ())"))
+      (scalpel-agent-context-add-readonly this-file)
+      (should (member (expand-file-name this-file)
+                      scalpel-agent--context-readonly-files))
+      (scalpel-agent-context-add this-file)
+      (should (null scalpel-agent--context-readonly-files))
+      (should (member (expand-file-name this-file)
+                      scalpel-agent--context-files))
+      (scalpel-agent-context-add-readonly this-file)
+      (should (null scalpel-agent--context-files))
+      (should (member (expand-file-name this-file)
+                      scalpel-agent--context-readonly-files)))))
+
+(ert-deftest scalpel-agent-test-context-remove-by-directory-prefix ()
+  "Removing a directory removes all files beneath it from both lists."
+  (let ((scalpel-agent--context-files nil)
+        (scalpel-agent--context-readonly-files nil)
+        (dir (make-temp-file "scalpel-test-dir-" t)))
     (unwind-protect
-        (let ((buf (find-file-noselect file)))
-          (unwind-protect
-              (with-temp-buffer
-                (insert "unrelated")
-                (cl-letf (((symbol-function 'buffer-list)
-                           (lambda () (list buf))))
-                  (should (equal (scalpel-agent--context-files-default)
-                                 (list (expand-file-name file))))))
-            (scalpel-utils-test-kill-file-buffer file)))
-      (scalpel-utils-test-delete-file file))))
+        (let ((f1 (expand-file-name "a.el" dir))
+              (f2 (expand-file-name "b.el" dir)))
+          (with-temp-file f1 (insert "(defun a ())"))
+          (with-temp-file f2 (insert "(defun b ())"))
+          (scalpel-agent-context-add f1)
+          (scalpel-agent-context-add-readonly f2)
+          (should (= (length scalpel-agent--context-files) 1))
+          (should (= (length scalpel-agent--context-readonly-files) 1))
+          (scalpel-agent-context-remove dir)
+          (should (null scalpel-agent--context-files))
+          (should (null scalpel-agent--context-readonly-files)))
+      (delete-directory dir t))))
+
+(ert-deftest scalpel-agent-test-edit-refuses-readonly ()
+  "Editing a read-only context file signals user-error."
+  (let ((scalpel-agent--context-files nil)
+        (scalpel-agent--context-readonly-files nil))
+    (scalpel-utils-test-with-temp-file ".el"
+      (with-temp-file this-file (insert "(defun foo (x)\n  (+ x 1))\n"))
+      (setq scalpel-agent--context-readonly-files
+            (list (expand-file-name this-file)))
+      (cl-letf (((symbol-function 'scalpel-llm-request)
+                 (lambda (_prompt &optional _system)
+                   "(defun foo (x)\n  (+ x 2))")))
+        (should-error
+         (scalpel-agent-edit this-file "foo" "increment x")
+         :type 'user-error)))))
 
 (ert-deftest scalpel-agent-test-context-add-remove ()
   "Add dedupes and normalizes; remove of absent file does not error."

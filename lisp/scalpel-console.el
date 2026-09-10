@@ -23,6 +23,7 @@
     (define-key map (kbd "RET") #'scalpel-console-send-line)
     (define-key map (kbd "C-c C-b") 'scalpel-set-backend)
     (define-key map (kbd "C-c C-a") #'scalpel-console-add-file)
+    (define-key map (kbd "C-c C-o") #'scalpel-console-add-readonly-file)
     (define-key map (kbd "C-c C-d") #'scalpel-console-remove-file)
     (define-key map (kbd "C-c C-r") #'scalpel-console-reset-context)
     map)
@@ -89,22 +90,36 @@ The agent will process the instruction and append its reply to this buffer."
   (scalpel-console--append
    (format "Context: %s" (scalpel-agent-context-summary))))
 
-(defun scalpel-console-add-file ()
-  "Prompt for a file or directory and add it to the agent context."
-  (interactive)
-  (let ((file (read-file-name "Add to Scalpel context: ")))
-    (scalpel-agent-context-add file)
+(defun scalpel-console-add-file (&optional ignore-gitignore)
+  "Prompt for a file or directory and add it as writable context.
+With prefix argument IGNORE-GITIGNORE, do not filter directory
+expansion through gitignore rules."
+  (interactive "P")
+  (let ((path (read-file-name "Add to Scalpel context: ")))
+    (scalpel-agent-context-add path ignore-gitignore)
+    (scalpel-console--show-context)))
+
+(defun scalpel-console-add-readonly-file (&optional ignore-gitignore)
+  "Prompt for a file or directory and add it as read-only reference.
+Read-only files are shown to the LLM with their full contents and
+cannot be edited.  With prefix argument IGNORE-GITIGNORE, do not
+filter directory expansion through gitignore rules."
+  (interactive "P")
+  (let ((path (read-file-name "Add read-only reference: ")))
+    (scalpel-agent-context-add-readonly path ignore-gitignore)
     (scalpel-console--show-context)))
 
 (defun scalpel-console-remove-file ()
-  "Prompt for a context file and remove it from the agent context."
+  "Prompt for a context file or directory and remove it."
   (interactive)
-  (if (null scalpel-agent--context-files)
-      (message "Scalpel: context is empty")
-    (let ((file (completing-read "Remove from Scalpel context: "
-                                 scalpel-agent--context-files nil t)))
-      (scalpel-agent-context-remove file)
-      (scalpel-console--show-context))))
+  (let ((candidates (append scalpel-agent--context-files
+                            scalpel-agent--context-readonly-files)))
+    (if (null candidates)
+        (message "Scalpel: context is empty")
+      (let ((path (completing-read "Remove from Scalpel context: "
+                                   candidates nil nil)))
+        (scalpel-agent-context-remove path)
+        (scalpel-console--show-context)))))
 
 (defun scalpel-console-reset-context ()
   "Reset the agent context to currently open located files."

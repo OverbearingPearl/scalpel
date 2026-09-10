@@ -25,74 +25,198 @@
 context and an instruction. Return ONLY a JSON array of actions.
 The top-level response must be a JSON array, never a single object.
 Each action is either {\"tool\":\"edit\",\"file\":\"/abs/path.el\",\"symbol\":\"name\",\"instruction\":\"...\"}
-or {\"tool\":\"reply\",\"text\":\"...\"}. Never emit code or diff text in this response.")
+or {\"tool\":\"reply\",\"text\":\"...\"}. Never emit code or diff text in this response.
+Files shown as \"FILE (READONLY)\" are references only: never emit an
+edit action for them.")
   "System prompt for the Scalpel agent planner."
   :type 'string
   :group 'scalpel)
 
+(defcustom scalpel-agent-context-readonly-max-bytes 20000
+  "Maximum bytes of a read-only file included in the LLM context.
+Larger files are truncated with an explicit marker."
+  :type 'integer
+  :group 'scalpel)
+
 (defvar scalpel-agent--context-files nil
-  "Explicit list of absolute file names visible to the LLM this session.")
+  "Writable files in the session context, as absolute names.")
 
-(defun scalpel-agent--context-files-default ()
-  "Return absolute file names of open buffers with a registered locator."
-  (let (files)
-    (dolist (buf (buffer-list))
-      (let ((file (buffer-file-name buf)))
-        (when (and file (scalpel-locate-provider-for-file file))
-          (cl-pushnew (expand-file-name file) files :test #'string=))))
-    (nreverse files)))
+(defvar scalpel-agent--context-readonly-files nil
+  "Read-only reference files in the session context, as absolute names.")
 
-(defun scalpel-agent--directory-files (dir)
-  "Return files under DIR that have a registered locator provider."
-  (cl-remove-if-not
-   (lambda (file) (scalpel-locate-provider-for-file file))
-   (directory-files-recursively dir "")))
+(defun scalpel-agent--git-environment ()
+  "Return `process-environment' with effectful git overrides removed.
+Git exports GIT_DIR and friends to hooks; inheriting them makes
+repository discovery succeed for directories that are not actually
+inside a repository."
+  (cl-remove-if
+   (lambda (entry)
+     (string-match-p
+      "\\`GIT_\\(DIR\\|WORK_TREE\\|INDEX_FILE\\|OBJECT_DIRECTORY\\|ALTERNATE_OBJECT_DIRECTORIES\\|COMMON_DIR\\)="
+      entry))
+   process-environment))
+
+(defun scalpel-agent--git-toplevel (dir)
+  "Return the absolute git working-tree root containing DIR, or nil."
+  (let ((dir (file-name-as-directory (expand-file-name dir))))
+    (with-temp-buffer
+      (let ((default-directory dir)
+            (process-environment (scalpel-agent--git-environment))
+            (status (condition-case nil
+                        (call-process "git" nil t nil
+                                      "rev-parse" "--show-toplevel")
+                      (error nil))))
+        (when (and (numberp status) (= status 0) (> (buffer-size) 0))
+          (let ((top (file-name-as-directory (string-trim (buffer-string)))))
+            ;; Defensive: only accept TOP when DIR really is inside it.
+            (when (file-in-directory-p dir top)
+              top)))))))
+
+(defun scalpel-agent--git-listed-files (dir)
+  "Return files under DIR that git does not ignore.
+Paths are absolute.  Return nil when DIR is not inside a git tree."
+  (when (scalpel-agent--git-toplevel dir)
+    (let ((default-directory (file-name-as-directory (expand-file-name dir)))
+          (process-environment (scalpel-agent--git-environment)))
+      (with-temp-buffer
+        (let ((status (condition-case nil
+                          (call-process "git" nil t nil
+                                        "ls-files" "--cached" "--others"
+                                        "--exclude-standard" "-z")
+                        (error nil))))
+          (when (and (numberp status) (= status 0))
+            (mapcar (lambda (rel) (expand-file-name rel default-directory))
+                    (split-string (buffer-string) "\0" t))))))))
+
+(defun scalpel-agent--walk-all-files (dir)
+  "Return every regular file at or below DIR, skipping `.git'."
+  (let (out)
+    (dolist (name (directory-files dir nil nil t))
+      (let ((base (file-name-nondirectory (directory-file-name name))))
+        (unless (member base '("." ".."))
+          (let ((entry (expand-file-name base dir)))
+            (cond
+             ((and (file-directory-p entry) (not (string= base ".git")))
+              (setq out (nconc out (scalpel-agent--walk-all-files entry))))
+             ((file-regular-p entry)
+              (push entry out)))))))
+    (nreverse out)))
+
+(defun scalpel-agent--expanded-files (path &optional ignore-gitignore require-locator)
+  "Return the file list that PATH expands to.
+PATH is a regular file or a directory.  Directory contents respect
+gitignore unless IGNORE-GITIGNORE is non-nil.  When REQUIRE-LOCATOR
+is non-nil, files without a registered provider are dropped."
+  (let* ((path (expand-file-name path))
+         (files
+          (cond
+           ((file-regular-p path) (list path))
+           ((file-directory-p path)
+            (cond
+             (ignore-gitignore (scalpel-agent--walk-all-files path))
+             ((scalpel-agent--git-toplevel path)
+              (scalpel-agent--git-listed-files path))
+             (t (scalpel-agent--walk-all-files path))))
+           (t nil))))
+    (if require-locator
+        (cl-remove-if-not #'scalpel-locate-provider-for-file files)
+      files)))
 
 (defun scalpel-agent-context-reset ()
-  "Reset the session context to currently open located files."
-  (setq scalpel-agent--context-files (scalpel-agent--context-files-default)))
+  "Clear the session context."
+  (setq scalpel-agent--context-files nil)
+  (setq scalpel-agent--context-readonly-files nil))
 
-(defun scalpel-agent-context-add (file)
-  "Add FILE (a file or directory) to the session context.
-Directories are expanded to contained files with a registered provider."
-  (setq file (expand-file-name file))
-  (cond
-   ((file-directory-p file)
+(defun scalpel-agent-context-add (path &optional ignore-gitignore)
+  "Add PATH (a file or directory) as writable context.
+A directory expands to files matching a registered locator, with
+gitignored files excluded unless IGNORE-GITIGNORE is non-nil."
+  (let ((files (scalpel-agent--expanded-files path ignore-gitignore t)))
+    (unless files
+      (user-error "Scalpel: no addable files under %s (try C-u to include gitignored)" path))
+    (setq scalpel-agent--context-readonly-files
+          (cl-set-difference scalpel-agent--context-readonly-files files
+                             :test #'string=))
     (setq scalpel-agent--context-files
-          (cl-union (scalpel-agent--directory-files file)
-                    scalpel-agent--context-files
-                    :test #'string=)))
-   ((file-exists-p file)
-    (cl-pushnew file scalpel-agent--context-files :test #'string=))
-   (t
-    (user-error "Scalpel: no such file or directory: %s" file))))
+          (cl-union files scalpel-agent--context-files :test #'string=))
+    files))
 
-(defun scalpel-agent-context-remove (file)
-  "Remove FILE from the session context.
-No-op with a message when FILE is not in the context."
-  (setq file (expand-file-name file))
-  (if (member file scalpel-agent--context-files)
+(defun scalpel-agent-context-add-readonly (path &optional ignore-gitignore)
+  "Add PATH (a file or directory) as read-only reference.
+Read-only files are shown to the LLM with their full contents and
+cannot be edited.  Directory contents respect gitignore unless
+IGNORE-GITIGNORE is non-nil."
+  (let ((files (scalpel-agent--expanded-files path ignore-gitignore nil)))
+    (unless files
+      (user-error "Scalpel: no addable files under %s (try C-u to include gitignored)" path))
+    (setq scalpel-agent--context-files
+          (cl-set-difference scalpel-agent--context-files files
+                             :test #'string=))
+    (setq scalpel-agent--context-readonly-files
+          (cl-union files scalpel-agent--context-readonly-files :test #'string=))
+    files))
+
+(defun scalpel-agent-readonly-p (file)
+  "Return non-nil when FILE is a read-only context file."
+  (and file
+       (member (expand-file-name file) scalpel-agent--context-readonly-files)))
+
+(defun scalpel-agent-context-remove (path)
+  "Remove PATH from the session context.
+PATH is a file or a directory; a directory removes every file under
+it.  No-op with a message when nothing matched."
+  (let* ((path (expand-file-name path))
+         (prefix (file-name-as-directory path))
+         (match-p (lambda (f) (or (string= f path) (string-prefix-p prefix f))))
+         (removed (cl-remove-if-not match-p
+                                    (append scalpel-agent--context-files
+                                            scalpel-agent--context-readonly-files))))
+    (if (null removed)
+        (message "Scalpel: %s is not in the context" path)
       (setq scalpel-agent--context-files
-            (delete file scalpel-agent--context-files))
-    (message "Scalpel: %s is not in the context" file)))
+            (cl-remove-if match-p scalpel-agent--context-files))
+      (setq scalpel-agent--context-readonly-files
+            (cl-remove-if match-p scalpel-agent--context-readonly-files))
+      (message "Scalpel: removed %d file(s)" (length removed)))))
 
 (defun scalpel-agent-context-summary ()
   "Return a one-line summary of the session context files."
-  (if scalpel-agent--context-files
-      (string-join scalpel-agent--context-files ", ")
-    "none"))
+  (let ((w scalpel-agent--context-files)
+        (r scalpel-agent--context-readonly-files))
+    (if (and (null w) (null r))
+        "none"
+      (string-join
+       (append w (mapcar (lambda (f) (concat f " (read-only)")) r))
+       ", "))))
+
+(defun scalpel-agent--readonly-block (file)
+  "Return the LLM context block for read-only FILE."
+  (let* ((max scalpel-agent-context-readonly-max-bytes)
+         (size (or (file-attribute-size (file-attributes file)) 0))
+         (truncated (> size max))
+         (body (with-temp-buffer
+                 (insert-file-contents file nil 0 max)
+                 (buffer-string))))
+    (format "FILE (READONLY): %s\nCONTENT:\n%s%s"
+            file
+            (if truncated (format "[truncated at %d bytes]\n" max) "")
+            body)))
 
 (defun scalpel-agent-context ()
-  "Return the LLM context text from the explicit session file list."
-  (if (null scalpel-agent--context-files)
-      "No files in context."
-    (string-join
-     (mapcar (lambda (file)
-               (format "FILE: %s\nSYMBOLS: %s"
-                       file
-                       (string-join (scalpel-locate-list-symbols file) ", ")))
-             scalpel-agent--context-files)
-     "\n\n")))
+  "Return the LLM context text from the explicit session file lists."
+  (let ((writable scalpel-agent--context-files)
+        (readonly scalpel-agent--context-readonly-files))
+    (if (and (null writable) (null readonly))
+        "No files in context."
+      (string-join
+       (append
+        (mapcar (lambda (file)
+                  (format "FILE: %s\nSYMBOLS: %s"
+                          file
+                          (string-join (scalpel-locate-list-symbols file) ", ")))
+                writable)
+        (mapcar #'scalpel-agent--readonly-block readonly))
+       "\n\n"))))
 
 (defun scalpel-agent--strip-fences (raw)
   "Strip markdown code fences surrounding RAW, if present."
@@ -173,6 +297,8 @@ region was modified while an LLM request was in flight."
 Return human-readable report string."
   (unless (and file symbol instruction)
     (user-error "Scalpel: malformed edit action"))
+  (when (scalpel-agent-readonly-p file)
+    (user-error "Scalpel: %s is a read-only context file" file))
   (let ((range (scalpel-locate-range file symbol)))
     (unless range
       (user-error "Scalpel: can't locate %s in %s" symbol file))
