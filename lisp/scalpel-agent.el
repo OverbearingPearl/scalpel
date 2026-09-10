@@ -102,11 +102,10 @@ Paths are absolute.  Return nil when DIR is not inside a git tree."
               (push entry out)))))))
     (nreverse out)))
 
-(defun scalpel-agent--expanded-files (path &optional ignore-gitignore require-locator)
+(defun scalpel-agent--expanded-files (path &optional ignore-gitignore)
   "Return the file list that PATH expands to.
 PATH is a regular file or a directory.  Directory contents respect
-gitignore unless IGNORE-GITIGNORE is non-nil.  When REQUIRE-LOCATOR
-is non-nil, files without a registered provider are dropped."
+gitignore unless IGNORE-GITIGNORE is non-nil."
   (let* ((path (expand-file-name path))
          (files
           (cond
@@ -118,9 +117,7 @@ is non-nil, files without a registered provider are dropped."
               (scalpel-agent--git-listed-files path))
              (t (scalpel-agent--walk-all-files path))))
            (t nil))))
-    (if require-locator
-        (cl-remove-if-not #'scalpel-locate-provider-for-file files)
-      files)))
+    files))
 
 (defun scalpel-agent-context-reset ()
   "Clear the session context."
@@ -131,7 +128,7 @@ is non-nil, files without a registered provider are dropped."
   "Add PATH (a file or directory) as writable context.
 A directory expands to files matching a registered locator, with
 gitignored files excluded unless IGNORE-GITIGNORE is non-nil."
-  (let ((files (scalpel-agent--expanded-files path ignore-gitignore t)))
+  (let ((files (scalpel-agent--expanded-files path ignore-gitignore)))
     (unless files
       (user-error "Scalpel: no addable files under %s (try C-u to include gitignored)" path))
     (setq scalpel-agent--context-readonly-files
@@ -146,7 +143,7 @@ gitignored files excluded unless IGNORE-GITIGNORE is non-nil."
 Read-only files are shown to the LLM with their full contents and
 cannot be edited.  Directory contents respect gitignore unless
 IGNORE-GITIGNORE is non-nil."
-  (let ((files (scalpel-agent--expanded-files path ignore-gitignore nil)))
+  (let ((files (scalpel-agent--expanded-files path ignore-gitignore)))
     (unless files
       (user-error "Scalpel: no addable files under %s (try C-u to include gitignored)" path))
     (setq scalpel-agent--context-files
@@ -360,9 +357,11 @@ empty."
       (string-join
        (append
         (mapcar (lambda (file)
-                  (format "FILE: %s\nSYMBOLS: %s"
-                          file
-                          (string-join (scalpel-locate-list-symbols file) ", ")))
+                  (if (scalpel-locate-provider-for-file file)
+                      (format "FILE: %s\nSYMBOLS: %s"
+                              file
+                              (string-join (scalpel-locate-list-symbols file) ", "))
+                    (format "FILE: %s" file)))
                 writable)
         (mapcar #'scalpel-agent--readonly-block readonly))
        "\n\n"))))

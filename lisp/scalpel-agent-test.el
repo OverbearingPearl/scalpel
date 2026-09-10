@@ -151,6 +151,12 @@
         (should (string-match-p "FILE (READONLY): " ctx))
         (should (string-match-p "CONTENT:\nhello" ctx))))))
 
+(ert-deftest scalpel-agent-test-context-omits-symbols-without-provider ()
+  "Files without a locator provider render without a SYMBOLS line."
+  (let ((scalpel-agent--context-files '("/tmp/notes.md"))
+        (scalpel-agent--context-readonly-files nil))
+    (should (string= (scalpel-agent-context) "FILE: /tmp/notes.md"))))
+
 (ert-deftest scalpel-agent-test-context-add-moves-between-lists ()
   "Adding a file as writable removes it from the readonly list and vice versa."
   (let ((scalpel-agent--context-files nil)
@@ -229,9 +235,13 @@
         (progn
           (let ((file (expand-file-name "foo.el" dir)))
             (with-temp-file file (insert "(defun foo ())"))
+            (with-temp-file (expand-file-name "notes.md" dir) (insert "hi"))
             (scalpel-agent-context-add dir)
-            (should (equal scalpel-agent--context-files
-                           (list file)))))
+            (should (equal (sort (copy-sequence scalpel-agent--context-files)
+                                 #'string<)
+                           (sort (list file
+                                       (expand-file-name "notes.md" dir))
+                                 #'string<)))))
       (delete-directory dir t)
       (scalpel-utils-test-delete-file other))))
 
