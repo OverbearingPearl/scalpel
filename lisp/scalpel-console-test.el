@@ -26,7 +26,8 @@
             (with-current-buffer buf
               (goto-char (point-min))
               (should (search-forward "User: test instruction" nil t))
-              (should (search-forward "Scalpel: done" nil t)))))
+              (should (search-forward "Scalpel: done" nil t))
+              (should-not (search-forward "thinking" nil t)))))
       (when (get-buffer scalpel-console-buffer-name)
         (with-current-buffer scalpel-console-buffer-name
           (set-buffer-modified-p nil))
@@ -48,7 +49,8 @@
             (with-current-buffer buf
               (goto-char (point-min))
               (should (search-forward "User: bad instruction" nil t))
-              (should (search-forward "Scalpel error: Boom" nil t)))))
+              (should (search-forward "Scalpel error: Boom" nil t))
+              (should-not (search-forward "thinking" nil t)))))
       (when (get-buffer scalpel-console-buffer-name)
         (with-current-buffer scalpel-console-buffer-name
           (set-buffer-modified-p nil))
