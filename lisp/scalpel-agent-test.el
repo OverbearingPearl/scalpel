@@ -378,6 +378,67 @@ Guards against the git subprocess inheriting the caller's
         (should-not (scalpel-agent--git-toplevel (directory-file-name dir)))
       (delete-directory dir t))))
 
+(ert-deftest scalpel-agent-test-context-update-first-render-marks-nothing ()
+  "Without a baseline, no line is marked as changed."
+  (let ((scalpel-agent--context-files '("/a/one.el"))
+        (scalpel-agent--context-readonly-files nil))
+    (let ((cells (car (scalpel-agent-context-update 'none-yet nil))))
+      (should cells)
+      (should (cl-every (lambda (cell)
+                          (eq (plist-get cell :status) 'same))
+                        cells)))))
+
+(ert-deftest scalpel-agent-test-context-update-marks-changes ()
+  "Sibling additions leave existing files unmarked; drops are removed."
+  (let* ((scalpel-agent--context-files '("/a/one.el"))
+         (scalpel-agent--context-readonly-files nil)
+         (baseline 'none-yet)
+         cells
+         (status-of (lambda (name)
+                      (plist-get (cl-find name cells
+                                          :key (lambda (cell)
+                                                 (plist-get cell :text))
+                                          :test #'string-match-p)
+                                 :status))))
+    (let ((result (scalpel-agent-context-update baseline nil)))
+      (setq baseline (cdr result)
+            cells (car result))
+      (should (cl-every (lambda (cell)
+                          (eq (plist-get cell :status) 'same))
+                        cells)))
+    (setq scalpel-agent--context-files '("/a/one.el" "/a/two.el"))
+    (let ((result (scalpel-agent-context-update baseline nil)))
+      (setq baseline (cdr result)
+            cells (car result))
+      (should (eq (funcall status-of "one.el") 'same))
+      (should (eq (funcall status-of "two.el") 'added)))
+    (setq scalpel-agent--context-files '("/a/one.el"))
+    (let ((result (scalpel-agent-context-update baseline nil)))
+      (setq cells (car result))
+      (should (eq (funcall status-of "two.el") 'removed))
+      (should (eq (funcall status-of "one.el") 'same)))))
+
+(ert-deftest scalpel-agent-test-context-update-marks-new-directory ()
+  "A directory holding only new files is itself marked added."
+  (let ((scalpel-agent--context-files '("/a/one.el"))
+        (scalpel-agent--context-readonly-files nil))
+    (let ((baseline (cdr (scalpel-agent-context-update 'none-yet nil)))
+          cells)
+      (setq scalpel-agent--context-files '("/a/one.el" "/b/two.el"))
+      (setq cells (car (scalpel-agent-context-update baseline nil)))
+      (should (eq (plist-get (cl-find "b/" cells
+                                      :key (lambda (cell)
+                                             (plist-get cell :text))
+                                      :test #'string-match-p)
+                             :status)
+                  'added))
+      (should (eq (plist-get (cl-find "a/" cells
+                                      :key (lambda (cell)
+                                             (plist-get cell :text))
+                                      :test #'string-match-p)
+                             :status)
+                  'same)))))
+
 (provide 'scalpel-agent-test)
 
 ;;; scalpel-agent-test.el ends here

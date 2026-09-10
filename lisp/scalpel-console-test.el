@@ -155,6 +155,48 @@ returned buffer when done."
                                         nil t))))
           (when (buffer-live-p buf) (kill-buffer buf)))))))
 
+(ert-deftest scalpel-console-test-context-diff-highlights-removed ()
+  "A file dropped from the context is appended struck through."
+  (let ((scalpel-agent--context-files '("/tmp/scalpel-diff-a.el"))
+        (scalpel-agent--context-readonly-files nil)
+        (buf (scalpel-console-test--new-console-buffer)))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (setq scalpel-console--context-baseline 'none-yet)
+            (scalpel-console--show-context)
+            (setq scalpel-agent--context-files nil)
+            (scalpel-console--show-context)
+            (goto-char (point-min))
+            (let (pos)
+              (while (search-forward "scalpel-diff-a.el" nil t)
+                (setq pos (match-beginning 0)))
+              (should pos)
+              (should (eq (get-text-property pos 'face)
+                          'scalpel-console-context-removed-face)))))
+      (when (buffer-live-p buf) (kill-buffer buf)))))
+(ert-deftest scalpel-console-test-context-diff-face-covers-name-only ()
+  "The change face starts at the file name, never at the tree graphics."
+  (let ((scalpel-agent--context-files '("/tmp/scalpel-diff-name.el"))
+        (scalpel-agent--context-readonly-files nil)
+        (buf (scalpel-console-test--new-console-buffer)))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (setq scalpel-console--context-baseline 'none-yet)
+            (scalpel-console--show-context)
+            (setq scalpel-agent--context-files nil)
+            (scalpel-console--show-context)
+            (goto-char (point-min))
+            (let (pos)
+              (while (search-forward "scalpel-diff-name.el" nil t)
+                (setq pos (match-beginning 0)))
+              (should pos)
+              (should (eq (get-text-property pos 'face)
+                          'scalpel-console-context-removed-face))
+              (should (null (get-text-property (1- pos) 'face))))))
+      (when (buffer-live-p buf) (kill-buffer buf)))))
+
 (provide 'scalpel-console-test)
 
 ;;; scalpel-console-test.el ends here

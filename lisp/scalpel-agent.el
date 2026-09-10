@@ -262,7 +262,11 @@ occupying one line per component."
     entries))
 
 (defun scalpel-agent--context-tree-render (tree prefix)
-  "Return TREE rendered as box-drawing lines prefixed with PREFIX."
+  "Return TREE rendered as display cells prefixed with PREFIX.
+Each cell is a plist with :text (the full line), :name-start (the
+index at which the entry name begins, so callers can highlight the
+name without touching the tree graphics) and :status (nil when the
+node is unmarked)."
   (let* ((entries (sort (copy-sequence tree)
                         #'scalpel-agent--context-entry-lessp))
          (n (length entries)))
@@ -273,11 +277,14 @@ occupying one line per component."
      (let* ((name (car entry))
             (node (cdr entry))
             (last-p (= i n))
-            (connector (if last-p "└── " "├── ")))
-       (cons (concat prefix connector name
-                     (if (plist-get node :file)
-                         (scalpel-agent--context-marker node)
-                       (if (string-suffix-p "/" name) "" "/")))
+            (connector (if last-p "└── " "├── "))
+            (text (concat prefix connector name
+                          (if (plist-get node :file)
+                              (scalpel-agent--context-marker node)
+                            (if (string-suffix-p "/" name) "" "/")))))
+       (cons (list :text text
+                   :name-start (+ (length prefix) (length connector))
+                   :status (plist-get node :status))
              (unless (plist-get node :file)
                (scalpel-agent--context-tree-render
                 (plist-get node :children)
@@ -329,19 +336,117 @@ no subprocess; each repository is queried once."
              append (scalpel-agent--git-ignored-in-repo
                      root (nreverse members)))))
 
-(defun scalpel-agent--context-tree-from-entries (entries)
-  "Render ENTRIES, an alist of (NAME . FLAGS), as a tree string.
-NAME is the display path and FLAGS the file-node plist."
+(defun scalpel-agent--context-entries (ignored-files)
+  "Return one (FILE . FLAGS) entry per file in the session context.
+IGNORED-FILES lists absolute names that git ignores; matching
+entries get :ignored set.  FLAGS is the plist consumed by the tree
+builder: :readonly and :ignored, plus :status once a caller has
+annotated the entry."
+  (let ((entry (lambda (file readonly)
+                 (let ((file (expand-file-name file)))
+                   (cons file
+                         (list :readonly readonly
+                               :ignored (and (member file ignored-files) t)))))))
+    (append
+     (mapcar (lambda (file) (funcall entry file nil))
+             scalpel-agent--context-files)
+     (mapcar (lambda (file) (funcall entry file t))
+             scalpel-agent--context-readonly-files))))
+
+(defun scalpel-agent--context-tree-mark-dirs (tree)
+  "Mark directory nodes of TREE from their descendants' :status.
+A directory takes the common status of its descendants when they
+all agree (`added', `removed' or `same'); mixed subtrees stay
+unmarked.  Return the updated TREE."
+  (mapcar
+   (lambda (entry)
+     (let ((node (cdr entry)))
+       (if (plist-get node :file)
+           entry
+         (let* ((children (scalpel-agent--context-tree-mark-dirs
+                           (plist-get node :children)))
+                (statuses (delq nil
+                                (mapcar (lambda (child)
+                                          (plist-get (cdr child) :status))
+                                        children)))
+                (status (cond
+                         ((and statuses
+                               (cl-every (lambda (s) (eq s 'added)) statuses))
+                          'added)
+                         ((and statuses
+                               (cl-every (lambda (s) (eq s 'removed))
+                                         statuses))
+                          'removed)
+                         ((and statuses
+                               (cl-every (lambda (s) (eq s 'same)) statuses))
+                          'same))))
+           (cons (car entry)
+                 (list :children children :status status))))))
+   tree))
+
+(defun scalpel-agent--context-tree-lines (entries)
+  "Return display cells for ENTRIES.
+ENTRIES is a list of (FILE . FLAGS) whose :status was set by the
+caller.  Return a list of cell plists in display order, as built
+by `scalpel-agent--context-tree-render'."
   (let ((tree nil))
     (dolist (entry entries)
       (setq tree (scalpel-agent--context-tree-insert
                   tree
                   (scalpel-agent--path-components (car entry))
                   (cdr entry))))
-    (string-join
-     (scalpel-agent--context-tree-render
-      (scalpel-agent--context-tree-compact tree) "")
-     "\n")))
+    (scalpel-agent--context-tree-render
+     (scalpel-agent--context-tree-mark-dirs
+      (scalpel-agent--context-tree-compact tree))
+     "")))
+
+(defun scalpel-agent--context-tree-from-entries (entries)
+  "Render ENTRIES, a list of (FILE . FLAGS), as a tree string."
+  (string-join (mapcar (lambda (cell) (plist-get cell :text))
+                       (scalpel-agent--context-tree-lines entries))
+               "\n"))
+
+(defun scalpel-agent-context-update (previous ignored-files)
+  "Return (LINES . BASELINE) describing the current session context.
+LINES is a list of display cells as built by
+`scalpel-agent--context-tree-lines'; BASELINE is the value to pass
+as PREVIOUS on the next call.  IGNORED-FILES lists absolute names
+that git ignores.  PREVIOUS is a BASELINE from an earlier call, or
+any non-list value (e.g. a symbol) when no baseline exists yet, in
+which case nothing is marked as changed.  Files that PREVIOUS held
+but the context no longer does are carried into LINES with status
+`removed', so a caller can render them struck through at their
+tree position."
+  (let ((current (scalpel-agent--context-entries ignored-files)))
+    (if (not (listp previous))
+        (cons (scalpel-agent--context-tree-lines
+               (mapcar (lambda (entry)
+                         (cons (car entry)
+                               (plist-put (copy-sequence (cdr entry))
+                                          :status 'same)))
+                       current))
+              current)
+      (let* ((previous-files (mapcar #'car previous))
+             (current-files (mapcar #'car current))
+             (tagged (mapcar (lambda (entry)
+                               (cons (car entry)
+                                     (plist-put
+                                      (copy-sequence (cdr entry))
+                                      :status
+                                      (if (member (car entry) previous-files)
+                                          'same
+                                        'added))))
+                             current))
+             (dropped (mapcar (lambda (entry)
+                                (cons (car entry)
+                                      (plist-put (copy-sequence (cdr entry))
+                                                 :status 'removed)))
+                              (cl-remove-if
+                               (lambda (entry)
+                                 (member (car entry) current-files))
+                               previous))))
+        (cons (scalpel-agent--context-tree-lines (append tagged dropped))
+              current)))))
 
 (defun scalpel-agent-context-summary (&optional _root ignored-files)
   "Return the session context as a tree of files.
@@ -351,19 +456,10 @@ of being split into separate ones.  IGNORED-FILES lists absolute
 names that git ignores, marked \"(gitignored)\"; read-only entries
 are marked \"(read-only)\".  Return the string \"none\" when the
 context is empty."
-  (let ((entry (lambda (file readonly)
-                 (let ((file (expand-file-name file)))
-                   (cons file
-                         (list :readonly readonly
-                               :ignored (and (member file ignored-files) t)))))))
-    (let ((entries (append
-                    (mapcar (lambda (file) (funcall entry file nil))
-                            scalpel-agent--context-files)
-                    (mapcar (lambda (file) (funcall entry file t))
-                            scalpel-agent--context-readonly-files))))
-      (if (null entries)
-          "none"
-        (scalpel-agent--context-tree-from-entries entries)))))
+  (let ((entries (scalpel-agent--context-entries ignored-files)))
+    (if (null entries)
+        "none"
+      (scalpel-agent--context-tree-from-entries entries))))
 
 (defun scalpel-agent--readonly-block (file)
   "Return the LLM context block for read-only FILE."

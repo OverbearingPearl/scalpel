@@ -27,6 +27,21 @@ so a console opened at /home/me/proj is named \"*scalpel: ~/proj*\"."
 Set by `scalpel-console-open'; while non-nil, `default-directory'
 in the console buffer is pinned to this value.")
 
+(defvar-local scalpel-console--context-baseline 'none-yet
+  "Context entries shown by the previous refresh.
+The symbol `none-yet' means no refresh has happened in this
+console buffer yet, so nothing is highlighted as changed.")
+
+(defface scalpel-console-context-added-face
+  '((t :inherit bold))
+  "Face for files newly added to the Scalpel context."
+  :group 'scalpel)
+
+(defface scalpel-console-context-removed-face
+  '((t :inherit shadow :strike-through t))
+  "Face for files removed from the Scalpel context."
+  :group 'scalpel)
+
 (defun scalpel-console--buffer-name (root)
   "Return the Scalpel console buffer name for ROOT.
 ROOT is expanded, normalized with `file-name-as-directory' and
@@ -122,20 +137,47 @@ The agent will process the instruction and append its reply to this buffer."
           (goto-char (point-max))
           (insert (format "%s\n\n" text)))))))
 
+(defun scalpel-console--render-diff (lines)
+  "Return LINES as text with per-name change highlighting.
+LINES is a list of display cells as returned by
+`scalpel-agent-context-update'.  Added names are bolded; removed
+names are dimmed and struck through.  The tree graphics are never
+highlighted."
+  (mapconcat
+   (lambda (cell)
+     (let* ((text (plist-get cell :text))
+            (start (plist-get cell :name-start))
+            (graphics (substring text 0 start))
+            (name (substring text start)))
+       (pcase (plist-get cell :status)
+         ('added (concat graphics
+                         (propertize name
+                                     'face 'scalpel-console-context-added-face)))
+         ('removed (concat graphics
+                           (propertize name
+                                       'face 'scalpel-console-context-removed-face)))
+         (_ text))))
+   lines
+   "\n"))
+
 (defun scalpel-console--show-context ()
-  "Append a context summary to the console buffer.
-Paths are shown relative to the console root when available.
-Files git would ignore are marked in the tree."
-  (let* ((root (and (bound-and-true-p scalpel-console--root)
-                    scalpel-console--root))
-         (ignored (scalpel-agent--git-ignored-files
-                   (append scalpel-agent--context-files
-                           scalpel-agent--context-readonly-files)))
-         (summary (scalpel-agent-context-summary root ignored)))
-    (scalpel-console--append
-     (if (string= summary "none")
-         "Context: none"
-       (concat "Context:\n" summary)))))
+  "Append the context tree, marking the delta since the last refresh.
+Files git would ignore are marked in the tree.  Lines dropped since
+the previous refresh are dimmed and struck through, newly added
+lines are bolded.  The baseline is replaced afterwards, so each
+delta is highlighted exactly once."
+  (with-current-buffer (scalpel-console--target-buffer)
+    (let* ((ignored (scalpel-agent--git-ignored-files
+                     (append scalpel-agent--context-files
+                             scalpel-agent--context-readonly-files)))
+           (result (scalpel-agent-context-update
+                    scalpel-console--context-baseline ignored))
+           (lines (car result)))
+      (setq scalpel-console--context-baseline (cdr result))
+      (scalpel-console--append
+       (if (null lines)
+           "Context: none"
+         (concat "Context:\n" (scalpel-console--render-diff lines)))))))
 
 (defun scalpel-console-add-file (&optional ignore-gitignore)
   "Prompt for a file or directory and add it as writable context.
@@ -189,6 +231,7 @@ that path."
       (scalpel-console-mode))
     (setq-local scalpel-console--root root)
     (setq-local default-directory root)
+    (setq-local scalpel-console--context-baseline 'none-yet)
     (let ((inhibit-read-only t))
       (erase-buffer)
       (goto-char (point-min))
