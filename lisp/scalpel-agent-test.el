@@ -252,7 +252,14 @@
     (should (string= (scalpel-agent-context) "No files in context."))
     (let ((scalpel-agent--context-files '("/a.el" "/b.el")))
       (should (string= (scalpel-agent-context-summary)
-                       "├── /a.el\n└── /b.el")))))
+                       "└── /\n    ├── a.el\n    └── b.el")))))
+
+(ert-deftest scalpel-agent-test-context-summary-compacts-single-child-chains ()
+  "Single-child directory chains collapse into one node."
+  (let ((scalpel-agent--context-files '("/a/b/c.el"))
+        (scalpel-agent--context-readonly-files nil))
+    (should (string= (scalpel-agent-context-summary)
+                     "└── /a/b/\n    └── c.el"))))
 
 (ert-deftest scalpel-agent-test-context-summary-tree ()
   "Summary nests files, orders directories first, marks attributes."
@@ -262,11 +269,12 @@
     (should (string=
              (scalpel-agent-context-summary "/repo" '("/repo/lisp/a.el"))
              (string-join
-              '("├── lisp/"
-                "│   ├── a.el (gitignored)"
-                "│   ├── c.el"
-                "│   └── notes.txt (read-only)"
-                "└── z.el")
+              '("└── /repo/"
+                "    ├── lisp/"
+                "    │   ├── a.el (gitignored)"
+                "    │   ├── c.el"
+                "    │   └── notes.txt (read-only)"
+                "    └── z.el")
               "\n")))))
 
 (ert-deftest scalpel-agent-test-git-ignored-files ()
@@ -290,6 +298,84 @@
                          (list (expand-file-name "drop.log" dir))))
           (should (null (scalpel-agent--git-ignored-files
                          (list (expand-file-name "keep.el" dir))))))
+      (delete-directory dir t))))
+
+(ert-deftest scalpel-agent-test-context-summary-unifies-inside-and-outside ()
+  "Files inside and outside ROOT render in one tree rooted at the filesystem root."
+  (let ((scalpel-agent--context-files
+         '("/repo/lisp/a.el" "/other/b.el"))
+        (scalpel-agent--context-readonly-files nil))
+    (should (string= (scalpel-agent-context-summary "/repo")
+                     (string-join
+                      '("└── /"
+                        "    ├── other/"
+                        "    │   └── b.el"
+                        "    └── repo/lisp/"
+                        "        └── a.el")
+                      "\n")))))
+
+(ert-deftest scalpel-agent-test-git-toplevel-at-repo-root ()
+  "The repository root itself is reported as its own git toplevel."
+  (skip-unless (executable-find "git"))
+  (let ((dir (file-name-as-directory (make-temp-file "scalpel-test-repo-" t))))
+    (unwind-protect
+        (progn
+          (let ((default-directory dir)
+                (process-environment (scalpel-agent--git-environment)))
+            (call-process "git" nil nil nil "init" "-q"))
+          (dolist (candidate (list dir (directory-file-name dir)))
+            (let ((top (scalpel-agent--git-toplevel candidate)))
+              (should (equal (and top (file-truename top))
+                             (file-truename dir))))))
+      (delete-directory dir t))))
+
+(ert-deftest scalpel-agent-test-expanded-files-respects-gitignore-at-repo-root ()
+  "Expanding a repository root excludes gitignored files."
+  (skip-unless (executable-find "git"))
+  (let ((dir (file-name-as-directory (make-temp-file "scalpel-test-repo-" t))))
+    (unwind-protect
+        (progn
+          (let ((default-directory dir)
+                (process-environment (scalpel-agent--git-environment)))
+            (call-process "git" nil nil nil "init" "-q"))
+          (with-temp-file (expand-file-name ".gitignore" dir)
+            (insert "*.log\n"))
+          (with-temp-file (expand-file-name "keep.el" dir)
+            (insert "(defun keep ())\n"))
+          (with-temp-file (expand-file-name "drop.log" dir)
+            (insert "noise\n"))
+          (let ((files (scalpel-agent--expanded-files
+                        (directory-file-name dir))))
+            (should (member (expand-file-name "keep.el" dir) files))
+            (should-not (member (expand-file-name "drop.log" dir) files))))
+      (delete-directory dir t))))
+
+(ert-deftest scalpel-agent-test-walk-all-files-skips-dot-git ()
+  "Walking skips `.git' whether it is a directory or a gitfile."
+  (let ((dir (make-temp-file "scalpel-test-walk-" t)))
+    (unwind-protect
+        (progn
+          (with-temp-file (expand-file-name "a.el" dir)
+            (insert "(defun a ())\n"))
+          (with-temp-file (expand-file-name ".git" dir)
+            (insert "gitdir: ../nowhere\n"))
+          (make-directory (expand-file-name "sub" dir))
+          (with-temp-file (expand-file-name "sub/b.el" dir)
+            (insert "(defun b ())\n"))
+          (should (equal (sort (mapcar #'file-name-nondirectory
+                                       (scalpel-agent--walk-all-files dir))
+                               #'string<)
+                         '("a.el" "b.el"))))
+      (delete-directory dir t))))
+
+(ert-deftest scalpel-agent-test-git-toplevel-nil-outside-repo ()
+  "A directory outside any repository has no git toplevel.
+Guards against the git subprocess inheriting the caller's
+`default-directory' or a leaked GIT_* environment."
+  (skip-unless (executable-find "git"))
+  (let ((dir (file-name-as-directory (make-temp-file "scalpel-test-norepo-" t))))
+    (unwind-protect
+        (should-not (scalpel-agent--git-toplevel (directory-file-name dir)))
       (delete-directory dir t))))
 
 (provide 'scalpel-agent-test)

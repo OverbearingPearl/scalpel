@@ -57,20 +57,24 @@ inside a repository."
    process-environment))
 
 (defun scalpel-agent--git-toplevel (dir)
-  "Return the absolute git working-tree root containing DIR, or nil."
+  "Return the absolute git working-tree root containing DIR, or nil.
+DIR may be the repository root itself, so containment must not be
+tested by path prefix: a directory is always inside the root that
+git reports for it."
   (let ((dir (file-name-as-directory (expand-file-name dir))))
     (with-temp-buffer
-      (let ((default-directory dir)
-            (process-environment (scalpel-agent--git-environment))
-            (status (condition-case nil
-                        (call-process "git" nil t nil
-                                      "rev-parse" "--show-toplevel")
-                      (error nil))))
+      ;; A plain `let' evaluates its value forms before installing the
+      ;; bindings, so `call-process' below would run with the caller's
+      ;; `default-directory' and unstripped environment.  `let*' binds
+      ;; sequentially, making DIR and the sanitized env actually apply.
+      (let* ((default-directory dir)
+             (process-environment (scalpel-agent--git-environment))
+             (status (condition-case nil
+                         (call-process "git" nil t nil
+                                       "rev-parse" "--show-toplevel")
+                       (error nil))))
         (when (and (numberp status) (= status 0) (> (buffer-size) 0))
-          (let ((top (file-name-as-directory (string-trim (buffer-string)))))
-            ;; Defensive: only accept TOP when DIR really is inside it.
-            (when (file-in-directory-p dir top)
-              top)))))))
+          (file-name-as-directory (string-trim (buffer-string))))))))
 
 (defun scalpel-agent--git-listed-files (dir)
   "Return files under DIR that git does not ignore.
@@ -89,14 +93,17 @@ Paths are absolute.  Return nil when DIR is not inside a git tree."
                     (split-string (buffer-string) "\0" t))))))))
 
 (defun scalpel-agent--walk-all-files (dir)
-  "Return every regular file at or below DIR, skipping `.git'."
+  "Return every regular file at or below DIR.
+`.git' is skipped whether it is a directory (plain clone) or a
+gitfile (worktree or submodule)."
   (let (out)
     (dolist (name (directory-files dir nil nil t))
       (let ((base (file-name-nondirectory (directory-file-name name))))
-        (unless (member base '("." ".."))
+        (unless (or (member base '("." ".."))
+                    (string= base ".git"))
           (let ((entry (expand-file-name base dir)))
             (cond
-             ((and (file-directory-p entry) (not (string= base ".git")))
+             ((file-directory-p entry)
               (setq out (nconc out (scalpel-agent--walk-all-files entry))))
              ((file-regular-p entry)
               (push entry out)))))))
@@ -178,12 +185,13 @@ it.  No-op with a message when nothing matched."
 
 (defun scalpel-agent--path-components (path)
   "Split PATH into tree components for the context tree.
-Absolute paths (starting with \"/\" or \"~\") yield a single
-component, so they render as flat leaves; other paths are split on
-\"/\" with empty components dropped."
-  (if (string-match-p "\\`[/~]" path)
-      (list path)
-    (split-string path "/" t)))
+Split on \"/\" with empty components dropped.  Absolute paths keep
+a root component: \"~\" for home-relative paths, \"/\" otherwise,
+so the tree still shows nesting below the root."
+  (let ((parts (split-string path "/" t)))
+    (if (string-prefix-p "/" path)
+        (cons "/" parts)
+      parts)))
 
 (defun scalpel-agent--context-entry-lessp (a b)
   "Return non-nil when context tree entry A should sort before B.
@@ -228,6 +236,31 @@ plus FLAGS.  Return the updated TREE."
         tree)
        (t tree)))))
 
+(defun scalpel-agent--context-tree-compact (tree)
+  "Collapse single-child directory chains in TREE into one node.
+A directory with exactly one child that is itself a directory is
+merged with it, joining names with \"/\".  This keeps shared path
+prefixes (e.g. an external tree's \"~/Projects/elisp/...\") from
+occupying one line per component."
+  (let ((entries
+         (mapcar
+          (lambda (entry)
+            (let ((node (cdr entry)))
+              (if (plist-get node :file)
+                  entry
+                (let ((children (scalpel-agent--context-tree-compact
+                                 (plist-get node :children))))
+                  (if (and (= (length children) 1)
+                           (not (plist-get (cdar children) :file)))
+                      (cons (if (string-suffix-p "/" (car entry))
+                                (concat (car entry) (caar children))
+                              (concat (car entry) "/" (caar children)))
+                            (cdr (car children)))
+                    (cons (car entry)
+                          (list :children children)))))))
+          tree)))
+    entries))
+
 (defun scalpel-agent--context-tree-render (tree prefix)
   "Return TREE rendered as box-drawing lines prefixed with PREFIX."
   (let* ((entries (sort (copy-sequence tree)
@@ -244,7 +277,7 @@ plus FLAGS.  Return the updated TREE."
        (cons (concat prefix connector name
                      (if (plist-get node :file)
                          (scalpel-agent--context-marker node)
-                       "/"))
+                       (if (string-suffix-p "/" name) "" "/")))
              (unless (plist-get node :file)
                (scalpel-agent--context-tree-render
                 (plist-get node :children)
@@ -296,44 +329,41 @@ no subprocess; each repository is queried once."
              append (scalpel-agent--git-ignored-in-repo
                      root (nreverse members)))))
 
-(defun scalpel-agent-context-summary (&optional root ignored-files)
+(defun scalpel-agent--context-tree-from-entries (entries)
+  "Render ENTRIES, an alist of (NAME . FLAGS), as a tree string.
+NAME is the display path and FLAGS the file-node plist."
+  (let ((tree nil))
+    (dolist (entry entries)
+      (setq tree (scalpel-agent--context-tree-insert
+                  tree
+                  (scalpel-agent--path-components (car entry))
+                  (cdr entry))))
+    (string-join
+     (scalpel-agent--context-tree-render
+      (scalpel-agent--context-tree-compact tree) "")
+     "\n")))
+
+(defun scalpel-agent-context-summary (&optional _root ignored-files)
   "Return the session context as a tree of files.
-ROOT, when non-nil, is the directory that in-repo paths are shown
-relative to; files outside it are shown as flat abbreviated
-absolute paths.  IGNORED-FILES lists absolute names that git
-ignores, marked \"(gitignored)\"; read-only entries are marked
-\"(read-only)\".  Return the string \"none\" when the context is
-empty."
-  (let* ((root (and root
-                    (file-name-as-directory (expand-file-name root))))
-         (display
-          (lambda (file)
-            (if (and root
-                     (string-prefix-p root (expand-file-name file)))
-                (file-relative-name file root)
-              (abbreviate-file-name file))))
-         (flags
-          (lambda (file readonly)
-            (list :readonly readonly
-                  :ignored (and (member (expand-file-name file) ignored-files)
-                                t))))
-         (entries
-          (append
-           (mapcar (lambda (file)
-                     (cons (funcall display file) (funcall flags file nil)))
-                   scalpel-agent--context-files)
-           (mapcar (lambda (file)
-                     (cons (funcall display file) (funcall flags file t)))
-                   scalpel-agent--context-readonly-files))))
-    (if (null entries)
-        "none"
-      (let ((tree nil))
-        (dolist (entry entries)
-          (setq tree (scalpel-agent--context-tree-insert
-                      tree
-                      (scalpel-agent--path-components (car entry))
-                      (cdr entry))))
-        (string-join (scalpel-agent--context-tree-render tree "") "\n")))))
+Paths are always rendered in full from the filesystem root, so
+files inside and outside the project share a single tree instead
+of being split into separate ones.  IGNORED-FILES lists absolute
+names that git ignores, marked \"(gitignored)\"; read-only entries
+are marked \"(read-only)\".  Return the string \"none\" when the
+context is empty."
+  (let ((entry (lambda (file readonly)
+                 (let ((file (expand-file-name file)))
+                   (cons file
+                         (list :readonly readonly
+                               :ignored (and (member file ignored-files) t)))))))
+    (let ((entries (append
+                    (mapcar (lambda (file) (funcall entry file nil))
+                            scalpel-agent--context-files)
+                    (mapcar (lambda (file) (funcall entry file t))
+                            scalpel-agent--context-readonly-files))))
+      (if (null entries)
+          "none"
+        (scalpel-agent--context-tree-from-entries entries)))))
 
 (defun scalpel-agent--readonly-block (file)
   "Return the LLM context block for read-only FILE."
