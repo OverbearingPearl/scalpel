@@ -18,7 +18,7 @@
 (require 'scalpel-locate)
 (require 'scalpel-execute)
 
-(defconst scalpel-agent--tool-vocabulary '("edit" "reply")
+(defconst scalpel-agent--tool-vocabulary '("edit" "reply" "create" "delete" "shell" "confirm")
   "Tool names the planner may emit.
 Structural contract, not user configuration: dispatch in
 `scalpel-agent-execute-action' must stay in sync with it.")
@@ -29,6 +29,18 @@ Structural contract, not user configuration: dispatch in
 Structural contract consumed by `scalpel-agent-plan'; it is not
 user configuration.")
 
+(defconst scalpel-agent--tool-fields
+  '(("edit" . (:tool :file :symbol :instruction))
+    ("reply" . (:tool :text))
+    ("create" . (:tool :file :symbol :instruction :after))
+    ("delete" . (:tool :file :symbol))
+    ("shell" . (:tool :command :reason))
+    ("confirm" . (:tool :text)))
+  "Per-tool field contracts.
+Each entry is (TOOL . FIELDS).  `scalpel-agent-plan' validates
+each parsed action against its tool's field list, so a missing or
+extra field fails loudly instead of silently degrading.")
+
 (defconst scalpel-agent--no-change-sentinel "NO_CHANGE"
   "Literal the LLM returns when the requested edit is unnecessary.
 Structural contract shared by the replacement prompt in
@@ -38,13 +50,17 @@ Structural contract shared by the replacement prompt in
   "You are a precise code transformation tool. The user gives you
 context and an instruction. Return ONLY a JSON array of actions.
 The top-level response must be a JSON array, never a single object.
-Each action is either {\"tool\":\"edit\",\"file\":\"/abs/path.el\",\"symbol\":\"name\",\"instruction\":\"...\"}
-or {\"tool\":\"reply\",\"text\":\"...\"}. Never emit code or diff text in this response.
+Each action is one of:
+{\"tool\":\"edit\",\"file\":\"/abs/path.el\",\"symbol\":\"name\",\"instruction\":\"...\"}
+{\"tool\":\"reply\",\"text\":\"...\"}
+{\"tool\":\"create\",\"file\":\"/abs/path.el\",\"symbol\":\"new-name\",\"instruction\":\"...\",\"after\":\"existing-symbol\"}
+{\"tool\":\"delete\",\"file\":\"/abs/path.el\",\"symbol\":\"name\"}
+Never emit code or diff text in this response.
 Files shown as \"FILE (READONLY)\" are references only: never emit an
-edit action for them."
+edit, create, or delete action for them."
   "System prompt for the Scalpel agent planner.
 This controls only the wording sent to the LLM; the action schema
-is fixed by `scalpel-agent--action-fields' and
+is fixed by `scalpel-agent--tool-fields' and
 `scalpel-agent--tool-vocabulary' and must not be overridden here."
   :type 'string
   :group 'scalpel)
@@ -53,6 +69,21 @@ is fixed by `scalpel-agent--action-fields' and
   "Maximum bytes of a read-only file included in the LLM context.
 Larger files are truncated with an explicit marker."
   :type 'integer
+  :group 'scalpel)
+
+(defcustom scalpel-agent-shell-max-bytes 20000
+  "Maximum bytes of shell command output included in the LLM context.
+Larger outputs are truncated with an explicit marker."
+  :type 'integer
+  :group 'scalpel)
+
+(defcustom scalpel-agent-confirm-tools '("shell")
+  "Tools that require user confirmation before execution.
+Each entry is a tool name string.  When the planner emits an action
+whose :tool is in this list, the user is prompted to confirm before
+the action is executed.  This is a safety gate for effectful tools
+that operate outside the boundary lock."
+  :type '(repeat string)
   :group 'scalpel)
 
 (defvar scalpel-agent--context-files nil
@@ -518,6 +549,19 @@ context is empty."
                    "```[a-zA-Z]*\n?\\|\n?```\\'" "" text))))
     text))
 
+(defun scalpel-agent--validate-action (action)
+  "Validate ACTION plist against its tool's field contract.
+Signal `user-error' when the tool is unknown or a required field
+is missing."
+  (let* ((tool (plist-get action :tool))
+         (fields (cdr (assoc tool scalpel-agent--tool-fields))))
+    (unless fields
+      (user-error "Scalpel: unknown action tool %S" tool))
+    (dolist (field fields)
+      (unless (plist-get action field)
+        (user-error "Scalpel: action %s missing required field %s" tool field)))
+    action))
+
 (defun scalpel-agent--parse-json (raw)
   "Parse RAW to a list of action plists.
 Signal `user-error' when RAW is not valid JSON or not a JSON array
@@ -537,7 +581,7 @@ of objects."
        (concat "Scalpel: planner returned unexpected structure "
                "(expected a JSON array of action objects): %S")
        raw))
-    parsed))
+    (mapcar #'scalpel-agent--validate-action parsed)))
 
 (defun scalpel-agent-plan (instruction)
   "Ask the LLM for a structured plan for INSTRUCTION.
@@ -548,8 +592,10 @@ Return a list of plists with keys :tool :file :symbol :instruction :text."
          (actions (scalpel-agent--parse-json raw)))
     (mapcar
      (lambda (item)
-       (cl-loop for key in scalpel-agent--action-fields
-                append (list key (plist-get item key))))
+       (let* ((tool (plist-get item :tool))
+              (fields (cdr (assoc tool scalpel-agent--tool-fields))))
+         (cl-loop for key in fields
+                  append (list key (plist-get item key)))))
      actions)))
 
 (defun scalpel-agent--apply-if-unchanged (file symbol expected-body new-text)
@@ -607,19 +653,143 @@ Return human-readable report string."
                    "Refusing to edit. Reply was: %S")
            symbol new-text)))))))
 
+(defun scalpel-agent-create (file symbol instruction after)
+  "Create SYMBOL in FILE per INSTRUCTION, inserted after AFTER.
+Return human-readable report string."
+  (unless (and file symbol instruction after)
+    (user-error "Scalpel: malformed create action"))
+  (when (scalpel-agent-readonly-p file)
+    (user-error "Scalpel: %s is a read-only context file" file))
+  (let ((anchor-range (scalpel-locate-range file after)))
+    (unless anchor-range
+      (user-error "Scalpel: can't locate anchor %s in %s" after file))
+    (with-current-buffer (find-file-noselect file)
+      (let* ((anchor-end (cdr anchor-range))
+             (anchor-body (buffer-substring-no-properties
+                           (car anchor-range) anchor-end))
+             (prompt (concat "Anchor signature: %s\n\n"
+                             "Instruction: %s\n\n"
+                             "Return only the full new definition to insert "
+                             "immediately after the anchor, as plain Emacs "
+                             "Lisp text. Do not include markdown fences or "
+                             "explanations."))
+             (new-text (string-trim (scalpel-llm-request
+                                     (format prompt
+                                             (save-excursion
+                                               (goto-char (car anchor-range))
+                                               (buffer-substring-no-properties
+                                                (car anchor-range)
+                                                (line-end-position)))
+                                             instruction)))))
+        (cond
+         ((string= new-text scalpel-agent--no-change-sentinel)
+          (format "No change needed: %s in %s" symbol
+                  (buffer-name (current-buffer))))
+         ((scalpel-locate-single-definition-p file new-text)
+          (scalpel-agent--apply-if-unchanged
+           file after anchor-body
+           (concat anchor-body "\n" new-text)))
+         (t
+          (user-error
+           (concat "Scalpel: planner returned no usable definition for %s. "
+                   "Refusing to create. Reply was: %S")
+           symbol new-text)))))))
+
+(defun scalpel-agent-delete (file symbol)
+  "Delete SYMBOL in FILE using boundary-locked apply.
+Return human-readable report string."
+  (unless (and file symbol)
+    (user-error "Scalpel: malformed delete action"))
+  (when (scalpel-agent-readonly-p file)
+    (user-error "Scalpel: %s is a read-only context file" file))
+  (let ((range (scalpel-locate-range file symbol)))
+    (unless range
+      (user-error "Scalpel: can't locate %s in %s" symbol file))
+    (with-current-buffer (find-file-noselect file)
+      (let* ((beg (car range))
+             (end (cdr range))
+             (body (buffer-substring-no-properties beg end)))
+        (scalpel-agent--apply-if-unchanged
+         file symbol body "")
+        (format "Deleted %s in %s" symbol
+                (buffer-name (current-buffer)))))))
+
+(defun scalpel-agent-shell (command reason)
+  "Run COMMAND in the console root and return its truncated output.
+REASON is the planner's stated intent, echoed in the report.
+Output is truncated to `scalpel-agent-shell-max-bytes' bytes."
+  (unless (and command reason)
+    (user-error "Scalpel: malformed shell action"))
+  (let* ((root (or (and (bound-and-true-p scalpel-console--root)
+                        scalpel-console--root)
+                   default-directory))
+         (max-bytes scalpel-agent-shell-max-bytes)
+         (output
+          (with-temp-buffer
+            (let ((default-directory root)
+                  (process-environment (scalpel-agent--git-environment)))
+              (let ((status (condition-case err
+                                (apply #'call-process
+                                       (split-string command " ")
+                                       nil t nil)
+                            (error (format "ERROR: %s" err)))))
+                (if (and (numberp status) (= status 0))
+                    (buffer-string)
+                  (format "EXIT %s\n%s" status (buffer-string)))))))
+         (truncated (> (length output) max-bytes))
+         (body (if truncated
+                   (concat (substring output 0 max-bytes)
+                           (format "\n[truncated at %d bytes]" max-bytes))
+                 output)))
+    (format "Shell: %s\nReason: %s\n%s" command reason body)))
+
+(defun scalpel-agent-confirm (text)
+  "Return TEXT as a confirmation request to the user.
+This action does not execute any side effects; it yields control
+back to the user, who must respond in the next console turn.
+The planner must emit this as its final action."
+  (unless text
+    (user-error "Scalpel: malformed confirm action"))
+  text)
+
 (defun scalpel-agent-execute-action (action)
   "Execute a single ACTION plist and return a report string."
   (let ((tool (plist-get action :tool)))
     (unless (member tool scalpel-agent--tool-vocabulary)
       (user-error "Scalpel: unknown action tool %S" tool))
+    (when (member tool scalpel-agent-confirm-tools)
+      (unless (yes-or-no-p (format "Execute %s action (%s)?"
+                                   tool (or (plist-get action :reason)
+                                            "no reason")))
+        (user-error "Scalpel: %s action cancelled by user" tool)))
     (pcase tool
       ("edit"
        (scalpel-agent-edit
         (plist-get action :file)
         (plist-get action :symbol)
         (plist-get action :instruction)))
+      ("create"
+       (scalpel-agent-create
+        (plist-get action :file)
+        (plist-get action :symbol)
+        (plist-get action :instruction)
+        (plist-get action :after)))
+      ("delete"
+       (scalpel-agent-delete
+        (plist-get action :file)
+        (plist-get action :symbol)))
+      ("shell"
+       (scalpel-agent-shell
+        (plist-get action :command)
+        (plist-get action :reason)))
+      ("confirm"
+       (scalpel-agent-confirm
+        (plist-get action :text)))
       ("reply"
-       (format "%s" (or (plist-get action :text) "")))
+       (let ((text (plist-get action :text)))
+         (unless text
+           (user-error "Scalpel: reply action missing :text"))
+         (format "%s" text)))
       (_
        (format "Unknown action: %S" tool)))))
 

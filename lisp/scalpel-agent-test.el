@@ -441,6 +441,18 @@ Guards against the git subprocess inheriting the caller's
                              :status)
                   'same)))))
 
+(ert-deftest scalpel-agent-test-plan-projects-fields-for-tool ()
+  "Plan projects only the fields declared for each tool.
+Regression: `let' bound `tool' before `fields' used it, so the
+field list was always nil and the projected action lost its keys."
+  (cl-letf (((symbol-function 'scalpel-llm-request)
+             (lambda (_prompt &optional _system)
+               "[{\"tool\":\"reply\",\"text\":\"hi\"}]")))
+    (let ((actions (scalpel-agent-plan "say hi")))
+      (should (= (length actions) 1))
+      (should (equal (plist-get (car actions) :tool) "reply"))
+      (should (equal (plist-get (car actions) :text) "hi")))))
+
 (provide 'scalpel-agent-test)
 
 ;;; scalpel-agent-test.el ends here

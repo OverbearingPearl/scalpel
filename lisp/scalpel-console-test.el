@@ -47,7 +47,8 @@ returned buffer when done."
             (with-current-buffer buf
               (goto-char (point-min))
               (should (search-forward "User: test instruction" nil t))
-              (should (search-forward "Scalpel: done" nil t))
+              (ert-info ((format "Console contents:\n%S" (buffer-string)))
+                (should (search-forward "Scalpel: done" nil t)))
               (should-not (search-forward "thinking" nil t)))))
       (when (buffer-live-p buf) (kill-buffer buf)))))
 
