@@ -92,13 +92,15 @@
     (should (string= (scalpel-agent-execute-action action) "Hello, world!"))))
 
 (ert-deftest scalpel-agent-test-execute-action-unknown ()
-  "Unknown action tool returns a descriptive message."
+  "Unknown action tool signals user-error."
   (let ((action (list :tool "unknown"
                       :file nil
                       :symbol nil
                       :instruction nil
                       :text nil)))
-    (should (string-match "Unknown action" (scalpel-agent-execute-action action)))))
+    (should-error
+     (scalpel-agent-execute-action action)
+     :type 'user-error)))
 
 (ert-deftest scalpel-agent-test-edit-malformed ()
   "Malformed edit action (missing fields) signals user-error."

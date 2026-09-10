@@ -18,17 +18,39 @@
 (require 'scalpel-locate)
 (require 'scalpel-execute)
 
+(defconst scalpel-agent--tool-vocabulary '("edit" "reply")
+  "Tool names the planner may emit.
+Structural contract, not user configuration: dispatch in
+`scalpel-agent-execute-action' must stay in sync with it.")
+
+(defconst scalpel-agent--action-fields
+  '(:tool :file :symbol :instruction :text)
+  "Fields carried through the action round-trip.
+Structural contract consumed by `scalpel-agent-plan'; it is not
+user configuration.")
+
+(defconst scalpel-agent--no-change-sentinel "NO_CHANGE"
+  "Literal the LLM returns when the requested edit is unnecessary.
+Structural contract shared by the replacement prompt in
+`scalpel-agent-edit' and its no-op check.")
+
+(defconst scalpel-agent--defining-forms
+  '(defun defmacro defvar defcustom defconst)
+  "Top-level forms accepted as a single complete replacement.
+Structural contract consumed by `scalpel-agent--single-definition-p'.")
+
 (defcustom scalpel-agent-system-prompt
-  (if (boundp 'scalpel-system-prompt)
-      scalpel-system-prompt
-    "You are a precise code transformation tool. The user gives you
+  "You are a precise code transformation tool. The user gives you
 context and an instruction. Return ONLY a JSON array of actions.
 The top-level response must be a JSON array, never a single object.
 Each action is either {\"tool\":\"edit\",\"file\":\"/abs/path.el\",\"symbol\":\"name\",\"instruction\":\"...\"}
 or {\"tool\":\"reply\",\"text\":\"...\"}. Never emit code or diff text in this response.
 Files shown as \"FILE (READONLY)\" are references only: never emit an
-edit action for them.")
-  "System prompt for the Scalpel agent planner."
+edit action for them."
+  "System prompt for the Scalpel agent planner.
+This controls only the wording sent to the LLM; the action schema
+is fixed by `scalpel-agent--action-fields' and
+`scalpel-agent--tool-vocabulary' and must not be overridden here."
   :type 'string
   :group 'scalpel)
 
@@ -531,11 +553,8 @@ Return a list of plists with keys :tool :file :symbol :instruction :text."
          (actions (scalpel-agent--parse-json raw)))
     (mapcar
      (lambda (item)
-       (list :tool (plist-get item :tool)
-             :file (plist-get item :file)
-             :symbol (plist-get item :symbol)
-             :instruction (plist-get item :instruction)
-             :text (plist-get item :text)))
+       (cl-loop for key in scalpel-agent--action-fields
+                append (list key (plist-get item key))))
      actions)))
 
 (defun scalpel-agent--apply-if-unchanged (file symbol expected-body new-text)
@@ -561,8 +580,7 @@ region was modified while an LLM request was in flight."
              (form (car parsed))
              (end (cdr parsed)))
         (and (listp form)
-             (memq (car form)
-                   '(defun defmacro defvar defcustom defconst))
+             (memq (car form) scalpel-agent--defining-forms)
              (= end (length text))))
     (error nil)))
 
@@ -593,7 +611,7 @@ Return human-readable report string."
              (new-text (string-trim (scalpel-llm-request
                                      (format prompt signature body instruction)))))
         (cond
-         ((string= new-text "NO_CHANGE")
+         ((string= new-text scalpel-agent--no-change-sentinel)
           (format "No change needed: %s in %s" symbol
                   (buffer-name (current-buffer))))
          ((scalpel-agent--single-definition-p new-text)
@@ -608,6 +626,8 @@ Return human-readable report string."
 (defun scalpel-agent-execute-action (action)
   "Execute a single ACTION plist and return a report string."
   (let ((tool (plist-get action :tool)))
+    (unless (member tool scalpel-agent--tool-vocabulary)
+      (user-error "Scalpel: unknown action tool %S" tool))
     (pcase tool
       ("edit"
        (scalpel-agent-edit
