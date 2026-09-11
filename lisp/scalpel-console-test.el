@@ -153,6 +153,9 @@ returned buffer when done."
               (with-current-buffer buf
                 (scalpel-console-add-file))
               (with-current-buffer buf
+                ;; `scalpel-console--append' leaves point at point-max;
+                ;; pin the search start instead of relying on it.
+                (goto-char (point-min))
                 (should (search-forward "Context:" nil t))
                 (should (search-forward (file-name-nondirectory this-file)
                                         nil t))))
@@ -248,6 +251,23 @@ directory."
                                  (get-text-property pos 'face)))
                 (should (eq (get-text-property pos 'face)
                             'scalpel-console-context-unchanged-face))))))
+      (when (buffer-live-p buf) (kill-buffer buf)))))
+
+(ert-deftest scalpel-console-test-reset-context-leaves-point-at-max ()
+  "Context commands leave point at the buffer end, not on the context block.
+Regression: `scalpel-console--append' restored point via
+`save-excursion', so after a refresh the cursor sat just before the
+newly inserted Context block."
+  (let ((scalpel-agent--context-files '("/tmp/scalpel-reset-cursor.el"))
+        (scalpel-agent--context-readonly-files nil)
+        (buf (scalpel-console-test--new-console-buffer)))
+    (unwind-protect
+        (with-current-buffer buf
+          (setq scalpel-console--context-baseline 'none-yet)
+          (scalpel-console-reset-context)
+          (ert-info ((format "Point %d of %d; buffer:\n%S"
+                             (point) (point-max) (buffer-string)))
+            (should (= (point) (point-max)))))
       (when (buffer-live-p buf) (kill-buffer buf)))))
 
 (provide 'scalpel-console-test)

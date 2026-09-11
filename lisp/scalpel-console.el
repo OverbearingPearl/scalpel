@@ -143,13 +143,16 @@ also anchors the buffer to a root directory."
   (setq buffer-read-only nil))
 
 (defun scalpel-console--append (text)
-  "Append TEXT to the end of the console buffer."
+  "Append TEXT to the end of the console buffer.
+Point moves to the new end, so the user always sees the latest
+output after a context refresh or reply."
   (let ((buf (scalpel-console--target-buffer)))
     (with-current-buffer buf
       (let ((inhibit-read-only t))
         (save-excursion
           (goto-char (point-max))
-          (insert (format "%s\n\n" text)))))))
+          (insert (format "%s\n\n" text))))
+      (goto-char (point-max)))))
 
 (defun scalpel-console--render-diff (lines)
   "Return LINES as text with per-name change highlighting.
