@@ -15,6 +15,18 @@
 ;; generates text; deterministic locators resolve exact byte ranges, and edits
 ;; are applied only inside that resolved boundary.
 ;;
+;; The design rests on four linked commitments.  First, an edit must be exact: a
+;; wrong or over-broad change is a defect, not an artefact for the user to
+;; review.  Second, because the boundary lock makes exactness structural rather
+;; than best-effort, applying an edit does not stop for a per-edit confirmation:
+;; confirming every hunk would tax every correct edit to guard against a failure
+;; the locator already prevents.  Third, an edit that needed no approval must
+;; leave a trace: every modification is reported as it lands and the session can
+;; be diffed as a whole, so the agent's work is legible after the fact instead
+;; of gated before it.  Fourth, visibility alone takes nothing back, so session
+;; recording and one-shot rollback are part of the contract rather than optional
+;; polish: what shows the change is what undoes it.
+;;
 ;; Planning and file edits need only Emacs and gptel, so they work on every
 ;; platform Emacs supports.  Shell actions additionally need a command
 ;; sandbox: `bubblewrap' on Linux, or the deprecated `sandbox-exec' on macOS

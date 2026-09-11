@@ -11,6 +11,16 @@
 ;; press RET to send it to the agent.  S-RET inserts a newline, so an
 ;; instruction may span several lines and is still sent as one message.  The
 ;; buffer is a normal editable text buffer, so users can review prior turns.
+;;
+;; The console is also where the accompanying policy lives: edits take effect as
+;; the plan is dispatched, with no per-hunk approval, and the only shell prompt
+;; is for a command the planner flagged long-running -- that one asks because
+;; Emacs is frozen until the command returns.  A round whose shell output is
+;; small flows straight back to the planner; only a noisy round stops to ask.
+;;
+;; Because nothing is approved beforehand, the buffer is also the record: every
+;; edit report and shell report stays in it, so a session can be read back, and
+;; later diffed, after the fact.
 
 ;;; Code:
 

@@ -8,8 +8,10 @@
 
 ;;; Commentary:
 
-;; Executes shell commands through bubblewrap.  The sandbox policy is rebuilt
-;; for every invocation from the current context file lists.
+;; Executes shell commands through an OS sandbox: `bubblewrap' on Linux, the
+;; deprecated `sandbox-exec' on macOS (experimental).  The policy is rebuilt for
+;; every invocation from the current context file lists, and a command is
+;; refused rather than run outside the sandbox when no backend works.
 
 ;;; Code:
 

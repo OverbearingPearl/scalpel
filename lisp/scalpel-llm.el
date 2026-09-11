@@ -8,7 +8,11 @@
 
 ;;; Commentary:
 
-;; Scalpel LLM gateway implementation notes.
+;; Synchronous bridge to gptel.  A request streams through a callback that
+;; accumulates content, collects reasoning chunks, and feeds token counters to
+;; the console status line; a request with no callback activity for
+;; `scalpel-llm-timeout' seconds is abandoned by invalidating its callback, so a
+;; late response cannot corrupt the next request.
 
 ;;; Code:
 

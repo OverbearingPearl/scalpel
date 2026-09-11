@@ -25,6 +25,37 @@ they often edit code you did not ask to touch.
 Scalpel exists at the intersection: a full coding agent, **inside Emacs**, with
 a strict boundary lock that makes unwanted edits almost impossible.
 
+### The design trade
+
+Scalpel is built around one chain of reasoning:
+
+1. **An edit must be exact.** A change that lands on the wrong code, or that
+   spills outside the intended block, is a defect -- not something a reviewer is
+   expected to catch afterwards.  Exactness is the product, not a bonus.
+2. **So application does not ask permission.** The locator resolves each target
+   to a verified byte range, which makes applying a change a mechanical act.
+   Stopping to confirm every hunk -- the diff-by-diff approval loop -- would tax
+   every correct edit to guard against a failure the boundary lock already
+   prevents.  Scalpel applies edits as it plans them.
+3. **So the result must be visible.** A change made without asking must not
+   vanish quietly into the tree; it has to be readable afterwards.  Each
+   modification is reported as it lands, and the session can be diffed as a
+   whole, so the agent's work is legible after the fact instead of gated before
+   it.
+4. **So rollback must exist.** Visibility tells you what went wrong; it does not
+   take it back.  The same record that shows the change is what undoes it:
+   session recording and one-shot rollback are load-bearing, not polish, and
+   they are what buy the speed in (2).
+
+Read in reverse, the chain is the whole safety argument.  Because a session can
+be taken back, its changes can be reported rather than approved; because the
+report is enough to decide, application can run at full speed; and because every
+edit lands on a resolved byte range, all of it can rest on exactness.
+
+The single exception is a shell command the planner flagged `long-running`.  It
+asks first because it freezes Emacs until it returns: a cost the user has to
+agree to before it is paid, not after.
+
 **Key differences from Aider and newer coding agents (Claude Code, OpenCode, etc.)**
 
 - **Interaction and ecosystem**: Scalpel is not a standalone CLI; it lives inside
@@ -36,15 +67,19 @@ a strict boundary lock that makes unwanted edits almost impossible.
   *what* to change.
 - **No scope creep**: Newer agents often change files you did not ask to touch.
   Scalpel's boundary lock makes that impossible -- replacements land only on the
-  confirmed byte range.
-- **Auditable sessions**: Every modification is recorded as a trackable session on
-  `scalpel/autosave`, with one-shot rollback -- no hunting through scattered diffs.
+  byte range the locator resolved.
+- **Visible, then reversible**: Every modification is reported as it lands, and
+  the whole session can be diffed afterwards and reverted in one shot -- no
+  hunting through scattered diffs.  These are the visibility and recovery halves
+  of the design trade above, and they land with `scalpel-lineage`; see Status &
+  Roadmap.
 - **Surgical precision, not bulk replace**: Multi-file refactoring is supported,
-  but each step can be confirmed before it is applied; Scalpel never silently edits
-  the whole repo.
+  but every replacement lands on its own resolved range, so a wide change is
+  still a sum of exact ones.
 
 The user story is simple: **you talk to a coding assistant from inside Emacs,
-but every actual edit is a controlled act.**
+every actual edit lands on an exact, verified range, and whatever a session
+touched can be read back and unwound.**
 
 ---
 
@@ -64,11 +99,24 @@ but every actual edit is a controlled act.**
 
 4. **The console is the agent**  
    User interactions happen in a dedicated `*scalpel*` buffer. The LLM returns
-   structured actions, not raw diffs, so users can review and abort.
+   structured actions, not raw diffs, so the buffer is a readable log of what was
+   done and why.
 
-5. **Every change is an auditable transaction**  
-   Each accepted modification is recorded on an orphan Git branch
-   (`scalpel/autosave`). A session can be reverted as a unit.
+5. **Every change is visible, then reversible**  
+   Each accepted modification is reported as it lands, and the session can be
+   diffed as a whole, so what the agent did is legible before it is undoable.
+   Visibility comes first because recovery depends on it: you cannot decide to
+   roll back a change you cannot see.  The same record is what rolls back --
+   modifications are committed to an orphan Git branch (`scalpel/autosave`), and
+   a session reverts as a unit.
+
+6. **Application is unconfirmed, recovery is not**  
+   Because the boundary lock makes a replacement exact, applying it does not
+   stop for approval: the diff-by-diff confirmation loop would tax every correct
+   edit to guard against a failure that resolution already prevents.  The safety
+   net sits on the other side instead -- what principle 5 makes visible is what
+   makes this acceptable.  A shell command flagged `long-running` is the
+   exception: it asks first, because it freezes Emacs until it returns.
 
 ---
 
@@ -108,7 +156,7 @@ but every actual edit is a controlled act.**
                                  ▼                  ▼
           ╭──────────────────────────────╮  ╭──────────────────────────────╮
           │    edited Emacs buffer       │  │       scalpel-lineage        │
-          │    (nothing else changes)    │  │    session audit trail       │
+          │    (nothing else changes)    │  │  session diff and rollback   │
           ╰──────────────────────────────╯  ╰──────────────┬───────────────╯
                                                            │ git commit
                                                            ▼
@@ -125,7 +173,7 @@ Components live in focused modules:
 - `scalpel-locate-elisp` – built-in structural locator provider for Emacs Lisp
 - `scalpel-execute` – boundary-locked edit application
 - `scalpel-sandbox` – command sandbox for shell actions (`bubblewrap` on Linux, `sandbox-exec` on macOS)
-- `scalpel-lineage` – session tracking and Git-backed rollback
+- `scalpel-lineage` – session diff, tracking, and Git-backed rollback
 
 Every additional language arrives as a `scalpel-locate-<lang>.el` provider
 module, registered through `scalpel-locate-register-provider`. Planned
@@ -146,20 +194,25 @@ Scalpel is a **conversational editor**, not a one-shot command.
    change parse-config to return nil if the config file is missing
    ```
 
-4. Scalpel inspects the open buffers, asks the LLM for a structured plan, and
-   presents something like:
+4. Scalpel asks the LLM for a structured plan, resolves each target through the
+   locator, and applies the change **only to the resolved range**, reporting each
+   edit in the console:
 
    ```
-   [1/2] edit  config/parser.el  symbol=parse-config
-   [2/2] edit  server/start.el    symbol=init-server
+   Edited parse-config in parser.el
+   Edited init-server in start.el
    ```
 
-5. Confirm (or edit) the plan. Scalpel then resolves each symbol with the
-   locator, generates replacement text, and applies it **only to the resolved
-   range**. Each edit is reported in the console.
+5. Nothing stops for approval along the way, because the stream of edit reports
+   is the trace that replaces it: you read what happened rather than authorize it
+   beforehand. Exactness comes from step 4 being byte-range pinned, not from a
+   review loop, and a shell command flagged `long-running` is the only action
+   that asks first, because it freezes Emacs until it returns.
 
-6. If a change looks wrong, abort it with `C-g` or revert the whole session
-   with `M-x scalpel-revert-session`.
+6. If a change is wrong, the session is there to inspect and undo: review the
+   recorded edits as a diff, then `M-x scalpel-revert-session` takes the session
+   back as one unit. `C-g` stops a request in flight. This is the reason step 5
+   can move without asking.
 
 Anonymous targets such as "the second if branch" are handled by first moving
 the Emacs point to that block; point is the strongest coordinate Scalpel knows.
@@ -299,8 +352,11 @@ Inside the console:
   sandbox is unavailable, or its probe fails, shell actions fail closed
   instead of falling back to an unsandboxed shell.
 - For local models (Ollama, llama.cpp), no source leaves your machine.
-- Every accepted edit is committed to the orphan branch `scalpel/autosave`; the
-  current Git working tree stays clean until you decide to commit.
+- Every change is reviewable before it is recoverable: each modification is
+  reported in the console as it lands and stays in the buffer, and a session can
+  be diffed as a whole.  Recovery then runs through the orphan branch
+  `scalpel/autosave`: the current Git working tree stays clean until you decide
+  to commit.  This ships with `scalpel-lineage`; see Status & Roadmap.
 
 ---
 
@@ -309,16 +365,25 @@ Inside the console:
 Scalpel is in active, deliberately small MVP stages.
 
 **Currently implemented**
-- Emacs Lisp structural location
-- Console UI skeleton
-- Linux shell execution through `bubblewrap`, plus an experimental macOS
+- Emacs Lisp structural location, plus the provider dispatch API
+  (`scalpel-locate` and `scalpel-locate-elisp`)
+- The console and the multi-round agent loop: context management, shell-output
+  continuation, and conversation replay
+- Structured action planning and parsing (`edit`, `create`, `delete`, `shell`,
+  `reply`, `confirm`), each action returning a human-readable report that stays
+  in the console buffer, so a session's changes are readable after the fact
+- Execution boundary lock: a replacement lands only on the range the locator
+  resolved, and an unbalanced replacement is refused
+- Shell execution through `bubblewrap` on Linux, plus an experimental macOS
   backend through `sandbox-exec`; shell actions are refused when the sandbox is
   unavailable or fails its probe
 
 **Near-term**
-- Deterministic locator API with LSP integration
-- Structured action planner
-- Execution boundary lock and `scalpel/autosave`
+- Session diff and one-shot rollback: review everything a session changed as a
+  single diff, then revert it as one unit -- `scalpel-lineage`, the
+  `scalpel/autosave` orphan branch, `M-x scalpel-history`, and
+  `M-x scalpel-revert-session`
+- LSP-backed locator providers, registered through the existing dispatch API
 
 **Later**
 - Rust / TS / Go LSP-first workflows

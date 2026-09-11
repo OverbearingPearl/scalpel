@@ -8,6 +8,14 @@
 
 ;;; Commentary:
 ;; Applies an edit only within the verified bounds, never beyond.
+;;
+;; This module is what makes unconfirmed application defensible: the replacement
+;; lands on a range the locator verified and nowhere else, so no per-hunk
+;; approval is asked for.  What is not asked for must be visible instead, so the
+;; caller reports every replacement it makes as it lands, and a session's
+;; changes stay readable for review and for rollback.  A structurally unbalanced
+;; replacement is refused outright rather than applied for the user to notice
+;; afterwards.
 
 ;;; Code:
 

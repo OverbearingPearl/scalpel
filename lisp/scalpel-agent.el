@@ -8,6 +8,14 @@
 
 ;;; Commentary:
 ;; Provides context, structured-plan parsing, and action dispatch.
+;;
+;; Dispatch applies each action as it is parsed: edits are not queued for
+;; approval, since `scalpel-execute' pins each replacement to a verified range.
+;; Every action returns a human-readable report instead, which is the trace the
+;; console keeps -- applying without asking is only defensible because the
+;; result is reported.  The only prompt this module raises is for a long-running
+;; shell command, whose cost is the frozen editor the user cannot work in while
+;; it runs.
 
 ;;; Code:
 
