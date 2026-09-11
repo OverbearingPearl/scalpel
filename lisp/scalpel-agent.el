@@ -34,7 +34,7 @@ user configuration.")
     ("reply" . (:tool :text))
     ("create" . (:tool :file :symbol :instruction :after))
     ("delete" . (:tool :file :symbol))
-    ("shell" . (:tool :command :reason))
+    ("shell" . (:tool :command :reason :read-only :long-running))
     ("confirm" . (:tool :text)))
   "Per-tool field contracts.
 Each entry is (TOOL . FIELDS).  `scalpel-agent-plan' validates
@@ -60,14 +60,27 @@ Each action is one of:
 {\"tool\":\"reply\",\"text\":\"...\"}
 {\"tool\":\"create\",\"file\":\"/abs/path.el\",\"symbol\":\"new-name\",\"instruction\":\"...\",\"after\":\"existing-symbol\"}
 {\"tool\":\"delete\",\"file\":\"/abs/path.el\",\"symbol\":\"name\"}
-{\"tool\":\"shell\",\"command\":\"...\",\"reason\":\"...\"}
+{\"tool\":\"shell\",\"command\":\"...\",\"reason\":\"...\",\"read-only\":false,\"long-running\":false}
 {\"tool\":\"confirm\",\"text\":\"...\"}
 To have a command executed, emit a shell action object:
-{\"tool\":\"shell\",\"command\":\"...\",\"reason\":\"...\"}.  The command is
-run by a shell only after you return the JSON, so pipes,
-redirection and quoting work; \"reason\" states why it is run.
-A command that should run must be a shell action object; never put
-a command in a reply's \"text\" and never write it as prose.
+{\"tool\":\"shell\",\"command\":\"...\",\"reason\":\"...\",\"read-only\":false,\"long-running\":false}.
+The command is run by a shell only after you return the JSON, so
+pipes, redirection and quoting work; \"reason\" states why it is
+run.  A command that should run must be a shell action object;
+never put a command in a reply's \"text\" and never write it as
+prose.
+\"read-only\" is true only for a command that observes and never
+changes state: reads such as grep, cat, ls, git status and git
+diff.  Set it false for anything that redirects output, that runs
+rm, mv, cp, chmod, touch, git commit or git checkout, or that
+otherwise leaves files different from how it found them.
+\"long-running\" is true for any command that may outlast a few
+seconds: a test suite, a build, a formatter, a download.
+Both fields are required on every shell action.  A shell action
+with \"read-only\" true and \"long-running\" false runs without a
+confirmation prompt; every other shell action asks the user
+first.  Declare both truthfully: claiming \"read-only\" for a
+command that changes state defeats the gate the user relies on.
 Never invent commands the user did not ask for, and never use shell
 to change files: all file changes go through edit, create and
 delete.
@@ -116,7 +129,12 @@ Larger outputs are truncated with an explicit marker."
 Each entry is a tool name string.  When the planner emits an action
 whose :tool is in this list, the user is prompted to confirm before
 the action is executed.  This is a safety gate for effectful tools
-that operate outside the boundary lock."
+that operate outside the boundary lock.
+A shell action that the planner flagged as read-only and not
+long-running skips the prompt: the two fields on the action decide
+whether a given command needs an answer.  Removing \"shell\" from
+this list disables the gate for every shell action, including the
+ones that write."
   :type '(repeat string)
   :group 'scalpel)
 
@@ -831,6 +849,10 @@ byte is display junk."
 
 (defun scalpel-agent-shell (command reason)
   "Run COMMAND through a shell in the console root.
+The command's reach is bounded only by the working directory it
+runs in and by the confirmation gate driven by
+`scalpel-agent-confirm-tools'; the planner is asked to stay inside
+the context files, but that is guidance, not a check.
 COMMAND may use pipes, redirection and quoting.  The report names
 the command, always states the exit status, and wraps the output in
 explicit markers, so a reader (human or LLM) can tell which command
@@ -874,6 +896,21 @@ The planner must emit this as its final action."
     (user-error "Scalpel: malformed confirm action"))
   text)
 
+(defun scalpel-agent--confirm-needed-p (action)
+  "Return non-nil when ACTION must be confirmed before execution.
+Tools in `scalpel-agent-confirm-tools' are confirmed, except a
+shell action the planner flagged as read-only and not
+long-running: that is the unattended case the flags exist for.
+JSON booleans arrive as t and :false; only t counts as
+true, so a missing or false flag still asks.  The flags gate the
+prompt only: they never relax the working directory or the
+environment the command runs in."
+  (let ((tool (plist-get action :tool)))
+    (and (member tool scalpel-agent-confirm-tools)
+         (not (and (equal tool "shell")
+                   (eq (plist-get action :read-only) t)
+                   (not (eq (plist-get action :long-running) t)))))))
+
 (defun scalpel-agent--action-summary (action)
   "Return a one-line description of ACTION for the confirmation prompt.
 Prefer the action's target over its stated reason, so the user can
@@ -893,7 +930,7 @@ the action has no target."
   (let ((tool (plist-get action :tool)))
     (unless (member tool scalpel-agent--tool-vocabulary)
       (user-error "Scalpel: unknown action tool %S" tool))
-    (when (member tool scalpel-agent-confirm-tools)
+    (when (scalpel-agent--confirm-needed-p action)
       (unless (yes-or-no-p (format "Execute %s action: %s?"
                                    tool
                                    (scalpel-agent--action-summary action)))

@@ -452,7 +452,7 @@ it asked for, so \"run the tests\" could not lead to a fix."
                      (lambda (prompt &optional _system)
                        (push prompt prompts)
                        (if (= (length prompts) 1)
-                           "[{\"tool\":\"shell\",\"command\":\"echo hello\",\"reason\":\"check the loop\"}]"
+                           "[{\"tool\":\"shell\",\"command\":\"echo hello\",\"reason\":\"check the loop\",\"read-only\":true,\"long-running\":false}]"
                          "[{\"tool\":\"reply\",\"text\":\"done\"}]"))))
             (with-current-buffer buf
               (erase-buffer)
@@ -486,7 +486,7 @@ the same command over and over."
                      (lambda (prompt &optional _system)
                        (push prompt prompts)
                        (if (= (length prompts) 1)
-                           "[{\"tool\":\"shell\",\"command\":\"echo hello\",\"reason\":\"check\"}]"
+                           "[{\"tool\":\"shell\",\"command\":\"echo hello\",\"reason\":\"check\",\"read-only\":true,\"long-running\":false}]"
                          "[{\"tool\":\"reply\",\"text\":\"done\"}]"))))
             (with-current-buffer buf
               (erase-buffer)
@@ -594,7 +594,7 @@ away, and the console then stopped without saying why."
           (cl-letf (((symbol-function 'scalpel-llm-request)
                      (lambda (&rest _)
                        (setq requests (1+ requests))
-                       "[{\"tool\":\"shell\",\"command\":\"echo hi\",\"reason\":\"check\"}]"))
+                       "[{\"tool\":\"shell\",\"command\":\"echo hi\",\"reason\":\"check\",\"read-only\":true,\"long-running\":false}]"))
                     ((symbol-function 'yes-or-no-p)
                      (lambda (&rest _) (setq asked (1+ asked)) t))
                     ((symbol-function 'message)

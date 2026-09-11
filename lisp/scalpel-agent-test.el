@@ -52,7 +52,7 @@ as invalid JSON."
          (scalpel-agent--parse-json
           (concat "I'll start by gathering the definitions.\n\n"
                   "```json\n"
-                  "[{\"tool\":\"shell\",\"command\":\"ls\",\"reason\":\"look\"}]\n"
+                  "[{\"tool\":\"shell\",\"command\":\"ls\",\"reason\":\"look\",\"read-only\":true,\"long-running\":false}]\n"
                   "```\n"))))
     (ert-info ((format "Actions:\n%S" actions))
       (should (= (length actions) 1))
@@ -538,6 +538,38 @@ was confirmed without ever being displayed."
   (should (string= (scalpel-agent--action-summary
                     '(:tool "confirm" :reason "need input"))
                    "need input")))
+
+(ert-deftest scalpel-agent-test-shell-confirm-gated-by-flags ()
+  "A read-only, quick shell action runs unattended; others ask.
+Regression: shell confirmation was plain list membership, so
+every read-only command needed a prompt."
+  (let ((scalpel-agent-confirm-tools '("shell"))
+        (asked 0)
+        (ran 0))
+    (cl-letf (((symbol-function 'yes-or-no-p)
+               (lambda (&rest _) (setq asked (1+ asked)) t))
+              ((symbol-function 'scalpel-agent-shell)
+               (lambda (&rest _) (setq ran (1+ ran)) "report")))
+      ;; JSON booleans reach this code as `t' and `:false', so the
+      ;; test uses those symbols rather than nil to keep the
+      ;; `(eq ... t)' check honest.
+      (let ((readonly '(:tool "shell" :command "ls" :reason "look"
+                              :read-only t :long-running :false))
+            (writable '(:tool "shell" :command "rm -rf build"
+                              :reason "clean"
+                              :read-only :false :long-running :false))
+            (long '(:tool "shell" :command "make test" :reason "run"
+                          :read-only t :long-running t)))
+        (should (string= (scalpel-agent-execute-action readonly) "report"))
+        (ert-info ((format "asked=%d after a read-only action" asked))
+          (should (= asked 0)))
+        (should (string= (scalpel-agent-execute-action writable) "report"))
+        (ert-info ((format "asked=%d after a writing action" asked))
+          (should (= asked 1)))
+        (should (string= (scalpel-agent-execute-action long) "report"))
+        (ert-info ((format "asked=%d after a long action" asked))
+          (should (= asked 2)))
+        (should (= ran 3))))))
 
 (ert-deftest scalpel-agent-test-shell-report-is-delimited ()
   "Shell reports name the command, state the exit status, and end.
