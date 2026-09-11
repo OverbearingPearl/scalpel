@@ -47,9 +47,13 @@ Structural contract shared by the replacement prompt in
 `scalpel-agent-edit' and its no-op check.")
 
 (defcustom scalpel-agent-system-prompt
-  "You are a precise code transformation tool. The user gives you
+  "You are a precise code transformation planner. The user gives you
 context, the conversation so far, and an instruction. Return ONLY
 a JSON array of actions.
+Every action you take is encoded as one JSON object in that array.
+There is no other calling convention: nothing you write is executed
+directly, and only this array is parsed. Do not narrate before or
+after it.
 The top-level response must be a JSON array, never a single object.
 Each action is one of:
 {\"tool\":\"edit\",\"file\":\"/abs/path.el\",\"symbol\":\"name\",\"instruction\":\"...\"}
@@ -58,13 +62,15 @@ Each action is one of:
 {\"tool\":\"delete\",\"file\":\"/abs/path.el\",\"symbol\":\"name\"}
 {\"tool\":\"shell\",\"command\":\"...\",\"reason\":\"...\"}
 {\"tool\":\"confirm\",\"text\":\"...\"}
-Use shell whenever the user asks you to run something: tests,
-builds, linters, git.  \"command\" is run by a shell, so pipes,
-redirection and quoting work; \"reason\" is required and states
-why the command is run.  Never answer with a reply that merely
-describes a command instead of running it.  Never invent commands
-the user did not ask for, and never use shell to change files:
-all file changes go through edit, create and delete.
+To have a command executed, emit a shell action object:
+{\"tool\":\"shell\",\"command\":\"...\",\"reason\":\"...\"}.  The command is
+run by a shell only after you return the JSON, so pipes,
+redirection and quoting work; \"reason\" states why it is run.
+A command that should run must be a shell action object; never put
+a command in a reply's \"text\" and never write it as prose.
+Never invent commands the user did not ask for, and never use shell
+to change files: all file changes go through edit, create and
+delete.
 If the conversation already contains the output of a shell command
 you were asked to run, read that output and respond with the
 conclusion instead of running the same command again.  A continued
@@ -583,6 +589,30 @@ is missing."
         (user-error "Scalpel: action %s missing required field %s" tool field)))
     action))
 
+(defun scalpel-agent--visible-raw (raw)
+  "Return RAW with newlines, control bytes and non-ASCII characters escaped.
+`prin1' alone hides control bytes (`print-escape-control-characters'
+defaults to nil) and prints non-ASCII literally (`print-escape-nonascii'
+defaults to nil), so a reply that failed to parse is indistinguishable
+by eye from one that did."
+  (let ((print-escape-newlines t)
+        (print-escape-control-characters t)
+        (print-escape-nonascii t)
+        (print-escape-multibyte t))
+    (prin1-to-string raw)))
+
+(defun scalpel-agent--parse-error (raw)
+  "Signal the `user-error' describing why RAW failed to parse.
+Distinguishes a planner reply that used tool-call syntax from one
+that was simply not valid JSON.  RAW is the reply as received."
+  (if (string-match-p "<\\(?:invoke\\|tool_calls\\|function_calls\\)\\b" raw)
+      (user-error
+       (concat "Scalpel: planner used tool-call syntax instead of the JSON "
+               "action array; nothing was executed.  Reply was: %s")
+       (scalpel-agent--visible-raw raw))
+    (user-error "Scalpel: planner returned invalid JSON: %s"
+                (scalpel-agent--visible-raw raw))))
+
 (defun scalpel-agent--parse-json (raw)
   "Parse RAW to a list of action plists.
 Signal `user-error' when RAW is not valid JSON or not a JSON array
@@ -591,17 +621,15 @@ of objects."
                     (json-parse-string (scalpel-agent--strip-fences raw)
                                        :object-type 'plist
                                        :array-type 'list)
-                  (error
-                   (user-error "Scalpel: planner returned invalid JSON: %S"
-                               raw)))))
+                  (error (scalpel-agent--parse-error raw)))))
     (when (and (plistp parsed) (plist-get parsed :tool))
       (setq parsed (list parsed)))
     (unless (and (listp parsed)
                  (cl-every (lambda (item) (plist-get item :tool)) parsed))
       (user-error
        (concat "Scalpel: planner returned unexpected structure "
-               "(expected a JSON array of action objects): %S")
-       raw))
+               "(expected a JSON array of action objects): %s")
+       (scalpel-agent--visible-raw raw)))
     (mapcar #'scalpel-agent--validate-action parsed)))
 
 (defun scalpel-agent--prompt (instruction history)

@@ -130,6 +130,22 @@
     (should (= (length actions) 1))
     (should (equal (plist-get (car actions) :text) "hi"))))
 
+(ert-deftest scalpel-agent-test-parse-json-rejects-tool-call-syntax ()
+  "A planner reply that encoded its action as an XML tool call is refused.
+Regression: the shell action arrived as an <invoke> block, and the
+error reported a bare JSON failure without naming the cause."
+  (let ((raw (concat "I'll look around.\n\n"
+                     "<invoke name=\"shell\">\n"
+                     "<parameter name=\"command\">ls</parameter>\n"
+                     "</invoke>")))
+    (let ((err (condition-case e
+                   (progn (scalpel-agent--parse-json raw) nil)
+                 (user-error e))))
+      (ert-info ((format "Raw:\n%S" raw))
+        (should err)
+        (should (string-match-p "tool-call syntax"
+                                (error-message-string err)))))))
+
 (ert-deftest scalpel-agent-test-context-add-readonly-single-file ()
   "Adding a single file as read-only places it in the readonly list only."
   (let ((scalpel-agent--context-files nil)
@@ -537,6 +553,17 @@ so a follow-up such as \"the third point is wrong\" had no referent."
     (let ((prompt (scalpel-agent--prompt "first" nil)))
       (ert-info ((format "Prompt:\n%S" prompt))
         (should-not (string-match-p "Conversation so far:" prompt))))))
+
+(ert-deftest scalpel-agent-test-visible-raw-exposes-invisible-bytes ()
+  "A reply that fails to parse must expose the bytes that broke it.
+Regression: the error used %S, which prints control bytes and NBSP
+literally, so the offending character could not be seen."
+  (let ((shown (scalpel-agent--visible-raw "a\tb\u00A0c")))
+    (ert-info ((format "Shown: %S" shown))
+      ;; Nothing invisible may survive: a literal TAB or NBSP in the
+      ;; error message is exactly as unreadable as the original.
+      (should-not (string-match-p "[\t\u00A0]" shown))
+      (should (string-match-p "\\\\" shown)))))
 
 (provide 'scalpel-agent-test)
 
