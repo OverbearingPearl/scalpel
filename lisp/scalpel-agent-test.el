@@ -42,6 +42,33 @@
                   "```json\n[{\"tool\":\"reply\",\"text\":\"hi\"}]\n```")))
     (should (equal (plist-get (car actions) :text) "hi"))))
 
+(ert-deftest scalpel-agent-test-parse-json-tolerates-prose-around-payload ()
+  "Prose and a fence around the JSON array do not defeat parsing.
+Regression: the planner replied with a prose sentence, a json fence,
+then the array; stripping only the fences left the prose in place, so
+the whole reply went to the JSON parser and a valid plan was rejected
+as invalid JSON."
+  (let ((actions
+         (scalpel-agent--parse-json
+          (concat "I'll start by gathering the definitions.\n\n"
+                  "```json\n"
+                  "[{\"tool\":\"shell\",\"command\":\"ls\",\"reason\":\"look\"}]\n"
+                  "```\n"))))
+    (ert-info ((format "Actions:\n%S" actions))
+      (should (= (length actions) 1))
+      (should (equal (plist-get (car actions) :command) "ls")))))
+
+(ert-deftest scalpel-agent-test-json-payload-ignores-brackets-in-strings ()
+  "Brackets inside JSON strings never end the extracted payload."
+  (let ((raw "[{\"tool\":\"shell\",\"command\":\"echo ']'\",\"reason\":\"r\"}] then"))
+    (should (string= (scalpel-agent--json-payload raw)
+                     "[{\"tool\":\"shell\",\"command\":\"echo ']'\",\"reason\":\"r\"}]"))))
+
+(ert-deftest scalpel-agent-test-json-payload-without-json ()
+  "A reply holding no complete JSON value has no payload."
+  (should-not (scalpel-agent--json-payload "There is nothing to change."))
+  (should-not (scalpel-agent--json-payload "[unterminated")))
+
 (ert-deftest scalpel-agent-test-apply-if-unchanged ()
   "Apply replacement when body is unchanged; abort when it changed."
   (scalpel-utils-test-with-temp-file ".el"

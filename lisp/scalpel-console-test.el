@@ -31,6 +31,45 @@ returned buffer when done."
         (setq-local default-directory root))
       buf)))
 
+(ert-deftest scalpel-console-test-sends-text-typed-through-keyboard ()
+  "Keyboard-typed input is sent even when it follows display output.
+Regression: `self-insert-command' inserts through `insert-and-inherit',
+which copies the text properties of the preceding character.  Console
+output carried `scalpel-console-output' but nothing marked it
+rear-nonsticky, so the first character the user typed inherited the
+tag; `--pending-input-regions' then skipped the whole instruction and
+RET answered \"nothing to send\"."
+  (let ((scalpel-agent--context-files nil)
+        (scalpel-agent--context-readonly-files nil)
+        (buf (scalpel-console-test--new-console-buffer))
+        (prompt-sent nil))
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'scalpel-llm-request)
+                     (lambda (prompt &optional _system)
+                       (setq prompt-sent prompt)
+                       "[{\"tool\":\"reply\",\"text\":\"done\"}]")))
+            (with-current-buffer buf
+              (erase-buffer)
+              ;; Output written by the same path the console uses, so the
+              ;; text carries exactly the tags `--append' really sets.
+              (scalpel-console--append "Scalpel console.")
+              (scalpel-console--append "Context: none")
+              ;; Insert through the keyboard path, not plain `insert':
+              ;; only `insert-and-inherit' copies the surrounding tags.
+              (goto-char (point-max))
+              (insert-and-inherit "hello")
+              (scalpel-console-send-line))
+            (ert-info ((format "Prompt:\n%S" prompt-sent))
+              (should prompt-sent)
+              (should (string-suffix-p "User instruction:\nhello"
+                                       prompt-sent)))
+            (with-current-buffer buf
+              (ert-info ((format "Buffer:\n%S" (buffer-string)))
+                (should (string-match-p "User: hello" (buffer-string)))
+                (should (string-match-p "Scalpel: done" (buffer-string)))))))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
+
 (ert-deftest scalpel-console-test-send-line ()
   "Send a line to the agent and verify the reply is appended."
   (let ((buf (scalpel-console-test--new-console-buffer)))
@@ -330,8 +369,9 @@ newly inserted Context block."
                      "[{\"tool\":\"reply\",\"text\":\"ack\"}]")))
           (with-current-buffer buf
             (erase-buffer)
-            (insert "User: old\nScalpel: old reply\n\n")
-            (setq-local scalpel-console--input-start (point-max))
+            (scalpel-console--insert-tagged "User: old\n" 'user)
+            (scalpel-console--insert-tagged
+             "Scalpel: old reply\n\n" 'assistant)
             (insert "new instruction")
             (goto-char (point-max))
             (scalpel-console-send-line)
@@ -403,7 +443,7 @@ it asked for, so \"run the tests\" could not lead to a fix."
         (scalpel-agent--context-readonly-files nil)
         (scalpel-agent-confirm-tools nil)
         (scalpel-console-continue-after-shell 'always)
-        (scalpel-console-max-rounds 3)
+        (scalpel-console-max-rounds 30)
         (buf (scalpel-console-test--new-console-buffer))
         (prompts nil))
     (unwind-protect
@@ -477,7 +517,11 @@ reopen the console, which also discarded the context file list."
     (unwind-protect
         (with-current-buffer buf
           (erase-buffer)
-          (insert "Scalpel console.\n\n")
+          ;; Same shape as `scalpel-console-open' writes: the header is
+          ;; display output, never pending input.
+          (let ((beg (point)))
+            (insert "Scalpel console.\n\n")
+            (put-text-property beg (point) 'scalpel-console-output t))
           (scalpel-console--show-context)
           (scalpel-console--insert-tagged "User: first\n" 'user)
           (scalpel-console--insert-tagged "Scalpel: reply\n\n" 'assistant)
@@ -491,8 +535,8 @@ reopen the console, which also discarded the context file list."
             ;; Context tree kept.
             (should (string-match-p "scalpel-forget-ctx.el"
                                     (buffer-string)))
-            ;; Nothing pending.
-            (should (= scalpel-console--input-start (point-max)))))
+            ;; Nothing pending: forgotten turns read as display output.
+            (should (null (scalpel-console--pending-input-regions)))))
       (scalpel-utils-test-kill-buffer (buffer-name buf)))))
 
 (ert-deftest scalpel-console-test-forget-history-frees-next-request ()
@@ -529,6 +573,93 @@ next turn clean."
               ;; The old turns are still readable in the console.
               (should (string-match-p "first instruction" (buffer-string)))
               (should (string-match-p "Scalpel: ack" (buffer-string))))))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
+
+(ert-deftest scalpel-console-test-round-limit-does-not-ask-to-continue ()
+  "The continuation question is not asked when no round is left to run.
+Regression: `scalpel-console--continue-p' was consulted on the last
+round too, so the user answered a question whose answer was thrown
+away, and the console then stopped without saying why."
+  (let ((scalpel-agent--context-files nil)
+        (scalpel-agent--context-readonly-files nil)
+        (scalpel-agent-confirm-tools nil)
+        (scalpel-console-continue-after-shell 'ask)
+        (scalpel-console-max-rounds 2)
+        (buf (scalpel-console-test--new-console-buffer))
+        (requests 0)
+        (asked 0)
+        (notices nil))
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'scalpel-llm-request)
+                     (lambda (&rest _)
+                       (setq requests (1+ requests))
+                       "[{\"tool\":\"shell\",\"command\":\"echo hi\",\"reason\":\"check\"}]"))
+                    ((symbol-function 'yes-or-no-p)
+                     (lambda (&rest _) (setq asked (1+ asked)) t))
+                    ((symbol-function 'message)
+                     (lambda (fmt &rest args)
+                       (push (apply #'format fmt args) notices))))
+            ;; `scalpel-console--continue-p' asks only outside batch.
+            (let ((noninteractive nil))
+              (with-current-buffer buf
+                (erase-buffer)
+                (insert "run it\n")
+                (goto-char (point-min))
+                (scalpel-console-send-line))))
+          (ert-info ((format "requests=%d asked=%d buffer:\n%S"
+                             requests asked
+                             (with-current-buffer buf (buffer-string))))
+            (should (= requests 2))
+            ;; Only the round that still has a successor asks.
+            (should (= asked 1))
+            (should (string-match-p "round limit (2) reached"
+                                    (with-current-buffer buf (buffer-string))))
+            ;; The console buffer may be scrolled away, so the limit
+            ;; must also reach the echo area.
+            (should (cl-some (lambda (m)
+                               (string-match-p "round limit (2) reached" m))
+                             notices))))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
+
+(ert-deftest scalpel-console-test-sends-input-typed-above-buffer-end ()
+  "Input typed before the buffer end is sent, not treated as absent.
+Regression: the pending instruction was located by a position
+snapshot, so text typed above that snapshot was invisible to RET
+and the user got \"nothing to send\" (or a byte-shifted
+instruction) after the round-limit notice."
+  (let ((scalpel-agent--context-files nil)
+        (scalpel-agent--context-readonly-files nil)
+        (buf (scalpel-console-test--new-console-buffer))
+        (prompt-sent nil))
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'scalpel-llm-request)
+                     (lambda (prompt &optional _system)
+                       (setq prompt-sent prompt)
+                       "[{\"tool\":\"reply\",\"text\":\"done\"}]")))
+            (with-current-buffer buf
+              (erase-buffer)
+              (insert "Scalpel console.\n")
+              (put-text-property (point-min) (point)
+                                 'scalpel-console-output t)
+              (insert "Scalpel: round limit (3) reached\n\n")
+              (put-text-property (point-min) (point)
+                                 'scalpel-console-output t)
+              ;; Type the instruction on the empty line above the end,
+              ;; not at point-max.
+              (goto-char (point-max))
+              (forward-line -1)
+              (insert "increase the round limit")
+              (scalpel-console-send-line))
+            (ert-info ((format "Prompt:\n%S" prompt-sent))
+              (should prompt-sent)
+              (should (string-suffix-p
+                       "User instruction:\nincrease the round limit"
+                       prompt-sent)))
+            (with-current-buffer buf
+              (ert-info ((format "Buffer:\n%S" (buffer-string)))
+                (should (string-match-p "Scalpel: done" (buffer-string)))))))
       (scalpel-utils-test-kill-buffer (buffer-name buf)))))
 
 (provide 'scalpel-console-test)

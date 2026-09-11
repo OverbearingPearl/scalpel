@@ -567,14 +567,36 @@ context is empty."
         (mapcar #'scalpel-agent--readonly-block readonly))
        "\n\n"))))
 
-(defun scalpel-agent--strip-fences (raw)
-  "Strip markdown code fences surrounding RAW, if present."
-  (let ((text (string-trim raw)))
-    (when (string-match-p "```" text)
-      (setq text (string-trim
-                  (replace-regexp-in-string
-                   "```[a-zA-Z]*\n?\\|\n?```\\'" "" text))))
-    text))
+(defun scalpel-agent--json-payload (raw)
+  "Return the JSON action payload embedded in RAW, or nil.
+A planner reply is a container: the JSON array may be preceded by
+prose, wrapped in a markdown code fence, or both.  Return the first
+balanced JSON array or object in RAW, ignoring everything around it;
+return nil when RAW holds no complete JSON value.  Brackets inside
+JSON strings never count, so a command such as \"echo ']'\" does not
+end the payload early."
+  (let ((start (string-match "\\[\\|{" raw))
+        (i 0)
+        (depth 0)
+        (in-string nil)
+        (escaped nil)
+        end)
+    (when start
+      (setq i start)
+      (while (and (< i (length raw)) (null end))
+        (let ((char (aref raw i)))
+          (cond
+           (escaped (setq escaped nil))
+           (in-string
+            (cond ((eq char ?\\) (setq escaped t))
+                  ((eq char ?\") (setq in-string nil))))
+           ((eq char ?\") (setq in-string t))
+           ((memq char '(?\[ ?\{)) (setq depth (1+ depth)))
+           ((memq char '(?\] ?\})) (setq depth (1- depth))
+            (when (= depth 0) (setq end (1+ i))))))
+        (setq i (1+ i)))
+      (when end
+        (substring raw start end)))))
 
 (defun scalpel-agent--validate-action (action)
   "Validate ACTION plist against its tool's field contract.
@@ -615,22 +637,31 @@ that was simply not valid JSON.  RAW is the reply as received."
 
 (defun scalpel-agent--parse-json (raw)
   "Parse RAW to a list of action plists.
-Signal `user-error' when RAW is not valid JSON or not a JSON array
-of objects."
-  (let ((parsed (condition-case nil
-                    (json-parse-string (scalpel-agent--strip-fences raw)
-                                       :object-type 'plist
-                                       :array-type 'list)
-                  (error (scalpel-agent--parse-error raw)))))
-    (when (and (plistp parsed) (plist-get parsed :tool))
-      (setq parsed (list parsed)))
-    (unless (and (listp parsed)
-                 (cl-every (lambda (item) (plist-get item :tool)) parsed))
-      (user-error
-       (concat "Scalpel: planner returned unexpected structure "
-               "(expected a JSON array of action objects): %s")
-       (scalpel-agent--visible-raw raw)))
-    (mapcar #'scalpel-agent--validate-action parsed)))
+RAW is the planner's whole reply, so the JSON payload is extracted
+from whatever prose or markdown fences surround it.  Signal
+`user-error' when RAW holds no valid JSON action array."
+  (let ((payload (scalpel-agent--json-payload raw)))
+    (unless payload
+      ;; `scalpel-agent--parse-error' signals, so a missing payload and
+      ;; an unparsable one share a single explanation path.
+      (scalpel-agent--parse-error raw))
+    (let ((parsed (condition-case nil
+                      (json-parse-string payload
+                                         :object-type 'plist
+                                         :array-type 'list)
+                    (error (scalpel-agent--parse-error raw)))))
+      (when (and (plistp parsed) (plist-get parsed :tool))
+        (setq parsed (list parsed)))
+      (unless (and (listp parsed)
+                   (cl-every (lambda (item)
+                               (and (listp item)
+                                    (plist-get item :tool)))
+                             parsed))
+        (user-error
+         (concat "Scalpel: planner returned unexpected structure "
+                 "(expected a JSON array of action objects): %s")
+         (scalpel-agent--visible-raw raw)))
+      (mapcar #'scalpel-agent--validate-action parsed))))
 
 (defun scalpel-agent--prompt (instruction history)
   "Return the LLM prompt for INSTRUCTION given HISTORY.

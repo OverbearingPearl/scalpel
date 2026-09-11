@@ -28,7 +28,9 @@ so a console opened at /home/me/proj is named \"*scalpel: ~/proj*\"."
 A round is one request/execute cycle.  A round that ran shell
 commands may be followed by another so the agent can act on their
 output; this caps the chain, because a command the agent cannot fix
-would otherwise loop forever."
+would otherwise loop forever.  The continuation question is not
+asked once this limit is reached, and reaching it is reported in
+the console buffer."
   :type 'integer
   :group 'scalpel)
 
@@ -65,12 +67,6 @@ in the console buffer is pinned to this value.")
   "Context entries shown by the previous refresh.
 The symbol `none-yet' means no refresh has happened in this
 console buffer yet, so nothing is highlighted as changed.")
-
-(defvar-local scalpel-console--input-start nil
-  "Buffer position where the user's pending instruction begins.
-Everything between this position and `point-max' is what RET sends.
-Nil means the whole buffer counts as pending input, which is what a
-console buffer created without `scalpel-console-open' gets.")
 
 (defface scalpel-console-context-added-face
   '((t :inherit bold))
@@ -121,12 +117,30 @@ or signal a `user-error' when there is none."
       (or found
           (user-error "Scalpel: no console for %s; run `scalpel-open'" dir))))))
 
-(defun scalpel-console--pending-input-start ()
-  "Return the start of the pending instruction.
-Fall back to `point-min' when `scalpel-console--input-start' is
-unset, and clamp to `point-max' so a stale value from
-`erase-buffer' cannot cause an out-of-range error."
-  (min (or scalpel-console--input-start (point-min)) (point-max)))
+(defun scalpel-console--tag-change (pos)
+  "Return the next position after POS where the console tags change.
+POS must be below `point-max'.  Tags are `scalpel-console-role'
+\\(the conversation) and `scalpel-console-output' (display-only
+output)."
+  (min (next-single-property-change
+        pos 'scalpel-console-role nil (point-max))
+       (next-single-property-change
+        pos 'scalpel-console-output nil (point-max))))
+
+(defun scalpel-console--pending-input-regions ()
+  "Return the (BEG . END) regions the user typed but has not sent.
+A region is text that carries neither `scalpel-console-role' nor
+`scalpel-console-output'.  Regions come back in buffer order, so a
+caller can delete them without invalidating earlier ones."
+  (let ((pos (point-min))
+        (regions nil))
+    (while (< pos (point-max))
+      (let ((next (scalpel-console--tag-change pos)))
+        (unless (or (get-text-property pos 'scalpel-console-role)
+                    (get-text-property pos 'scalpel-console-output))
+          (push (cons pos next) regions))
+        (setq pos next)))
+    (nreverse regions)))
 
 (defvar scalpel-console-mode-map
   (let ((map (make-sparse-keymap)))
@@ -204,7 +218,14 @@ removes the region from the conversation while leaving the visible
 text alone."
   (let ((beg (point)))
     (insert text)
-    (put-text-property beg (point) 'scalpel-console-role role)))
+    (put-text-property beg (point) 'scalpel-console-role role)
+    ;; Keyboard input arrives through `insert-and-inherit', which copies
+    ;; the text properties of the character before point.  Without
+    ;; `rear-nonsticky', the very first character the user types after
+    ;; a reply or a context tree would inherit these tags, and the
+    ;; pending-input scanner would then skip the whole instruction.
+    (put-text-property beg (point) 'rear-nonsticky
+                       '(scalpel-console-role scalpel-console-output))))
 
 (defun scalpel-console--history ()
   "Return the conversation recorded in the current buffer, as text.
@@ -228,16 +249,19 @@ gets."
 ROLE, when non-nil, tags TEXT as part of the conversation
 \(`user' or `assistant'), so `scalpel-console--history' reads it
 back; output appended without a role is display-only, as context
-trees are.  Point moves to the new end, so the user always sees the
-latest output after a context refresh or reply."
+trees are, and is tagged so it can never be mistaken for an
+instruction the user still has to send.  Point moves to the new
+end, so the user always sees the latest output after a context
+refresh or reply."
   (let ((buf (scalpel-console--target-buffer)))
     (with-current-buffer buf
       (goto-char (point-max))
-      (let ((inhibit-read-only t))
-        (scalpel-console--insert-tagged (format "%s\n\n" text) role))
-      (goto-char (point-max))
-      ;; Freshly appended output is never part of the next instruction.
-      (setq scalpel-console--input-start (point-max)))))
+      (let ((inhibit-read-only t)
+            (beg (point)))
+        (scalpel-console--insert-tagged (format "%s\n\n" text) role)
+        (unless role
+          (put-text-property beg (point) 'scalpel-console-output t)))
+      (goto-char (point-max)))))
 
 (defun scalpel-console--render-diff (lines)
   "Return LINES as text with per-name change highlighting.
@@ -346,11 +370,12 @@ the context is input, not memory — to reset it use
       ;; from the conversation while leaving it visible in the buffer.
       (dolist (range ranges)
         (put-text-property (car range) (cdr range)
-                           'scalpel-console-role nil))
+                           'scalpel-console-role nil)
+        ;; A forgotten turn is history on screen, not an instruction
+        ;; still to send: tag it so it never reads back as input.
+        (put-text-property (car range) (cdr range)
+                           'scalpel-console-output t))
       (goto-char (point-max))
-      ;; Nothing is pending after a forget: the next text typed is a
-      ;; fresh instruction.
-      (setq scalpel-console--input-start (point-max))
       (message "Scalpel: conversation forgotten; the text stays on screen."))))
 
 (defun scalpel-console-reset-context ()
@@ -384,9 +409,13 @@ that path."
       (insert "Scalpel console.\n")
       (insert "Type an instruction; S-RET inserts a newline, RET sends it.\n")
       (insert "\n")
-      (goto-char (point-max))
-      ;; The header is output, not pending input.
-      (setq scalpel-console--input-start (point-max)))
+      ;; The header is output, not pending input.  `rear-nonsticky'
+      ;; keeps `insert-and-inherit' from copying the tag into whatever
+      ;; the user types right after it.
+      (put-text-property (point-min) (point) 'scalpel-console-output t)
+      (put-text-property (point-min) (point) 'rear-nonsticky
+                         '(scalpel-console-role scalpel-console-output))
+      (goto-char (point-max)))
     (scalpel-agent-context-reset)
     (scalpel-console--show-context)
     (goto-char (point-max))))
@@ -417,9 +446,9 @@ losing it."
                 (format "Scalpel error: %s\n\n" (error-message-string err))
                 'assistant))
              nil))
-        ;; The finished round leaves its report or its error text at the end
-        ;; of the buffer, so nothing is pending any more.
-        (setq scalpel-console--input-start (point-max))))))
+        ;; The report or error text appended above carries an
+        ;; `assistant' role, so nothing needs to be reset here.
+        (ignore)))))
 
 (defun scalpel-console--continue-p (result)
   "Return non-nil when another round should follow RESULT.
@@ -459,15 +488,28 @@ re-sending it makes the planner run the same shell command again."
       (setq round (1+ round))
       (let ((result (scalpel-console--run-round next-instruction conversation)))
         (setq conversation (scalpel-console--history))
-        (setq more (and result
-                        (plist-get result :shells)
-                        (scalpel-console--continue-p result)))
-        ;; A continued round must not re-send the user's original
-        ;; instruction: it is already in the history above, and
-        ;; repeating it makes the planner re-issue the same shell
-        ;; action in a loop.
-        (when more
-          (setq next-instruction scalpel-console--continuation-instruction))))))
+        (cond
+         ((not (and result (plist-get result :shells)))
+          (setq more nil))
+         ((>= round scalpel-console-max-rounds)
+          ;; No round is left, so asking would throw the answer away and
+          ;; the console would look hung.  Report the limit instead.
+          ;; Echo it as well as append it: the user may not be looking
+          ;; at the end of the console buffer when the loop stops.
+          (setq more nil)
+          (let ((notice
+                 (format "Scalpel: round limit (%d) reached; send the next instruction when ready"
+                         scalpel-console-max-rounds)))
+            (scalpel-console--append notice)
+            (message "%s" notice)))
+         ((scalpel-console--continue-p result)
+          ;; A continued round must not re-send the user's original
+          ;; instruction: it is already in the history above, and
+          ;; repeating it makes the planner re-issue the same shell
+          ;; action in a loop.
+          (setq next-instruction scalpel-console--continuation-instruction))
+         (t
+          (setq more nil)))))))
 
 (defun scalpel-console-send-line ()
   "Send the pending instruction to the Scalpel agent and append the reply.
@@ -483,18 +525,25 @@ the agent can read its own earlier replies and shell output."
     (let ((buf (scalpel-console--target-buffer)))
       (unless (eq (current-buffer) buf)
         (switch-to-buffer buf))
-      (let* ((beg (scalpel-console--pending-input-start))
+      (let* ((regions (scalpel-console--pending-input-regions))
              (instr (string-trim
-                     (buffer-substring-no-properties beg (point-max)))))
+                     (mapconcat
+                      (lambda (region)
+                        (buffer-substring-no-properties
+                         (car region) (cdr region)))
+                      regions
+                      ""))))
         (if (string-empty-p instr)
             (message "Scalpel: nothing to send.")
           ;; Read the conversation before this instruction joins it.
           (let ((history (scalpel-console--history)))
             ;; Rewrite the typed input into the logged user message, so the
             ;; instruction is not shown twice (once raw, once prefixed).
+            ;; Regions are deleted back to front so positions stay valid.
             (let ((inhibit-read-only t))
-              (delete-region beg (point-max))
-              (goto-char beg)
+              (dolist (region (reverse regions))
+                (delete-region (car region) (cdr region)))
+              (goto-char (point-max))
               (scalpel-console--insert-tagged
                (format "User: %s\n" instr) 'user))
             (scalpel-console--run-rounds instr history)
