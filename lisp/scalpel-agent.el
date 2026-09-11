@@ -32,12 +32,6 @@
 Structural contract, not user configuration: dispatch in
 `scalpel-agent-execute-action' must stay in sync with it.")
 
-(defconst scalpel-agent--action-fields
-  '(:tool :file :symbol :instruction :text)
-  "Fields carried through the action round-trip.
-Structural contract consumed by `scalpel-agent-plan'; it is not
-user configuration.")
-
 (defconst scalpel-agent--tool-fields
   '(("edit" . (:tool :file :symbol :instruction))
     ("reply" . (:tool :text))
@@ -764,20 +758,30 @@ rather than being re-framed as a planner error."
    on-error
    scalpel-agent-system-prompt))
 
+(defun scalpel-agent--verified-range (file symbol expected-body)
+  "Return (BEG . END) of SYMBOL in FILE, verified as unchanged.
+SYMBOL is re-located here, in the caller's current buffer, so a
+buffer the user edited while an LLM request was in flight aborts
+the edit instead of being overwritten.  EXPECTED-BODY is the
+region text the caller last saw; signal `user-error' when the
+region no longer holds it."
+  (let* ((current-range (scalpel-locate-range file symbol))
+         (current-body (buffer-substring-no-properties
+                        (car current-range) (cdr current-range))))
+    (unless (string= expected-body current-body)
+      (user-error
+       (concat "Scalpel: target region changed while editing %s; "
+               "aborting.  Re-run after reviewing the buffer")
+       symbol))
+    current-range))
+
 (defun scalpel-agent--apply-if-unchanged (file symbol expected-body new-text)
   "Replace SYMBOL in FILE with NEW-TEXT only if EXPECTED-BODY is unchanged.
 Return a human-readable report string.  Signal `user-error' if the target
 region was modified while an LLM request was in flight."
   (with-current-buffer (find-file-noselect file)
-    (let* ((current-range (scalpel-locate-range file symbol))
-           (current-body (buffer-substring-no-properties
-                          (car current-range) (cdr current-range))))
-      (unless (string= expected-body current-body)
-        (user-error
-         (concat "Scalpel: target region changed while editing %s; "
-                 "aborting.  Re-run after reviewing the buffer")
-         symbol))
-      (scalpel-execute-replace (car current-range) (cdr current-range) new-text)
+    (let ((range (scalpel-agent--verified-range file symbol expected-body)))
+      (scalpel-execute-replace (car range) (cdr range) new-text)
       (format "Edited %s in %s" symbol (buffer-name (current-buffer))))))
 
 (defun scalpel-agent-edit (file symbol instruction on-success on-error)
@@ -904,8 +908,11 @@ ON-SUCCESS receives the report string.  ON-ERROR receives a plist
            on-error))))))
 
 (defun scalpel-agent-delete (file symbol)
-  "Delete SYMBOL in FILE using boundary-locked apply.
-Return human-readable report string."
+  "Delete SYMBOL in FILE through the boundary-locked deletion.
+The line the definition occupied goes with it, and the blank lines
+the deletion brings together are reconciled, so removing a block
+does not leave an extra blank line where it stood.  The file is
+saved before this returns.  Return a human-readable report string."
   (unless (and file symbol)
     (user-error "Scalpel: malformed delete action"))
   (when (scalpel-agent-readonly-p file)
@@ -916,9 +923,9 @@ Return human-readable report string."
     (with-current-buffer (find-file-noselect file)
       (let* ((beg (car range))
              (end (cdr range))
-             (body (buffer-substring-no-properties beg end)))
-        (scalpel-agent--apply-if-unchanged
-         file symbol body "")
+             (body (buffer-substring-no-properties beg end))
+             (verified (scalpel-agent--verified-range file symbol body)))
+        (scalpel-execute-delete (car verified) (cdr verified))
         (format "Deleted %s in %s" symbol
                 (buffer-name (current-buffer)))))))
 

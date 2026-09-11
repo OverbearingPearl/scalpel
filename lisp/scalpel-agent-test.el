@@ -113,6 +113,27 @@ as invalid JSON."
         (with-current-buffer (find-file-noselect this-file)
           (should (string= (buffer-string) "(defun foo (x)\n  (+ x 2))\n")))))))
 
+(ert-deftest scalpel-agent-test-execute-action-delete ()
+  "A delete action drops the block, its blank line, and the buffer's state.
+The action settles synchronously -- no LLM request is involved -- and
+the file on disk must already hold the result."
+  (scalpel-utils-test-with-temp-file ".el"
+    (with-temp-file this-file
+      (insert "(defun foo (x)\n  (+ x 1))\n\n(defun bar ()\n  nil)\n"))
+    (let ((action (list :tool "delete" :file this-file :symbol "foo"))
+          report)
+      (scalpel-agent-execute-action
+       action
+       (lambda (r) (setq report r))
+       (lambda (err) (ert-fail (plist-get err :message))))
+      (ert-info ((format "Report: %S" report))
+        (should (string-match "Deleted foo" report)))
+      (let ((on-disk (with-temp-buffer
+                       (insert-file-contents this-file)
+                       (buffer-string))))
+        (ert-info ((format "On disk:\n%S" on-disk))
+          (should (string= on-disk "(defun bar ()\n  nil)\n")))))))
+
 (ert-deftest scalpel-agent-test-execute-action-reply ()
   "Execute a reply action and deliver its text through ON-SUCCESS."
   (let ((action (list :tool "reply"

@@ -39,12 +39,16 @@ FILE is a file name string.  Does nothing when FILE is absent."
   "Create a temporary file and evaluate BODY with cleanup guaranteed.
 SUFFIX is the file extension string (e.g. \".el\").  The created
 file name is bound to the local variable `this-file' inside BODY.
-Cleanup always runs, even when BODY signals or is interrupted: it
-kills the file's buffer and deletes the file."
+Backups are disabled for the body, because saving the file -- which
+the edit primitives do -- would otherwise leave a `~' file behind
+for every test that writes.  Cleanup always runs, even when BODY
+signals or is interrupted: it kills the file's buffer and deletes
+the file."
   (declare (indent 1))
   (let ((file-var (gensym "scalpel-temp-file-")))
     `(let* ((,file-var (make-temp-file "scalpel-test-" nil ,suffix))
-            (this-file ,file-var))
+            (this-file ,file-var)
+            (make-backup-files nil))
        (unwind-protect
            (progn ,@body)
          (scalpel-utils-test-kill-file-buffer ,file-var)

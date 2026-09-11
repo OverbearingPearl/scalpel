@@ -171,7 +171,8 @@ Components live in focused modules:
 - `scalpel-agent` – LLM planning integration and structured action parser
 - `scalpel-locate` – locator dispatch; resolves actions to byte ranges via per-language providers
 - `scalpel-locate-elisp` – built-in structural locator provider for Emacs Lisp
-- `scalpel-execute` – boundary-locked edit application
+- `scalpel-execute` – boundary-locked edit application and deletion,
+  written to disk as applied
 - `scalpel-sandbox` – command sandbox for shell actions (`bubblewrap` on Linux, `sandbox-exec` on macOS)
 - `scalpel-lineage` – session diff, tracking, and Git-backed rollback
 
@@ -373,7 +374,9 @@ Scalpel is in active, deliberately small MVP stages.
   `reply`, `confirm`), each action returning a human-readable report that stays
   in the console buffer, so a session's changes are readable after the fact
 - Execution boundary lock: a replacement lands only on the range the locator
-  resolved, and an unbalanced replacement is refused
+  resolved, and an unbalanced replacement is refused; an applied change reaches
+  its file as it lands, so the shell commands the next round runs already see
+  it, and a deletion collapses the blank lines it brings together
 - Shell execution through `bubblewrap` on Linux, plus an experimental macOS
   backend through `sandbox-exec`; shell actions are refused when the sandbox is
   unavailable or fails its probe
