@@ -124,6 +124,7 @@ Components live in focused modules:
 - `scalpel-locate` – locator dispatch; resolves actions to byte ranges via per-language providers
 - `scalpel-locate-elisp` – built-in structural locator provider for Emacs Lisp
 - `scalpel-execute` – boundary-locked edit application
+- `scalpel-sandbox` – command sandbox for shell actions (`bubblewrap` on Linux, `sandbox-exec` on macOS)
 - `scalpel-lineage` – session tracking and Git-backed rollback
 
 Every additional language arrives as a `scalpel-locate-<lang>.el` provider
@@ -189,9 +190,15 @@ never speculative whole-file changes.
 
 - Emacs 29.1+
 - a working `gptel` setup (any backend: OpenAI, Anthropic, Ollama, ...)
-- Linux `bubblewrap` (`bwrap`) or macOS `sandbox-exec` for shell actions
-- Git (used for local undo/rollback)
+- Git (used for local undo/rollback and to expand context directories through gitignore rules)
 - optionally `lsp-mode`/`eglot` and language servers for richer semantics
+
+Shell actions need a command sandbox on top of the above. Without a working
+sandbox, planning and edits keep working and only shell actions are refused:
+
+- Linux: `bubblewrap` (`bwrap`)
+- macOS: `sandbox-exec`, deprecated by Apple; the macOS backend is experimental
+- other systems: no sandbox backend, so shell actions are refused
 
 ### Install with use-package
 

@@ -14,6 +14,12 @@
 ;; Scalpel is a deterministic Emacs-native coding agent.  The LLM plans and
 ;; generates text; deterministic locators resolve exact byte ranges, and edits
 ;; are applied only inside that resolved boundary.
+;;
+;; Planning and file edits need only Emacs and gptel, so they work on every
+;; platform Emacs supports.  Shell actions additionally need a command
+;; sandbox: `bubblewrap' on Linux, or the deprecated `sandbox-exec' on macOS
+;; (treated as experimental).  Without a working sandbox a shell action is
+;; refused; nothing else is affected.
 
 ;;; Code:
 
