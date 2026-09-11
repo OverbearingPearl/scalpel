@@ -568,9 +568,11 @@ was confirmed without ever being displayed."
                    "need input")))
 
 (ert-deftest scalpel-agent-test-shell-confirm-gated-by-flags ()
-  "A read-only, quick shell action runs unattended; others ask.
-Regression: shell confirmation was plain list membership, so
-every read-only command needed a prompt."
+  "Only a long-running shell action asks; every other one runs unattended.
+Regression: confirmation was plain list membership, so every
+read-only command needed a prompt, and the planner's own
+\"read-only\" claim decided the gate even though nothing verified
+it."
   (let ((scalpel-agent-confirm-tools '("shell"))
         (asked 0)
         (ran 0))
@@ -581,23 +583,27 @@ every read-only command needed a prompt."
       ;; JSON booleans reach this code as `t' and `:false', so the
       ;; test uses those symbols rather than nil to keep the
       ;; `(eq ... t)' check honest.
-      (let ((readonly '(:tool "shell" :command "ls" :reason "look"
-                              :read-only t :long-running :false))
-            (writable '(:tool "shell" :command "rm -rf build"
-                              :reason "clean"
-                              :read-only :false :long-running :false))
+      (let ((quick '(:tool "shell" :command "rm -rf build"
+                           :reason "clean"
+                           :long-running :false))
             (long '(:tool "shell" :command "make test" :reason "run"
-                          :read-only t :long-running t)))
-        (should (string= (scalpel-agent-execute-action readonly) "report"))
-        (ert-info ((format "asked=%d after a read-only action" asked))
+                          :long-running t)))
+        (should (string= (scalpel-agent-execute-action quick) "report"))
+        (ert-info ((format "asked=%d after a quick action" asked))
           (should (= asked 0)))
-        (should (string= (scalpel-agent-execute-action writable) "report"))
-        (ert-info ((format "asked=%d after a writing action" asked))
-          (should (= asked 1)))
         (should (string= (scalpel-agent-execute-action long) "report"))
         (ert-info ((format "asked=%d after a long action" asked))
-          (should (= asked 2)))
-        (should (= ran 3))))))
+          (should (= asked 1)))
+        (should (= ran 2))))))
+
+(ert-deftest scalpel-agent-test-shell-contract-drops-read-only ()
+  "The shell contract carries only fields the code still acts on.
+Regression: the planner declared \"read-only\", which gated the
+confirmation prompt even though nothing verified it; the prompt is
+now driven by \"long-running\" alone, so the field must not be
+requested from the planner."
+  (should-not (memq :read-only (cdr (assoc "shell" scalpel-agent--tool-fields))))
+  (should-not (string-match-p "read-only" scalpel-agent-system-prompt)))
 
 (ert-deftest scalpel-agent-test-shell-report-is-delimited ()
   "Shell reports name the command, state the exit status, and end."

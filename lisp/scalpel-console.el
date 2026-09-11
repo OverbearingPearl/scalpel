@@ -37,30 +37,27 @@ the console buffer."
 
 (defcustom scalpel-console-continue-after-shell 'ask
   "Whether a round that ran shell commands is followed by another.
-`always' continues without asking, up to
-`scalpel-console-max-rounds'.  `ask' prompts once per round, naming
-the commands and their output sizes, so the user keeps a review
-point before the agent acts on command output.  nil never
-continues: the user sends the next instruction when ready.  Batch
-runs never continue regardless of this value.
-Independent of this value, a round whose shell output is noisy
-\(see `scalpel-console-continue-after-shell-max-bytes') is never
-continued automatically: `always' means \"do not ask me\", not
-\"send truncated or binary output back\"."
+A round whose command output is small continues silently: that
+output is what the planner needs to finish the work the user asked
+for, so stopping to ask costs a keystroke and buys nothing.  A
+round whose output is noisy \(see
+`scalpel-console-continue-after-shell-max-bytes') is put to the
+user, who is shown every command together with its output size.
+`ask' questions only that noisy round; `always' continues without
+asking even then; nil never continues, and never asks.  Batch runs
+never continue regardless of this value."
   :type '(choice (const :tag "Never" nil)
-                 (const :tag "Ask" ask)
+                 (const :tag "Ask when output is large" ask)
                  (const :tag "Always continue" always))
   :group 'scalpel)
 
 (defcustom scalpel-console-continue-after-shell-max-bytes 4096
-  "Shell output above this size makes a round too noisy to continue.
-When a round ran a shell command whose raw output exceeded this many
-bytes -- or that was truncated or binary -- the round is not
-continued automatically, not even under
-`scalpel-console-continue-after-shell' set to `always': output the
-planner cannot read in full teaches it nothing, and re-sending it
-only spends tokens.  The user is told and can send the next
-instruction by hand.  Raise this to let large output flow back."
+  "Shell output above this size makes a round worth questioning.
+When a round ran a shell command whose raw output exceeded this
+many bytes -- or that was truncated or binary -- the round stops
+for a question under `scalpel-console-continue-after-shell' set to
+`ask'; under `always' it continues regardless.  Raise this to let
+more output flow back unquestioned."
   :type 'integer
   :group 'scalpel)
 
@@ -506,32 +503,39 @@ data, or when the commands together produced more than
 (defun scalpel-console--continue-p (result)
   "Return non-nil when another round should follow RESULT.
 RESULT is a `scalpel-agent-run' result whose round ran shell
-commands.  Batch runs never continue, so an unattended run can
-never block on a prompt.  When asking, the prompt names every
-command together with its output size, so a command that dumped a
-large file is visible before its output is sent back."
+commands.  Small output continues without a question; only a
+round `scalpel-console--noisy-round-p' rejects is put to the
+user, because its output may cost more in tokens than it is
+worth.  The question names every command together with its output
+size, so a command that dumped a large file is visible before its
+output is sent back.  Batch runs never continue, so an unattended
+run can never block on a prompt."
   (pcase scalpel-console-continue-after-shell
     ('always t)
-    ('ask (and (not noninteractive)
-               (yes-or-no-p
-                (format "Send the output of %s back to Scalpel? (%s)?"
-                        (if (= (length (plist-get result :shells)) 1)
-                            "this command"
-                          (format "these %d commands"
-                                  (length (plist-get result :shells))))
-                        (string-join
-                         (mapcar #'scalpel-console--shell-description
-                                 (plist-get result :shells))
-                         ", ")))))
+    ('ask (or (not (scalpel-console--noisy-round-p result))
+              (and (not noninteractive)
+                   (yes-or-no-p
+                    (format "Send the output of %s back to Scalpel anyway? (%s)?"
+                            (if (= (length (plist-get result :shells)) 1)
+                                "this command"
+                              (format "these %d commands"
+                                      (length (plist-get result :shells))))
+                            (string-join
+                             (mapcar #'scalpel-console--shell-description
+                                     (plist-get result :shells))
+                             ", "))))))
     (_ nil)))
 
 (defun scalpel-console--run-rounds (instruction history)
   "Run agent rounds for INSTRUCTION until the loop ends.
 HISTORY is the conversation recorded before INSTRUCTION.  A round
 that ran shell commands may be followed by another, up to
-`scalpel-console-max-rounds'.  Each round re-reads the conversation
-from the buffer, so shell output reaches the next round without
-anything being carried in a variable.  A continued round sends
+`scalpel-console-max-rounds'.  Whether a round actually continues
+is decided by `scalpel-console--continue-p', which questions the
+user only when the round's output is noisy.  Each round re-reads
+the conversation from the buffer, so shell output reaches the next
+round without anything being carried in a variable.  A continued
+round sends
 `scalpel-console--continuation-instruction' instead of INSTRUCTION:
 the original instruction is already inside the history, and
 re-sending it makes the planner run the same shell command again."
@@ -556,19 +560,6 @@ re-sending it makes the planner run the same shell command again."
           (let ((notice
                  (format "Scalpel: round limit (%d) reached; send the next instruction when ready"
                          scalpel-console-max-rounds)))
-            (scalpel-console--append notice)
-            (message "%s" notice)))
-         ((and (scalpel-console--noisy-round-p result)
-               (eq scalpel-console-continue-after-shell 'always))
-          ;; `always' means "do not ask me", not "send truncated or
-          ;; binary output back": re-sending it teaches the planner
-          ;; nothing and only spends tokens.  Refuse and say why.
-          (setq more nil)
-          (let ((notice
-                 (format (concat "Scalpel: shell output exceeds %d bytes; "
-                                 "not sent back automatically.  "
-                                 "Send the next instruction when ready")
-                         scalpel-console-continue-after-shell-max-bytes)))
             (scalpel-console--append notice)
             (message "%s" notice)))
          ((scalpel-console--continue-p result)

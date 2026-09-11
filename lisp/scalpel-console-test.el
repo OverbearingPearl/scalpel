@@ -605,7 +605,10 @@ away, and the console then stopped without saying why."
                      (lambda (fmt &rest args)
                        (push (apply #'format fmt args) notices)))
                     ((symbol-function 'scalpel-sandbox-run)
-                     (lambda (&rest _ignore) (cons 0 "hello\n"))))
+                     ;; Output must be noisy, or the round never
+                     ;; reaches the question this test is about.
+                     (lambda (&rest _ignore)
+                       (cons 0 (make-string 5000 ?x)))))
             ;; `scalpel-console--continue-p' asks only outside batch.
             (let ((noninteractive nil))
               (with-current-buffer buf
@@ -695,22 +698,28 @@ that dumped a large file could be approved unnoticed."
   (should-not (scalpel-console--noisy-round-p
                '(:shells ((:command "a" :bytes 10))))))
 
-(ert-deftest scalpel-console-test-always-skips-noisy-output ()
-  "Under `always', a noisy round is refused and the user is told.
-Regression: `always' sent truncated megabytes back automatically."
+(ert-deftest scalpel-console-test-always-continues-through-noisy-output ()
+  "Under `always', even a noisy round continues without a question.
+The size gate decides only whether the user is asked; `always'
+means the question was waived, so the large output goes back."
   (let ((scalpel-agent--context-files nil)
         (scalpel-agent--context-readonly-files nil)
         (scalpel-agent-confirm-tools nil)
         (scalpel-console-continue-after-shell 'always)
         (scalpel-console-max-rounds 5)
         (buf (scalpel-console-test--new-console-buffer))
-        (requests 0))
+        (requests 0)
+        (asked 0))
     (unwind-protect
         (progn
           (cl-letf (((symbol-function 'scalpel-llm-request)
                      (lambda (&rest _)
                        (setq requests (1+ requests))
-                       "[{\"tool\":\"shell\",\"command\":\"seq 1 2000\",\"reason\":\"noise\",\"read-only\":true,\"long-running\":false}]"))
+                       (if (= requests 1)
+                           "[{\"tool\":\"shell\",\"command\":\"seq 1 2000\",\"reason\":\"noise\",\"long-running\":false}]"
+                         "[{\"tool\":\"reply\",\"text\":\"done\"}]")))
+                    ((symbol-function 'yes-or-no-p)
+                     (lambda (&rest _) (setq asked (1+ asked)) t))
                     ((symbol-function 'scalpel-sandbox-run)
                      (lambda (&rest _ignore)
                        (cons 0 (make-string 5000 ?x)))))
@@ -719,11 +728,44 @@ Regression: `always' sent truncated megabytes back automatically."
               (insert "dump it\n")
               (goto-char (point-min))
               (scalpel-console-send-line)))
-          (ert-info ((format "requests=%d" requests))
-            (should (= requests 1))
+          (ert-info ((format "requests=%d asked=%d" requests asked))
+            (should (= requests 2))
+            (should (= asked 0))))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
+
+(ert-deftest scalpel-console-test-small-output-continues-without-asking ()
+  "Small shell output is fed back with no question.
+Regression: the continuation question was asked on every round that
+ran a shell command, so finishing a short inspection cost the user
+a keystroke and bought no information."
+  (let ((scalpel-agent--context-files nil)
+        (scalpel-agent--context-readonly-files nil)
+        (scalpel-agent-confirm-tools nil)
+        (scalpel-console-continue-after-shell 'ask)
+        (scalpel-console-max-rounds 3)
+        (buf (scalpel-console-test--new-console-buffer))
+        (requests 0)
+        (asked 0))
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'scalpel-llm-request)
+                     (lambda (&rest _)
+                       (setq requests (1+ requests))
+                       (if (= requests 1)
+                           "[{\"tool\":\"shell\",\"command\":\"ls\",\"reason\":\"look\",\"long-running\":false}]"
+                         "[{\"tool\":\"reply\",\"text\":\"done\"}]")))
+                    ((symbol-function 'yes-or-no-p)
+                     (lambda (&rest _) (setq asked (1+ asked)) t))
+                    ((symbol-function 'scalpel-sandbox-run)
+                     (lambda (&rest _ignore) (cons 0 "a.el\n"))))
             (with-current-buffer buf
-              (should (string-match-p "not sent back automatically"
-                                      (buffer-string))))))
+              (erase-buffer)
+              (insert "list it\n")
+              (goto-char (point-min))
+              (scalpel-console-send-line)))
+          (ert-info ((format "requests=%d asked=%d" requests asked))
+            (should (= requests 2))
+            (should (= asked 0))))
       (scalpel-utils-test-kill-buffer (buffer-name buf)))))
 
 (ert-deftest scalpel-console-test-sandbox-error-stays-out-of-conversation ()
