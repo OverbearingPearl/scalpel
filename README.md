@@ -260,8 +260,9 @@ M-x scalpel-open
 
 Inside the console:
 
-- `RET` – send the current input line to Scalpel
-- `C-c C-c` – also send the current input line
+- `RET` – send everything typed since the last reply
+- `S-RET` – insert a newline, so an instruction may span several lines
+- `C-c C-c` – also send the pending instruction
 - `C-g` – cancel a running request
 - `C-c C-b` – switch the active gptel backend (model) for future requests
 - `C-c C-a` – add a file or directory as writable context

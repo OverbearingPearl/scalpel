@@ -477,7 +477,7 @@ Regression: the command was split on spaces and handed to
         (should (string-match-p "HELLO" piped))))
     (let ((failed (scalpel-agent-shell "exit 3" "check exit status")))
       (ert-info ((format "Report:\n%S" failed))
-        (should (string-match-p "EXIT 3" failed))))))
+        (should (string-match-p "Exit: 3" failed))))))
 
 (ert-deftest scalpel-agent-test-action-summary-prefers-target ()
   "Confirmation prompts describe what will run or change.
@@ -495,6 +495,36 @@ was confirmed without ever being displayed."
   (should (string= (scalpel-agent--action-summary
                     '(:tool "confirm" :reason "need input"))
                    "need input")))
+
+(ert-deftest scalpel-agent-test-shell-report-is-delimited ()
+  "Shell reports name the command, state the exit status, and end.
+Regression: success omitted the exit status and nothing marked the
+end of the output, so the report of several commands could not be
+told apart from one command whose output contained the same text."
+  (let ((scalpel-console--root nil)
+        (default-directory (file-name-as-directory
+                            (expand-file-name temporary-file-directory))))
+    (let ((report (scalpel-agent-shell "echo hi" "check delimiters")))
+      (ert-info ((format "Report:\n%S" report))
+        (should (string-match-p "\\`Shell: echo hi\n" report))
+        (should (string-match-p "\nExit: 0\n" report))
+        (should (string-match-p "\n--- output ---\n" report))
+        (should (string-match-p "--- end output ---\\'" report))))))
+
+(ert-deftest scalpel-agent-test-prompt-includes-history ()
+  "The prompt carries the conversation before the instruction.
+Regression: only the context and the newest instruction were sent,
+so a follow-up such as \"the third point is wrong\" had no referent."
+  (let ((scalpel-agent--context-files nil)
+        (scalpel-agent--context-readonly-files nil))
+    (let ((prompt (scalpel-agent--prompt "second"
+                                         "User: first\nScalpel: reply\n")))
+      (ert-info ((format "Prompt:\n%S" prompt))
+        (should (string-match-p "Conversation so far:\nUser: first" prompt))
+        (should (string-suffix-p "User instruction:\nsecond" prompt))))
+    (let ((prompt (scalpel-agent--prompt "first" nil)))
+      (ert-info ((format "Prompt:\n%S" prompt))
+        (should-not (string-match-p "Conversation so far:" prompt))))))
 
 (provide 'scalpel-agent-test)
 

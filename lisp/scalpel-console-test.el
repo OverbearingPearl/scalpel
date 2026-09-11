@@ -342,6 +342,92 @@ newly inserted Context block."
                                        "Scalpel: ack\n\n"))))))
       (scalpel-utils-test-kill-buffer (buffer-name buf)))))
 
+(ert-deftest scalpel-console-test-history-keeps-only-conversation ()
+  "Display-only output never reaches the LLM.
+Regression: the buffer holds context trees and status lines next to
+the conversation, so dumping the buffer would send all of it."
+  (let ((scalpel-agent--context-files '("/tmp/scalpel-history.el"))
+        (scalpel-agent--context-readonly-files nil)
+        (scalpel-console--context-baseline 'none-yet)
+        (buf (scalpel-console-test--new-console-buffer)))
+    (unwind-protect
+        (with-current-buffer buf
+          (erase-buffer)
+          (insert "Scalpel console.\n\n")
+          (scalpel-console--insert-tagged "User: hello\n" 'user)
+          (scalpel-console--show-context)
+          (ert-info ((format "Buffer:\n%S" (buffer-string)))
+            (should (string= (scalpel-console--history) "User: hello"))))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
+
+(ert-deftest scalpel-console-test-send-line-sends-recorded-conversation ()
+  "Each round re-sends the replies recorded in the buffer."
+  (let ((scalpel-agent--context-files nil)
+        (scalpel-agent--context-readonly-files nil)
+        (buf (scalpel-console-test--new-console-buffer))
+        (prompts nil))
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'scalpel-llm-request)
+                     (lambda (prompt &optional _system)
+                       (push prompt prompts)
+                       "[{\"tool\":\"reply\",\"text\":\"first reply\"}]")))
+            (with-current-buffer buf
+              (erase-buffer)
+              (insert "first instruction\n")
+              (goto-char (point-min))
+              (scalpel-console-send-line))
+            (with-current-buffer buf
+              (goto-char (point-max))
+              (insert "second instruction\n")
+              (scalpel-console-send-line)))
+          (ert-info ((format "Prompts:\n%S" prompts))
+            (should (= (length prompts) 2))
+            ;; `prompts' is pushed, so its head is the second request.
+            ;; The newest instruction is framed under "User instruction:";
+            ;; "User: " belongs to the recorded history only.
+            (should (string-match-p "Conversation so far:\nUser: first instruction"
+                                    (car prompts)))
+            (should (string-match-p "Scalpel: first reply" (car prompts)))
+            (should (string-suffix-p "User instruction:\nsecond instruction"
+                                     (car prompts)))
+            (should-not (string-match-p "Conversation so far:"
+                                        (cadr prompts)))))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
+
+(ert-deftest scalpel-console-test-send-line-continues-after-shell ()
+  "A round that ran a shell command is followed by another round.
+Regression: the agent had no way to read the output of the command
+it asked for, so \"run the tests\" could not lead to a fix."
+  (let ((scalpel-agent--context-files nil)
+        (scalpel-agent--context-readonly-files nil)
+        (scalpel-agent-confirm-tools nil)
+        (scalpel-console-continue-after-shell 'always)
+        (scalpel-console-max-rounds 3)
+        (buf (scalpel-console-test--new-console-buffer))
+        (prompts nil))
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'scalpel-llm-request)
+                     (lambda (prompt &optional _system)
+                       (push prompt prompts)
+                       (if (= (length prompts) 1)
+                           "[{\"tool\":\"shell\",\"command\":\"echo hello\",\"reason\":\"check the loop\"}]"
+                         "[{\"tool\":\"reply\",\"text\":\"done\"}]"))))
+            (with-current-buffer buf
+              (erase-buffer)
+              (insert "run the tests\n")
+              (goto-char (point-min))
+              (scalpel-console-send-line)))
+          (should (= (length prompts) 2))
+          (ert-info ((format "Second prompt:\n%S" (car prompts)))
+            (should (string-match-p "Shell: echo hello" (car prompts))))
+          (with-current-buffer buf
+            (ert-info ((format "Buffer:\n%S" (buffer-string)))
+              (should (string-match-p "Shell: echo hello" (buffer-string)))
+              (should (string-match-p "Scalpel: done" (buffer-string))))))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
+
 (provide 'scalpel-console-test)
 
 ;;; scalpel-console-test.el ends here

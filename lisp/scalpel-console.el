@@ -23,6 +23,28 @@ so a console opened at /home/me/proj is named \"*scalpel: ~/proj*\"."
   :type 'string
   :group 'scalpel)
 
+(defcustom scalpel-console-max-rounds 3
+  "Maximum agent rounds one instruction may trigger.
+A round is one request/execute cycle.  A round that ran shell
+commands may be followed by another so the agent can act on their
+output; this caps the chain, because a command the agent cannot fix
+would otherwise loop forever."
+  :type 'integer
+  :group 'scalpel)
+
+(defcustom scalpel-console-continue-after-shell 'ask
+  "Whether a round that ran shell commands is followed by another.
+`always' continues without asking, up to
+`scalpel-console-max-rounds'.  `ask' prompts once per round, naming
+the commands whose output would be sent back, so the user keeps a
+review point before the agent acts on command output.  nil never
+continues: the user sends the next instruction when ready.  Batch
+runs never continue regardless of this value."
+  :type '(choice (const :tag "Never" nil)
+                 (const :tag "Ask" ask)
+                 (const :tag "Always continue" always))
+  :group 'scalpel)
+
 (defvar-local scalpel-console--root nil
   "Absolute directory this console session is anchored to.
 Set by `scalpel-console-open'; while non-nil, `default-directory'
@@ -160,16 +182,44 @@ also anchors the buffer to a root directory."
   (setq-local comment-start "")
   (setq buffer-read-only nil))
 
-(defun scalpel-console--append (text)
+(defun scalpel-console--insert-tagged (text role)
+  "Insert TEXT at point tagged with ROLE in `scalpel-console-role'.
+The tag is what `scalpel-console--history' reads back, so text
+inserted through here becomes part of the conversation sent to the
+LLM.  Display-only output must not use it."
+  (let ((beg (point)))
+    (insert text)
+    (put-text-property beg (point) 'scalpel-console-role role)))
+
+(defun scalpel-console--history ()
+  "Return the conversation recorded in the current buffer, as text.
+Every region carrying a `scalpel-console-role' property is joined in
+buffer order; regions without one — the header, context trees,
+status lines — are dropped.  The buffer is the only record: nothing
+is kept in a variable, so what the user sees is what the agent
+gets."
+  (let ((pos (point-min))
+        (parts nil))
+    (while (< pos (point-max))
+      (let ((next (next-single-property-change
+                   pos 'scalpel-console-role nil (point-max))))
+        (when (get-text-property pos 'scalpel-console-role)
+          (push (buffer-substring-no-properties pos next) parts))
+        (setq pos next)))
+    (string-trim (string-join (nreverse parts) ""))))
+
+(defun scalpel-console--append (text &optional role)
   "Append TEXT to the end of the console buffer.
-Point moves to the new end, so the user always sees the latest
-output after a context refresh or reply."
+ROLE, when non-nil, tags TEXT as part of the conversation
+\(`user' or `assistant'), so `scalpel-console--history' reads it
+back; output appended without a role is display-only, as context
+trees are.  Point moves to the new end, so the user always sees the
+latest output after a context refresh or reply."
   (let ((buf (scalpel-console--target-buffer)))
     (with-current-buffer buf
+      (goto-char (point-max))
       (let ((inhibit-read-only t))
-        (save-excursion
-          (goto-char (point-max))
-          (insert (format "%s\n\n" text))))
+        (scalpel-console--insert-tagged (format "%s\n\n" text) role))
       (goto-char (point-max))
       ;; Freshly appended output is never part of the next instruction.
       (setq scalpel-console--input-start (point-max)))))
@@ -285,10 +335,80 @@ that path."
     (scalpel-console--show-context)
     (goto-char (point-max))))
 
+(defun scalpel-console--run-round (instruction history)
+  "Run one agent round for INSTRUCTION and append its report.
+HISTORY is the conversation text to send along.  Return the plist
+from `scalpel-agent-run', or nil when the round failed; a failure
+is appended like a reply, so the next round can read it instead of
+losing it."
+  (let ((status (scalpel-console--status-start)))
+    (let ((refresh (car status))
+          (stop (cdr status)))
+      (unwind-protect
+          (condition-case err
+              (let* ((scalpel-llm--progress-callback refresh)
+                     (result (scalpel-agent-run instruction history)))
+                (funcall stop)
+                (let ((inhibit-read-only t))
+                  (scalpel-console--insert-tagged
+                   (format "Scalpel: %s\n\n" (plist-get result :report))
+                   'assistant))
+                result)
+            (error
+             (funcall stop)
+             (let ((inhibit-read-only t))
+               (scalpel-console--insert-tagged
+                (format "Scalpel error: %s\n\n" (error-message-string err))
+                'assistant))
+             nil))
+        ;; The finished round leaves its report or its error text at the end
+        ;; of the buffer, so nothing is pending any more.
+        (setq scalpel-console--input-start (point-max))))))
+
+(defun scalpel-console--continue-p (result)
+  "Return non-nil when another round should follow RESULT.
+RESULT is a `scalpel-agent-run' result whose round ran shell
+commands.  Batch runs never continue, so an unattended run can
+never block on a prompt."
+  (pcase scalpel-console-continue-after-shell
+    ('always t)
+    ('ask (and (not noninteractive)
+               (yes-or-no-p
+                (format "Send the output of %s back to Scalpel %s?"
+                        (if (= (length (plist-get result :shells)) 1)
+                            "this command"
+                          (format "these %d commands"
+                                  (length (plist-get result :shells))))
+                        (format "(%s)"
+                                (string-join (plist-get result :shells)
+                                             ", "))))))
+    (_ nil)))
+
+(defun scalpel-console--run-rounds (instruction history)
+  "Run agent rounds for INSTRUCTION until the loop ends.
+HISTORY is the conversation recorded before INSTRUCTION.  A round
+that ran shell commands may be followed by another, up to
+`scalpel-console-max-rounds'.  Each round re-reads the conversation
+from the buffer, so shell output reaches the next round without
+anything being carried in a variable."
+  (let ((scalpel-console--busy t)
+        (round 0)
+        (conversation history)
+        (more t))
+    (while (and more (< round scalpel-console-max-rounds))
+      (setq round (1+ round))
+      (let ((result (scalpel-console--run-round instruction conversation)))
+        (setq conversation (scalpel-console--history))
+        (setq more (and result
+                        (plist-get result :shells)
+                        (scalpel-console--continue-p result)))))))
+
 (defun scalpel-console-send-line ()
   "Send the pending instruction to the Scalpel agent and append the reply.
 The pending instruction is every line typed since the last appended
-output, so text composed with S-RET is sent as a single message."
+output, so text composed with S-RET is sent as a single message.
+Every round re-sends the conversation recorded in this buffer, so
+the agent can read its own earlier replies and shell output."
   (interactive)
   (if scalpel-console--busy
       (progn
@@ -302,33 +422,16 @@ output, so text composed with S-RET is sent as a single message."
                      (buffer-substring-no-properties beg (point-max)))))
         (if (string-empty-p instr)
             (message "Scalpel: nothing to send.")
-          (progn
+          ;; Read the conversation before this instruction joins it.
+          (let ((history (scalpel-console--history)))
             ;; Rewrite the typed input into the logged user message, so the
             ;; instruction is not shown twice (once raw, once prefixed).
             (let ((inhibit-read-only t))
               (delete-region beg (point-max))
               (goto-char beg)
-              (insert (format "User: %s\n" instr)))
-            (let ((scalpel-console--busy t)
-                  (status (scalpel-console--status-start)))
-              (let ((refresh (car status))
-                    (stop (cdr status)))
-                (unwind-protect
-                    (condition-case err
-                        (let* ((scalpel-llm--progress-callback refresh)
-                               (report (scalpel-agent-run instr)))
-                          (funcall stop)
-                          (let ((inhibit-read-only t))
-                            (insert (format "Scalpel: %s\n\n" report))))
-                      (error
-                       (funcall stop)
-                       (let ((inhibit-read-only t))
-                         (insert (format "Scalpel error: %s\n\n"
-                                         (error-message-string err))))))
-                  (setq scalpel-console--busy nil)
-                  ;; The finished request leaves its reply or its error text
-                  ;; at the end of the buffer, so nothing is pending any more.
-                  (setq scalpel-console--input-start (point-max)))))
+              (scalpel-console--insert-tagged
+               (format "User: %s\n" instr) 'user))
+            (scalpel-console--run-rounds instr history)
             (goto-char (point-max))
             (message "Scalpel: instruction sent.")))))))
 
