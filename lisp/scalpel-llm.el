@@ -144,6 +144,9 @@ surfaced by gptel, `api-key' for a missing or invalid API key, and
                              ((and (consp resp) (eq (car resp) 'reasoning))
                               (when (stringp (cdr resp))
                                 (scalpel-llm--append-reasoning (cdr resp))
+                                (setq scalpel-llm--tokens-received
+                                      (+ scalpel-llm--tokens-received
+                                         (scalpel-llm--count-tokens (cdr resp))))
                                 (when scalpel-llm--progress-callback
                                   (funcall scalpel-llm--progress-callback))))))))
             (arm-timeout))

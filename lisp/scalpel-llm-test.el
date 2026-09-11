@@ -190,6 +190,37 @@ the synchronous entry point prevented."
       (with-current-buffer (get-buffer scalpel-llm-reasoning-buffer-name)
         (should (string= (buffer-string) "step 1 step 2"))))))
 
+(ert-deftest scalpel-llm-test-async-counts-reasoning-tokens ()
+  "Reasoning chunks count toward the received-token total.
+The console's down counter tracks all downstream data, so a model
+that streams a long reasoning pass before its reply must show
+progress during that pass, not stall at zero."
+  (scalpel-llm-test-with-clean-reasoning-buffer
+    (let* ((scalpel-llm-timeout 5)
+           (reasoning "step 1 ")
+           (reasoning-tokens (scalpel-llm--count-tokens reasoning))
+           tokens-after-reasoning
+           delivered)
+      (cl-letf (((symbol-function 'gptel-request)
+                 (lambda (_prompt &rest args)
+                   (let ((cb (plist-get args :callback)))
+                     (funcall cb (cons 'reasoning reasoning) nil)
+                     ;; Snapshot before any content arrives: at this point
+                     ;; only reasoning has been streamed, so the down
+                     ;; counter must already be past its reset value.
+                     (setq tokens-after-reasoning scalpel-llm--tokens-received)
+                     (funcall cb "answer" nil)
+                     (funcall cb t nil))
+                   'fake-fsm)))
+        (scalpel-llm-request-async
+         "test prompt"
+         (lambda (response) (setq delivered response))
+         (lambda (err) (ert-fail (plist-get err :message)))))
+      (ert-info ((format "tokens-received=%S after reasoning only (expected %d)"
+                         tokens-after-reasoning reasoning-tokens))
+        (should (= tokens-after-reasoning reasoning-tokens)))
+      (should (string= delivered "answer")))))
+
 (ert-deftest scalpel-llm-test-async-reports-backend-error ()
   "A nil RESPONSE from gptel is reported through ON-ERROR as `api'."
   (scalpel-llm-test-with-clean-reasoning-buffer
