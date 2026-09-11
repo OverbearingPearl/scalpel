@@ -270,6 +270,22 @@ so non-zero counters made STOP delete a character inside
             (should (string= (buffer-string) "User: hi\n"))))
       (when (buffer-live-p buf) (kill-buffer buf)))))
 
+(ert-deftest scalpel-console-test-open-is-not-a-command ()
+  "Only `scalpel-open' is the user entry; `scalpel-console-open' is internal."
+  (should-not (commandp 'scalpel-console-open)))
+
+(ert-deftest scalpel-console-test-send-line-fails-loudly-without-root ()
+  "A console buffer entered without `scalpel-console-open' fails loudly.
+The mode function stays reachable via \\[execute-extended-command],
+since major modes are commands, so a rootless buffer must signal
+instead of silently anchoring agent side effects to the current
+directory."
+  (with-temp-buffer
+    (scalpel-console-mode)
+    (should (null scalpel-console--root))
+    (ert-info ("Rootless console must refuse to send")
+      (should-error (scalpel-console-send-line) :type 'user-error))))
+
 (provide 'scalpel-console-test)
 
 ;;; scalpel-console-test.el ends here

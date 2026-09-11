@@ -56,8 +56,15 @@ ROOT is expanded, normalized with `file-name-as-directory' and
 Return the current buffer when it is a console buffer; otherwise
 return the console buffer whose root contains `default-directory',
 or signal a `user-error' when there is none."
-  (if (derived-mode-p 'scalpel-console-mode)
-      (current-buffer)
+  (cond
+   ((derived-mode-p 'scalpel-console-mode)
+    ;; The mode function is reachable via M-x; a buffer entered that way
+    ;; has no root, so fail loud instead of anchoring to the caller's
+    ;; default-directory.
+    (unless scalpel-console--root
+      (user-error "Scalpel: console buffer has no root; use `scalpel-open'"))
+    (current-buffer))
+   (t
     (let ((dir (file-name-as-directory (expand-file-name default-directory)))
           found)
       (dolist (buf (buffer-list))
@@ -67,7 +74,7 @@ or signal a `user-error' when there is none."
                        (string-prefix-p scalpel-console--root dir))
               (setq found buf)))))
       (or found
-          (user-error "Scalpel: no console for %s; run `scalpel-open'" dir)))))
+          (user-error "Scalpel: no console for %s; run `scalpel-open'" dir))))))
 
 (defvar scalpel-console-mode-map
   (let ((map (make-sparse-keymap)))
@@ -123,7 +130,9 @@ newline, so the cursor returns to the line the status occupied."
   "Major mode for Scalpel's interactive console buffer.
 
 Type a natural-language instruction on its own line and press RET.
-The agent will process the instruction and append its reply to this buffer."
+The agent will process the instruction and append its reply to this buffer.
+Not a user entry point: open a console with `scalpel-open', which
+also anchors the buffer to a root directory."
   (setq-local electric-indent-mode nil)
   (setq-local comment-start "")
   (setq buffer-read-only nil))
@@ -218,11 +227,11 @@ filter directory expansion through gitignore rules."
 
 (defun scalpel-console-open ()
   "Open (or switch to) the Scalpel console buffer and clear its contents.
+Internal setup routine of `scalpel-open'; not an interactive command.
 The console is anchored to `default-directory' at call time: the
 buffer name embeds the path and the buffer's `default-directory' is
 pinned to it, so any file-system command run inside the console uses
 that path."
-  (interactive)
   (let* ((root (file-name-as-directory (expand-file-name default-directory)))
          (buf (get-buffer-create (scalpel-console--buffer-name root))))
     (switch-to-buffer buf)
