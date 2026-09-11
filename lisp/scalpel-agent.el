@@ -71,6 +71,13 @@ a command in a reply's \"text\" and never write it as prose.
 Never invent commands the user did not ask for, and never use shell
 to change files: all file changes go through edit, create and
 delete.
+A shell command may act only on the files listed in the context
+above, and only inside the directories those paths name.  Write
+those paths exactly as they are given; never use cd, ~, .., or an
+absolute path that points outside them, and never pipe output into
+a command that writes elsewhere.  When the request cannot be
+carried out that way, do not approximate it: emit a confirm action
+and let the user decide.
 If the conversation already contains the output of a shell command
 you were asked to run, read that output and respond with the
 conclusion instead of running the same command again.  A continued
