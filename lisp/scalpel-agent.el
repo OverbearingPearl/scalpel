@@ -55,9 +55,21 @@ Each action is one of:
 {\"tool\":\"reply\",\"text\":\"...\"}
 {\"tool\":\"create\",\"file\":\"/abs/path.el\",\"symbol\":\"new-name\",\"instruction\":\"...\",\"after\":\"existing-symbol\"}
 {\"tool\":\"delete\",\"file\":\"/abs/path.el\",\"symbol\":\"name\"}
+{\"tool\":\"shell\",\"command\":\"...\",\"reason\":\"...\"}
+{\"tool\":\"confirm\",\"text\":\"...\"}
+Use shell whenever the user asks you to run something: tests,
+builds, linters, git.  \"command\" is run by a shell, so pipes,
+redirection and quoting work; \"reason\" is required and states
+why the command is run.  Never answer with a reply that merely
+describes a command instead of running it.  Never invent commands
+the user did not ask for, and never use shell to change files:
+all file changes go through edit, create and delete.
+Use confirm only to hand control back to the user with a
+question; it must be the last action of the array.
 Never emit code or diff text in this response.
 Files shown as \"FILE (READONLY)\" are references only: never emit an
-edit, create, or delete action for them."
+edit, create or delete action for them, and never run a shell
+command that changes them."
   "System prompt for the Scalpel agent planner.
 This controls only the wording sent to the LLM; the action schema
 is fixed by `scalpel-agent--tool-fields' and
@@ -715,9 +727,11 @@ Return human-readable report string."
                 (buffer-name (current-buffer)))))))
 
 (defun scalpel-agent-shell (command reason)
-  "Run COMMAND in the console root and return its truncated output.
-REASON is the planner's stated intent, echoed in the report.
-Output is truncated to `scalpel-agent-shell-max-bytes' bytes."
+  "Run COMMAND through a shell in the console root.
+COMMAND may use pipes, redirection and quoting.  Output is
+truncated to `scalpel-agent-shell-max-bytes' bytes and prefixed
+with EXIT N when the command exited non-zero.  REASON is the
+planner's stated intent, echoed in the report."
   (unless (and command reason)
     (user-error "Scalpel: malformed shell action"))
   (let* ((root (or (and (bound-and-true-p scalpel-console--root)
@@ -728,11 +742,11 @@ Output is truncated to `scalpel-agent-shell-max-bytes' bytes."
           (with-temp-buffer
             (let ((default-directory root)
                   (process-environment (scalpel-agent--git-environment)))
+              ;; COMMAND is a shell command line, not an argv vector:
+              ;; it must reach the shell intact.
               (let ((status (condition-case err
-                                (apply #'call-process
-                                       (split-string command " ")
-                                       nil t nil)
-                            (error (format "ERROR: %s" err)))))
+                                (call-process-shell-command command nil t)
+                              (error (format "ERROR: %s" err)))))
                 (if (and (numberp status) (= status 0))
                     (buffer-string)
                   (format "EXIT %s\n%s" status (buffer-string)))))))
@@ -752,15 +766,29 @@ The planner must emit this as its final action."
     (user-error "Scalpel: malformed confirm action"))
   text)
 
+(defun scalpel-agent--action-summary (action)
+  "Return a one-line description of ACTION for the confirmation prompt.
+Prefer the action's target over its stated reason, so the user can
+see what is about to run or change; fall back to `:reason' when
+the action has no target."
+  (or (plist-get action :command)
+      (plist-get action :text)
+      (let ((file (plist-get action :file))
+            (symbol (plist-get action :symbol)))
+        (cond ((and file symbol) (format "%s in %s" symbol file))
+              (file file)))
+      (plist-get action :reason)
+      "no reason"))
+
 (defun scalpel-agent-execute-action (action)
   "Execute a single ACTION plist and return a report string."
   (let ((tool (plist-get action :tool)))
     (unless (member tool scalpel-agent--tool-vocabulary)
       (user-error "Scalpel: unknown action tool %S" tool))
     (when (member tool scalpel-agent-confirm-tools)
-      (unless (yes-or-no-p (format "Execute %s action (%s)?"
-                                   tool (or (plist-get action :reason)
-                                            "no reason")))
+      (unless (yes-or-no-p (format "Execute %s action: %s?"
+                                   tool
+                                   (scalpel-agent--action-summary action)))
         (user-error "Scalpel: %s action cancelled by user" tool)))
     (pcase tool
       ("edit"

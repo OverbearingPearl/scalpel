@@ -32,18 +32,6 @@
   "Deterministic Emacs-native coding agent."
   :group 'tools)
 
-(defcustom scalpel-system-prompt
-  "You are a precise code transformation tool. The user gives you
-context and an instruction. Return ONLY a JSON array of actions.
-The top-level response must be a JSON array, never a single object.
-Each action is either {\"tool\":\"edit\",\"file\":\"/abs/path.el\",\"symbol\":\"name\",\"instruction\":\"...\"}
-or {\"tool\":\"reply\",\"text\":\"...\"}. Never emit code or diff text in this response.
-Files shown as \"FILE (READONLY)\" are references only: never emit an
-edit action for them."
-  "System prompt used by Scalpel when asking the LLM to plan or edit."
-  :type 'string
-  :group 'scalpel)
-
 ;;;###autoload
 (defun scalpel-open ()
   "Open the Scalpel agent console."

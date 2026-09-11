@@ -453,6 +453,49 @@ field list was always nil and the projected action lost its keys."
       (should (equal (plist-get (car actions) :tool) "reply"))
       (should (equal (plist-get (car actions) :text) "hi")))))
 
+(ert-deftest scalpel-agent-test-system-prompt-declares-every-tool ()
+  "Every dispatchable tool must be declared to the planner.
+Regression: `shell' was dispatchable and implemented but absent
+from the system prompt, so the planner could never emit it."
+  (dolist (tool scalpel-agent--tool-vocabulary)
+    (ert-info ((format "Tool %S is not declared in `scalpel-agent-system-prompt'"
+                       tool))
+      (should (string-match-p
+               (format "\"tool\"[ \t]*:[ \t]*\"%s\"" (regexp-quote tool))
+               scalpel-agent-system-prompt)))))
+
+(ert-deftest scalpel-agent-test-shell-runs-command-through-a-shell ()
+  "Shell actions support pipes and report the command's exit status.
+Regression: the command was split on spaces and handed to
+`call-process', so shell syntax worked only by accident."
+  (let ((scalpel-console--root nil)
+        (default-directory (file-name-as-directory
+                            (expand-file-name temporary-file-directory))))
+    (let ((piped (scalpel-agent-shell "echo hello | tr a-z A-Z"
+                                      "check shell semantics")))
+      (ert-info ((format "Report:\n%S" piped))
+        (should (string-match-p "HELLO" piped))))
+    (let ((failed (scalpel-agent-shell "exit 3" "check exit status")))
+      (ert-info ((format "Report:\n%S" failed))
+        (should (string-match-p "EXIT 3" failed))))))
+
+(ert-deftest scalpel-agent-test-action-summary-prefers-target ()
+  "Confirmation prompts describe what will run or change.
+Regression: the prompt showed only the reason, so a shell command
+was confirmed without ever being displayed."
+  (should (string= (scalpel-agent--action-summary
+                    '(:tool "shell" :command "make test" :reason "run tests"))
+                   "make test"))
+  (should (string= (scalpel-agent--action-summary
+                    '(:tool "edit" :file "/tmp/a.el" :symbol "foo"))
+                   "foo in /tmp/a.el"))
+  (should (string= (scalpel-agent--action-summary
+                    '(:tool "reply" :text "hi"))
+                   "hi"))
+  (should (string= (scalpel-agent--action-summary
+                    '(:tool "confirm" :reason "need input"))
+                   "need input")))
+
 (provide 'scalpel-agent-test)
 
 ;;; scalpel-agent-test.el ends here
