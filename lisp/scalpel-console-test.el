@@ -270,6 +270,78 @@ newly inserted Context block."
             (should (= (point) (point-max)))))
       (when (buffer-live-p buf) (kill-buffer buf)))))
 
+(ert-deftest scalpel-console-test-shift-return-inserts-newline ()
+  "S-RET is bound to a newline insertion, not to sending."
+  (let ((scalpel-agent--context-files nil)
+        (scalpel-agent--context-readonly-files nil)
+        (buf (scalpel-console-test--new-console-buffer)))
+    (unwind-protect
+        (cl-letf (((symbol-function 'scalpel-llm-request)
+                   (lambda (&rest _)
+                     (error "S-RET must not send the instruction"))))
+          (with-current-buffer buf
+            (erase-buffer)
+            (insert "line one")
+            (goto-char (point-max))
+            (let ((cmd (key-binding (kbd "S-<return>"))))
+              (ert-info ((format "S-<return> resolves to: %S" cmd))
+                (should (eq cmd #'newline)))
+              (call-interactively cmd))
+            (insert "line two")
+            (ert-info ((format "Buffer:\n%S" (buffer-string)))
+              (should (string= (buffer-string) "line one\nline two")))))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
+
+(ert-deftest scalpel-console-test-send-line-sends-multiline-block ()
+  "RET sends every pending line, not only the line point is on."
+  (let ((scalpel-agent--context-files nil)
+        (scalpel-agent--context-readonly-files nil)
+        (buf (scalpel-console-test--new-console-buffer))
+        prompt-sent)
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'scalpel-llm-request)
+                     (lambda (prompt &optional _system)
+                       (setq prompt-sent prompt)
+                       "[{\"tool\":\"reply\",\"text\":\"done\"}]")))
+            (with-current-buffer buf
+              (erase-buffer)
+              (insert "line one\nline two\n")
+              ;; Point on the first line: the whole block must still be sent.
+              (goto-char (point-min))
+              (scalpel-console-send-line))
+            (with-current-buffer buf
+              (ert-info ((format "Buffer:\n%S" (buffer-string)))
+                (should (string= (buffer-string)
+                                 "User: line one\nline two\nScalpel: done\n\n")))))
+          (ert-info ((format "Prompt sent to the LLM:\n%S" prompt-sent))
+            (should (string-suffix-p "User instruction:\nline one\nline two"
+                                     prompt-sent))))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
+
+(ert-deftest scalpel-console-test-send-line-ignores-previous-output ()
+  "Text appended by earlier turns is never re-sent as the instruction."
+  (let ((scalpel-agent--context-files nil)
+        (scalpel-agent--context-readonly-files nil)
+        (buf (scalpel-console-test--new-console-buffer)))
+    (unwind-protect
+        (cl-letf (((symbol-function 'scalpel-llm-request)
+                   (lambda (&rest _)
+                     "[{\"tool\":\"reply\",\"text\":\"ack\"}]")))
+          (with-current-buffer buf
+            (erase-buffer)
+            (insert "User: old\nScalpel: old reply\n\n")
+            (setq-local scalpel-console--input-start (point-max))
+            (insert "new instruction")
+            (goto-char (point-max))
+            (scalpel-console-send-line)
+            (ert-info ((format "Buffer:\n%S" (buffer-string)))
+              (should (string= (buffer-string)
+                               (concat "User: old\nScalpel: old reply\n\n"
+                                       "User: new instruction\n"
+                                       "Scalpel: ack\n\n"))))))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
+
 (provide 'scalpel-console-test)
 
 ;;; scalpel-console-test.el ends here

@@ -8,8 +8,9 @@
 
 ;;; Commentary:
 ;; Provides the *scalpel* buffer where users type a textual instruction and
-;; press RET to send it to the agent.  The buffer is a normal editable text
-;; buffer, so users can review prior turns.
+;; press RET to send it to the agent.  S-RET inserts a newline, so an
+;; instruction may span several lines and is still sent as one message.  The
+;; buffer is a normal editable text buffer, so users can review prior turns.
 
 ;;; Code:
 
@@ -31,6 +32,12 @@ in the console buffer is pinned to this value.")
   "Context entries shown by the previous refresh.
 The symbol `none-yet' means no refresh has happened in this
 console buffer yet, so nothing is highlighted as changed.")
+
+(defvar-local scalpel-console--input-start nil
+  "Buffer position where the user's pending instruction begins.
+Everything between this position and `point-max' is what RET sends.
+Nil means the whole buffer counts as pending input, which is what a
+console buffer created without `scalpel-console-open' gets.")
 
 (defface scalpel-console-context-added-face
   '((t :inherit bold))
@@ -81,9 +88,18 @@ or signal a `user-error' when there is none."
       (or found
           (user-error "Scalpel: no console for %s; run `scalpel-open'" dir))))))
 
+(defun scalpel-console--pending-input-start ()
+  "Return the start of the pending instruction.
+Fall back to `point-min' when `scalpel-console--input-start' is
+unset, and clamp to `point-max' so a stale value from
+`erase-buffer' cannot cause an out-of-range error."
+  (min (or scalpel-console--input-start (point-min)) (point-max)))
+
 (defvar scalpel-console-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "RET") #'scalpel-console-send-line)
+    ;; S-RET inserts a literal newline; RET sends the whole composed block.
+    (define-key map (kbd "S-<return>") #'newline)
     (define-key map (kbd "C-c C-c") #'scalpel-console-send-line)
     (define-key map (kbd "C-c C-b") #'scalpel-llm-select-backend)
     (define-key map (kbd "C-c C-a") #'scalpel-console-add-file)
@@ -134,8 +150,10 @@ newline, so the cursor returns to the line the status occupied."
 (define-derived-mode scalpel-console-mode text-mode "Scalpel Console"
   "Major mode for Scalpel's interactive console buffer.
 
-Type a natural-language instruction on its own line and press RET.
-The agent will process the instruction and append its reply to this buffer.
+Type a natural-language instruction and press RET to send it; S-RET
+inserts a newline instead, so an instruction may span several lines.
+The agent processes the whole pending instruction and appends its
+reply to this buffer.
 Not a user entry point: open a console with `scalpel-open', which
 also anchors the buffer to a root directory."
   (setq-local electric-indent-mode nil)
@@ -152,7 +170,9 @@ output after a context refresh or reply."
         (save-excursion
           (goto-char (point-max))
           (insert (format "%s\n\n" text))))
-      (goto-char (point-max)))))
+      (goto-char (point-max))
+      ;; Freshly appended output is never part of the next instruction.
+      (setq scalpel-console--input-start (point-max)))))
 
 (defun scalpel-console--render-diff (lines)
   "Return LINES as text with per-name change highlighting.
@@ -256,15 +276,19 @@ that path."
       (erase-buffer)
       (goto-char (point-min))
       (insert "Scalpel console.\n")
-      (insert "Type an instruction on its own line and press RET.\n")
+      (insert "Type an instruction; S-RET inserts a newline, RET sends it.\n")
       (insert "\n")
-      (goto-char (point-max)))
+      (goto-char (point-max))
+      ;; The header is output, not pending input.
+      (setq scalpel-console--input-start (point-max)))
     (scalpel-agent-context-reset)
     (scalpel-console--show-context)
     (goto-char (point-max))))
 
 (defun scalpel-console-send-line ()
-  "Send the current line to the Scalpel agent and append the reply."
+  "Send the pending instruction to the Scalpel agent and append the reply.
+The pending instruction is every line typed since the last appended
+output, so text composed with S-RET is sent as a single message."
   (interactive)
   (if scalpel-console--busy
       (progn
@@ -273,18 +297,16 @@ that path."
     (let ((buf (scalpel-console--target-buffer)))
       (unless (eq (current-buffer) buf)
         (switch-to-buffer buf))
-      (let* ((instr (string-trim
-                    (buffer-substring-no-properties
-                     (line-beginning-position) (line-end-position)))))
+      (let* ((beg (scalpel-console--pending-input-start))
+             (instr (string-trim
+                     (buffer-substring-no-properties beg (point-max)))))
         (if (string-empty-p instr)
-            (message "Scalpel: nothing to send on this line.")
+            (message "Scalpel: nothing to send.")
           (progn
-            ;; Rewrite the typed input line into the logged user message, so
-            ;; the instruction is not shown twice (once raw, once prefixed).
-            (let ((inhibit-read-only t)
-                  (beg (line-beginning-position))
-                  (end (line-end-position)))
-              (delete-region beg end)
+            ;; Rewrite the typed input into the logged user message, so the
+            ;; instruction is not shown twice (once raw, once prefixed).
+            (let ((inhibit-read-only t))
+              (delete-region beg (point-max))
               (goto-char beg)
               (insert (format "User: %s\n" instr)))
             (let ((scalpel-console--busy t)
@@ -303,7 +325,10 @@ that path."
                        (let ((inhibit-read-only t))
                          (insert (format "Scalpel error: %s\n\n"
                                          (error-message-string err))))))
-                  (setq scalpel-console--busy nil))))
+                  (setq scalpel-console--busy nil)
+                  ;; The finished request leaves its reply or its error text
+                  ;; at the end of the buffer, so nothing is pending any more.
+                  (setq scalpel-console--input-start (point-max)))))
             (goto-char (point-max))
             (message "Scalpel: instruction sent.")))))))
 
