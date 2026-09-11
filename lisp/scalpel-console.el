@@ -34,7 +34,7 @@ so a console opened at /home/me/proj is named \"*scalpel: ~/proj*\"."
   :type 'string
   :group 'scalpel)
 
-(defcustom scalpel-console-max-rounds 3
+(defcustom scalpel-console-max-rounds 30
   "Maximum agent rounds one instruction may trigger.
 A round is one request/execute cycle.  A round that ran shell
 commands may be followed by another so the agent can act on their
