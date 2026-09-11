@@ -96,56 +96,75 @@ as invalid JSON."
   (scalpel-utils-test-with-temp-file ".el"
     (with-temp-file this-file
       (insert "(defun foo (x)\n  (+ x 1))\n"))
-    (cl-letf (((symbol-function 'scalpel-llm-request)
-               (lambda (_prompt &optional _system)
-                 "(defun foo (x)\n  (+ x 2))")))
+    (cl-letf (((symbol-function 'scalpel-llm-request-async)
+               (lambda (_prompt on-success _on-error &optional _system)
+                 (funcall on-success "(defun foo (x)\n  (+ x 2))"))))
       (let ((action (list :tool "edit"
                           :file this-file
                           :symbol "foo"
                           :instruction "increment x"
-                          :text nil)))
-        (let ((report (scalpel-agent-execute-action action)))
-          (should (string-match "Edited foo" report))
-          (with-current-buffer (find-file-noselect this-file)
-            (should (string= (buffer-string) "(defun foo (x)\n  (+ x 2))\n"))))))))
+                          :text nil))
+            report)
+        (scalpel-agent-execute-action
+         action
+         (lambda (r) (setq report r))
+         (lambda (err) (ert-fail (plist-get err :message))))
+        (should (string-match "Edited foo" report))
+        (with-current-buffer (find-file-noselect this-file)
+          (should (string= (buffer-string) "(defun foo (x)\n  (+ x 2))\n")))))))
 
 (ert-deftest scalpel-agent-test-execute-action-reply ()
-  "Execute a reply action and return its text."
+  "Execute a reply action and deliver its text through ON-SUCCESS."
   (let ((action (list :tool "reply"
                       :file nil
                       :symbol nil
                       :instruction nil
-                      :text "Hello, world!")))
-    (should (string= (scalpel-agent-execute-action action) "Hello, world!"))))
+                      :text "Hello, world!"))
+        report)
+    (scalpel-agent-execute-action
+     action
+     (lambda (r) (setq report r))
+     (lambda (err) (ert-fail (plist-get err :message))))
+    (should (string= report "Hello, world!"))))
 
 (ert-deftest scalpel-agent-test-execute-action-unknown ()
-  "Unknown action tool signals user-error."
+  "Unknown action tool is reported through ON-ERROR."
   (let ((action (list :tool "unknown"
                       :file nil
                       :symbol nil
                       :instruction nil
-                      :text nil)))
-    (should-error
-     (scalpel-agent-execute-action action)
-     :type 'user-error)))
+                      :text nil))
+        error)
+    (scalpel-agent-execute-action
+     action
+     (lambda (_r) (ert-fail "unknown tool must not succeed"))
+     (lambda (e) (setq error e)))
+    (should (eq (plist-get error :type) 'unknown-tool))))
 
 (ert-deftest scalpel-agent-test-edit-malformed ()
-  "Malformed edit action (missing fields) signals user-error."
-  (should-error
-   (scalpel-agent-edit nil nil nil)
-   :type 'error))
+  "Malformed edit action (missing fields) is reported through ON-ERROR."
+  (let (error)
+    (scalpel-agent-edit
+     nil nil nil
+     (lambda (_r) (ert-fail "malformed edit must not succeed"))
+     (lambda (e) (setq error e)))
+    (should (eq (plist-get error :type) 'malformed))))
 
 (ert-deftest scalpel-agent-test-edit-rejects-prose-response ()
   "When LLM returns prose instead of code, no edit is applied."
   (scalpel-utils-test-with-temp-file ".el"
     (with-temp-file this-file
       (insert "(defun foo (x)\n  (+ x 1))\n"))
-    (cl-letf (((symbol-function 'scalpel-llm-request)
-               (lambda (&rest _ignore)
-                 "There are no occurrences of `(+ x 1)` in the body.")))
-      (should-error
-       (scalpel-agent-edit this-file "foo" "replace x with y")
-       :type 'user-error)
+    (cl-letf (((symbol-function 'scalpel-llm-request-async)
+               (lambda (_prompt on-success _on-error &optional _system)
+                 (funcall on-success
+                          "There are no occurrences of `(+ x 1)` in the body."))))
+      (let (error)
+        (scalpel-agent-edit
+         this-file "foo" "replace x with y"
+         (lambda (_r) (ert-fail "prose reply must not produce a report"))
+         (lambda (e) (setq error e)))
+        (should (eq (plist-get error :type) 'no-replacement)))
       (with-current-buffer (find-file-noselect this-file)
         (should (string= (buffer-string)
                          "(defun foo (x)\n  (+ x 1))\n"))))))
@@ -247,12 +266,15 @@ error reported a bare JSON failure without naming the cause."
       (with-temp-file this-file (insert "(defun foo (x)\n  (+ x 1))\n"))
       (setq scalpel-agent--context-readonly-files
             (list (file-truename (expand-file-name this-file))))
-      (cl-letf (((symbol-function 'scalpel-llm-request)
-                 (lambda (_prompt &optional _system)
-                   "(defun foo (x)\n  (+ x 2))")))
-        (should-error
-         (scalpel-agent-edit this-file "foo" "increment x")
-         :type 'user-error)))))
+      (cl-letf (((symbol-function 'scalpel-llm-request-async)
+                 (lambda (_prompt on-success _on-error &optional _system)
+                   (funcall on-success "(defun foo (x)\n  (+ x 2))"))))
+        (let (error)
+          (scalpel-agent-edit
+           this-file "foo" "increment x"
+           (lambda (_r) (ert-fail "read-only edit must not succeed"))
+           (lambda (e) (setq error e)))
+          (should (eq (plist-get error :type) 'readonly)))))))
 
 (ert-deftest scalpel-agent-test-context-add-remove ()
   "Add dedupes and normalizes; remove of absent file does not error."
@@ -496,10 +518,14 @@ Guards against the git subprocess inheriting the caller's
   "Plan projects only the fields declared for each tool.
 Regression: `let' bound `tool' before `fields' used it, so the
 field list was always nil and the projected action lost its keys."
-  (cl-letf (((symbol-function 'scalpel-llm-request)
-             (lambda (_prompt &optional _system)
-               "[{\"tool\":\"reply\",\"text\":\"hi\"}]")))
-    (let ((actions (scalpel-agent-plan "say hi")))
+  (cl-letf (((symbol-function 'scalpel-llm-request-async)
+             (lambda (_prompt on-success _on-error &optional _system)
+               (funcall on-success "[{\"tool\":\"reply\",\"text\":\"hi\"}]"))))
+    (let (actions)
+      (scalpel-agent-plan
+       "say hi" nil
+       (lambda (a) (setq actions a))
+       (lambda (err) (ert-fail (plist-get err :message))))
       (should (= (length actions) 1))
       (should (equal (plist-get (car actions) :tool) "reply"))
       (should (equal (plist-get (car actions) :text) "hi")))))
@@ -587,11 +613,20 @@ it."
                            :reason "clean"
                            :long-running :false))
             (long '(:tool "shell" :command "make test" :reason "run"
-                          :long-running t)))
-        (should (string= (scalpel-agent-execute-action quick) "report"))
+                          :long-running t))
+            report)
+        (scalpel-agent-execute-action
+         quick
+         (lambda (r) (setq report r))
+         (lambda (err) (ert-fail (plist-get err :message))))
+        (should (string= report "report"))
         (ert-info ((format "asked=%d after a quick action" asked))
           (should (= asked 0)))
-        (should (string= (scalpel-agent-execute-action long) "report"))
+        (scalpel-agent-execute-action
+         long
+         (lambda (r) (setq report r))
+         (lambda (err) (ert-fail (plist-get err :message))))
+        (should (string= report "report"))
         (ert-info ((format "asked=%d after a long action" asked))
           (should (= asked 1)))
         (should (= ran 2))))))
@@ -698,16 +733,17 @@ The report preserves the raw output size for continuation decisions."
         (scalpel-console--root nil)
         (default-directory (file-name-as-directory
                             (expand-file-name temporary-file-directory)))
-        (orig-llm-request (symbol-function 'scalpel-llm-request))
+        (orig-llm-request-async (symbol-function 'scalpel-llm-request-async))
         (orig-sandbox-run (symbol-function 'scalpel-sandbox-run))
         (orig-agent-shell (symbol-function 'scalpel-agent-shell)))
     (unwind-protect
         (progn
-          (fset 'scalpel-llm-request
-                (lambda (&rest _)
-                  (concat "[{\"tool\":\"shell\",\"command\":\"printf abc\","
-                          "\"reason\":\"size\",\"read-only\":true,"
-                          "\"long-running\":false}]")))
+          (fset 'scalpel-llm-request-async
+                (lambda (_prompt on-success _on-error &optional _system)
+                  (funcall on-success
+                           (concat "[{\"tool\":\"shell\",\"command\":\"printf abc\","
+                                   "\"reason\":\"size\",\"read-only\":true,"
+                                   "\"long-running\":false}]"))))
           (fset 'scalpel-sandbox-run
                 (lambda (&rest _ignore) (cons 0 "abc")))
           (fset 'scalpel-agent-shell
@@ -715,16 +751,20 @@ The report preserves the raw output size for continuation decisions."
                   (setq scalpel-agent--shell-output
                         '(:bytes 3 :truncated nil :binary nil))
                   "Shell: printf abc\nReason: size\nExit: 0\nOutput: 3 bytes"))
-          (let* ((result (scalpel-agent-run "measure"))
-                 (shell (car (plist-get result :shells))))
-            (ert-info ((format "Result:\n%S" result))
-              (should (equal (plist-get shell :command)
-                             "printf abc"))
-              (should (= (plist-get shell :bytes)
-                         3))
-              (should-not (plist-get shell :truncated))
-              (should-not (plist-get shell :binary)))))
-      (fset 'scalpel-llm-request orig-llm-request)
+          (let (result)
+            (scalpel-agent-run
+             "measure" nil
+             (lambda (r) (setq result r))
+             (lambda (err) (ert-fail (plist-get err :message))))
+            (let ((shell (car (plist-get result :shells))))
+              (ert-info ((format "Result:\n%S" result))
+                (should (equal (plist-get shell :command)
+                               "printf abc"))
+                (should (= (plist-get shell :bytes)
+                           3))
+                (should-not (plist-get shell :truncated))
+                (should-not (plist-get shell :binary))))))
+      (fset 'scalpel-llm-request-async orig-llm-request-async)
       (fset 'scalpel-sandbox-run orig-sandbox-run)
       (fset 'scalpel-agent-shell orig-agent-shell))))
 

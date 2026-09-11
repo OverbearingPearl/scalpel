@@ -146,19 +146,27 @@ including a long-running one."
   :type '(repeat string)
   :group 'scalpel)
 
-(defvar scalpel-agent--context-files nil
-  "Writable files in the session context, as absolute names.")
+(defvar-local scalpel-agent--context-files nil
+  "Writable files in this buffer's session context, as absolute names.
+Buffer-local: each console buffer is one session, so two console
+sessions -- two worktrees, say -- keep separate file lists.  Code
+that touches this must run in the console buffer; the agent's
+callbacks do, because `scalpel-agent-run' re-selects the buffer it
+was called in.")
 
-(defvar scalpel-agent--context-readonly-files nil
-  "Read-only reference files in the session context, as absolute names.")
+(defvar-local scalpel-agent--context-readonly-files nil
+  "Read-only reference files in this buffer's session context.
+Buffer-local for the same reason as
+`scalpel-agent--context-files'.")
 
-(defvar scalpel-agent--shell-output nil
-  "Metadata plist for the most recent shell action.
+(defvar-local scalpel-agent--shell-output nil
+  "Metadata plist for the most recent shell action in this session.
 Set by `scalpel-agent-shell' right after the command runs and read
 by `scalpel-agent-run' before the next action.  Keys: :bytes is the
 raw output size; :truncated is non-nil when the report holds only a
 prefix of it; :binary is non-nil when the raw output held a NUL byte.
-Nil until a shell action runs.")
+Nil until a shell action runs.  Buffer-local, like the context
+lists.")
 
 (defun scalpel-agent--git-environment ()
   "Return `process-environment' with effectful git overrides removed.
@@ -705,6 +713,19 @@ from whatever prose or markdown fences surround it.  Signal
          (scalpel-agent--visible-raw raw)))
       (mapcar #'scalpel-agent--validate-action parsed))))
 
+(defun scalpel-agent--project-actions (actions)
+  "Project parsed ACTIONS plists onto each tool's field contract.
+Return a new list of plists holding only the fields declared for
+each action's tool, so the planner's extra keys never reach
+dispatch."
+  (mapcar
+   (lambda (item)
+     (let* ((tool (plist-get item :tool))
+            (fields (cdr (assoc tool scalpel-agent--tool-fields))))
+       (cl-loop for key in fields
+                append (list key (plist-get item key)))))
+   actions))
+
 (defun scalpel-agent--prompt (instruction history)
   "Return the LLM prompt for INSTRUCTION given HISTORY.
 HISTORY is the conversation text recorded before INSTRUCTION, or
@@ -718,21 +739,30 @@ state of its own: everything the LLM may rely on arrives here."
           "User instruction:\n"
           instruction))
 
-(defun scalpel-agent-plan (instruction &optional history)
-  "Ask the LLM for a structured plan for INSTRUCTION.
+(defun scalpel-agent-plan (instruction history on-success on-error)
+  "Ask the LLM for a structured plan for INSTRUCTION, without blocking.
 HISTORY is the conversation text recorded before INSTRUCTION, or
-nil.  Return a list of plists with keys :tool :file :symbol
-:instruction :text."
-  (let* ((prompt (scalpel-agent--prompt instruction history))
-         (raw (scalpel-llm-request prompt scalpel-agent-system-prompt))
-         (actions (scalpel-agent--parse-json raw)))
-    (mapcar
-     (lambda (item)
-       (let* ((tool (plist-get item :tool))
-              (fields (cdr (assoc tool scalpel-agent--tool-fields))))
-         (cl-loop for key in fields
-                  append (list key (plist-get item key)))))
-     actions)))
+nil.  ON-SUCCESS receives the projected action list.  ON-ERROR
+receives a plist (:type SYMBOL :message STRING): `parse' when the
+reply does not yield a valid action array, otherwise the type
+forwarded by `scalpel-llm-request-async'.  Only the parse step is
+guarded, so an error raised inside ON-SUCCESS escapes to the caller
+rather than being re-framed as a planner error."
+  (scalpel-llm-request-async
+   (scalpel-agent--prompt instruction history)
+   (lambda (raw)
+     (let ((parsed (condition-case err
+                       (cons t (scalpel-agent--project-actions
+                                (scalpel-agent--parse-json raw)))
+                     (error
+                      (funcall on-error
+                               (list :type 'parse
+                                     :message (error-message-string err)))
+                      nil))))
+       (when parsed
+         (funcall on-success (cdr parsed)))))
+   on-error
+   scalpel-agent-system-prompt))
 
 (defun scalpel-agent--apply-if-unchanged (file symbol expected-body new-text)
   "Replace SYMBOL in FILE with NEW-TEXT only if EXPECTED-BODY is unchanged.
@@ -750,86 +780,128 @@ region was modified while an LLM request was in flight."
       (scalpel-execute-replace (car current-range) (cdr current-range) new-text)
       (format "Edited %s in %s" symbol (buffer-name (current-buffer))))))
 
-(defun scalpel-agent-edit (file symbol instruction)
-  "Edit SYMBOL in FILE per INSTRUCTION using boundary-locked apply.
-Return human-readable report string."
-  (unless (and file symbol instruction)
-    (user-error "Scalpel: malformed edit action"))
-  (when (scalpel-agent-readonly-p file)
-    (user-error "Scalpel: %s is a read-only context file" file))
-  (let ((range (scalpel-locate-range file symbol)))
-    (unless range
-      (user-error "Scalpel: can't locate %s in %s" symbol file))
-    (with-current-buffer (find-file-noselect file)
-      (let* ((beg (car range))
-             (end (cdr range))
-             (body (buffer-substring-no-properties beg end))
-             (signature (save-excursion
-                          (goto-char beg)
-                          (buffer-substring-no-properties
-                           beg (line-end-position))))
-             (prompt (concat "Signature: %s\n\nCurrent block:\n%s\n\n"
-                             "Instruction: %s\n\n"
-                             "Return only the full replacement definition, as plain "
-                             "Emacs Lisp text. Do not include markdown fences or "
-                             "explanations. If the requested change is impossible or "
-                             "unnecessary for this block, return exactly: NO_CHANGE"))
-             (new-text (string-trim (scalpel-llm-request
-                                     (format prompt signature body instruction)))))
-        (cond
-         ((string= new-text scalpel-agent--no-change-sentinel)
-          (format "No change needed: %s in %s" symbol
-                  (buffer-name (current-buffer))))
-         ((scalpel-locate-single-definition-p file new-text)
-          (scalpel-agent--apply-if-unchanged
-           file symbol body new-text))
-         (t
-          (user-error
-           (concat "Scalpel: planner returned no usable replacement for %s. "
-                   "Refusing to edit. Reply was: %S")
-           symbol new-text)))))))
+(defun scalpel-agent-edit (file symbol instruction on-success on-error)
+  "Edit SYMBOL in FILE per INSTRUCTION, without blocking.
+ON-SUCCESS receives the report string.  ON-ERROR receives a plist
+\(:type SYMBOL :message STRING).  The boundary check inside
+`scalpel-agent--apply-if-unchanged' runs in the LLM callback, so a
+buffer the user edited while the request was in flight still aborts
+the edit."
+  (cl-block scalpel-agent-edit
+    (unless (and file symbol instruction)
+      (funcall on-error (list :type 'malformed
+                              :message "Scalpel: malformed edit action"))
+      (cl-return-from scalpel-agent-edit))
+    (when (scalpel-agent-readonly-p file)
+      (funcall on-error
+               (list :type 'readonly
+                     :message (format "Scalpel: %s is a read-only context file"
+                                      file)))
+      (cl-return-from scalpel-agent-edit))
+    (let ((range (scalpel-locate-range file symbol)))
+      (unless range
+        (funcall on-error
+                 (list :type 'locate
+                       :message (format "Scalpel: can't locate %s in %s"
+                                        symbol file)))
+        (cl-return-from scalpel-agent-edit))
+      (with-current-buffer (find-file-noselect file)
+        (let* ((beg (car range))
+               (end (cdr range))
+               (body (buffer-substring-no-properties beg end))
+               (signature (save-excursion
+                            (goto-char beg)
+                            (buffer-substring-no-properties
+                             beg (line-end-position))))
+               (prompt (concat "Signature: %s\n\nCurrent block:\n%s\n\n"
+                               "Instruction: %s\n\n"
+                               "Return only the full replacement definition, as plain "
+                               "Emacs Lisp text. Do not include markdown fences or "
+                               "explanations. If the requested change is impossible or "
+                               "unnecessary for this block, return exactly: NO_CHANGE")))
+          (scalpel-llm-request-async
+           (format prompt signature body instruction)
+           (lambda (new-text)
+             (let ((new-text (string-trim new-text)))
+               (cond
+                ((string= new-text scalpel-agent--no-change-sentinel)
+                 (funcall on-success
+                          (format "No change needed: %s in %s" symbol file)))
+                ((scalpel-locate-single-definition-p file new-text)
+                 (funcall on-success
+                          (scalpel-agent--apply-if-unchanged
+                           file symbol body new-text)))
+                (t
+                 (funcall on-error
+                          (list :type 'no-replacement
+                                :message
+                                (format (concat "Scalpel: planner returned no usable "
+                                                "replacement for %s. "
+                                                "Refusing to edit. Reply was: %S")
+                                        symbol new-text)))))))
+           on-error))))))
 
-(defun scalpel-agent-create (file symbol instruction after)
+(defun scalpel-agent-create (file symbol instruction after
+                                  on-success on-error)
   "Create SYMBOL in FILE per INSTRUCTION, inserted after AFTER.
-Return human-readable report string."
-  (unless (and file symbol instruction after)
-    (user-error "Scalpel: malformed create action"))
-  (when (scalpel-agent-readonly-p file)
-    (user-error "Scalpel: %s is a read-only context file" file))
-  (let ((anchor-range (scalpel-locate-range file after)))
-    (unless anchor-range
-      (user-error "Scalpel: can't locate anchor %s in %s" after file))
-    (with-current-buffer (find-file-noselect file)
-      (let* ((anchor-end (cdr anchor-range))
-             (anchor-body (buffer-substring-no-properties
-                           (car anchor-range) anchor-end))
-             (prompt (concat "Anchor signature: %s\n\n"
-                             "Instruction: %s\n\n"
-                             "Return only the full new definition to insert "
-                             "immediately after the anchor, as plain Emacs "
-                             "Lisp text. Do not include markdown fences or "
-                             "explanations."))
-             (new-text (string-trim (scalpel-llm-request
-                                     (format prompt
-                                             (save-excursion
-                                               (goto-char (car anchor-range))
-                                               (buffer-substring-no-properties
-                                                (car anchor-range)
-                                                (line-end-position)))
-                                             instruction)))))
-        (cond
-         ((string= new-text scalpel-agent--no-change-sentinel)
-          (format "No change needed: %s in %s" symbol
-                  (buffer-name (current-buffer))))
-         ((scalpel-locate-single-definition-p file new-text)
-          (scalpel-agent--apply-if-unchanged
-           file after anchor-body
-           (concat anchor-body "\n" new-text)))
-         (t
-          (user-error
-           (concat "Scalpel: planner returned no usable definition for %s. "
-                   "Refusing to create. Reply was: %S")
-           symbol new-text)))))))
+ON-SUCCESS receives the report string.  ON-ERROR receives a plist
+\(:type SYMBOL :message STRING)."
+  (cl-block scalpel-agent-create
+    (unless (and file symbol instruction after)
+      (funcall on-error (list :type 'malformed
+                              :message "Scalpel: malformed create action"))
+      (cl-return-from scalpel-agent-create))
+    (when (scalpel-agent-readonly-p file)
+      (funcall on-error
+               (list :type 'readonly
+                     :message (format "Scalpel: %s is a read-only context file"
+                                      file)))
+      (cl-return-from scalpel-agent-create))
+    (let ((anchor-range (scalpel-locate-range file after)))
+      (unless anchor-range
+        (funcall on-error
+                 (list :type 'locate
+                       :message (format "Scalpel: can't locate anchor %s in %s"
+                                        after file)))
+        (cl-return-from scalpel-agent-create))
+      (with-current-buffer (find-file-noselect file)
+        (let* ((anchor-end (cdr anchor-range))
+               (anchor-body (buffer-substring-no-properties
+                             (car anchor-range) anchor-end))
+               (prompt (concat "Anchor signature: %s\n\n"
+                               "Instruction: %s\n\n"
+                               "Return only the full new definition to insert "
+                               "immediately after the anchor, as plain Emacs "
+                               "Lisp text. Do not include markdown fences or "
+                               "explanations.")))
+          (scalpel-llm-request-async
+           (format prompt
+                   (save-excursion
+                     (goto-char (car anchor-range))
+                     (buffer-substring-no-properties
+                      (car anchor-range)
+                      (line-end-position)))
+                   instruction)
+           (lambda (new-text)
+             (let ((new-text (string-trim new-text)))
+               (cond
+                ((string= new-text scalpel-agent--no-change-sentinel)
+                 (funcall on-success
+                          (format "No change needed: %s in %s" symbol file)))
+                ((scalpel-locate-single-definition-p file new-text)
+                 (funcall on-success
+                          (scalpel-agent--apply-if-unchanged
+                           file after anchor-body
+                           (concat anchor-body "\n" new-text))))
+                (t
+                 (funcall on-error
+                          (list :type 'no-replacement
+                                :message
+                                (format (concat "Scalpel: planner returned no usable "
+                                                "definition for %s. "
+                                                "Refusing to create. Reply was: %S")
+                                        symbol new-text)))))))
+           on-error))))))
 
 (defun scalpel-agent-delete (file symbol)
   "Delete SYMBOL in FILE using boundary-locked apply.
@@ -956,69 +1028,155 @@ the action has no target."
       (plist-get action :reason)
       "no reason"))
 
-(defun scalpel-agent-execute-action (action)
-  "Execute a single ACTION plist and return a report string."
-  (let ((tool (plist-get action :tool)))
-    (unless (member tool scalpel-agent--tool-vocabulary)
-      (user-error "Scalpel: unknown action tool %S" tool))
-    (when (scalpel-agent--confirm-needed-p action)
-      (unless (yes-or-no-p (format "Execute %s action: %s?"
-                                   tool
-                                   (scalpel-agent--action-summary action)))
-        (user-error "Scalpel: %s action cancelled by user" tool)))
-    (pcase tool
-      ("edit"
-       (scalpel-agent-edit
-        (plist-get action :file)
-        (plist-get action :symbol)
-        (plist-get action :instruction)))
-      ("create"
-       (scalpel-agent-create
-        (plist-get action :file)
-        (plist-get action :symbol)
-        (plist-get action :instruction)
-        (plist-get action :after)))
-      ("delete"
-       (scalpel-agent-delete
-        (plist-get action :file)
-        (plist-get action :symbol)))
-      ("shell"
-       (scalpel-agent-shell
-        (plist-get action :command)
-        (plist-get action :reason)))
-      ("confirm"
-       (scalpel-agent-confirm
-        (plist-get action :text)))
-      ("reply"
-       (let ((text (plist-get action :text)))
-         (unless text
-           (user-error "Scalpel: reply action missing :text"))
-         (format "%s" text)))
-      (_
-       (format "Unknown action: %S" tool)))))
+(defun scalpel-agent-execute-action (action on-success on-error)
+  "Execute a single ACTION plist, without blocking.
+ON-SUCCESS receives the report string.  ON-ERROR receives a plist
+\(:type SYMBOL :message STRING); the type is `sandbox' when a shell
+action was refused by the sandbox, so a caller can keep the
+boundary out of the conversation.  Actions that issue no LLM
+request (`reply', `confirm', `delete', `shell') settle
+synchronously; `edit' and `create' settle from their LLM's
+callback.  ON-SUCCESS and ON-ERROR run outside the internal error
+guard, so an error they raise escapes instead of being re-framed
+as an action failure."
+  (cl-block scalpel-agent-execute-action
+    (let ((tool (plist-get action :tool)))
+      (unless (member tool scalpel-agent--tool-vocabulary)
+        (funcall on-error
+                 (list :type 'unknown-tool
+                       :message (format "Scalpel: unknown action tool %S" tool)))
+        (cl-return-from scalpel-agent-execute-action))
+      (when (scalpel-agent--confirm-needed-p action)
+        (unless (yes-or-no-p (format "Execute %s action: %s?"
+                                     tool
+                                     (scalpel-agent--action-summary action)))
+          (funcall on-error
+                   (list :type 'cancelled
+                         :message (format "Scalpel: %s action cancelled by user"
+                                          tool)))
+          (cl-return-from scalpel-agent-execute-action)))
+      (pcase tool
+        ("edit"
+         (scalpel-agent-edit
+          (plist-get action :file)
+          (plist-get action :symbol)
+          (plist-get action :instruction)
+          on-success on-error))
+        ("create"
+         (scalpel-agent-create
+          (plist-get action :file)
+          (plist-get action :symbol)
+          (plist-get action :instruction)
+          (plist-get action :after)
+          on-success on-error))
+        ("delete"
+         (let ((report (condition-case err
+                           (scalpel-agent-delete
+                            (plist-get action :file)
+                            (plist-get action :symbol))
+                         (error
+                          (funcall on-error
+                                   (list :type 'action
+                                         :message (error-message-string err)))
+                          nil))))
+           (when report (funcall on-success report))))
+        ("shell"
+         (let ((report (condition-case err
+                           (scalpel-agent-shell
+                            (plist-get action :command)
+                            (plist-get action :reason))
+                         (error
+                          (funcall on-error
+                                   (list :type
+                                         (if (eq (car err) 'scalpel-sandbox-error)
+                                             'sandbox
+                                           'action)
+                                         :message (error-message-string err)))
+                          nil))))
+           (when report (funcall on-success report))))
+        ("confirm"
+         (funcall on-success
+                  (scalpel-agent-confirm (plist-get action :text))))
+        ("reply"
+         (let ((text (plist-get action :text)))
+           (if text
+               (funcall on-success (format "%s" text))
+             (funcall on-error
+                      (list :type 'action
+                            :message "Scalpel: reply action missing :text")))))
+        (_
+         (funcall on-success (format "Unknown action: %S" tool)))))))
 
-(defun scalpel-agent-run (instruction &optional history)
-  "Run one agent round for INSTRUCTION and return its result.
+(defun scalpel-agent-run (instruction history on-done on-error)
+  "Run one agent round for INSTRUCTION, without blocking.
 HISTORY is the conversation text recorded before INSTRUCTION, or
-nil.  Return a plist (:report STRING :shells SHELLS); SHELLS holds
-one entry per shell action the round executed, as a plist with
-:command plus the output metadata recorded by `scalpel-agent-shell'
-\(:bytes, :truncated, :binary), so a caller can tell whether the
-round produced output worth reading back.  One round is one
+nil.  ON-DONE receives a plist (:report STRING :shells SHELLS);
+SHELLS holds one entry per shell action the round executed, as a
+plist with :command plus the output metadata recorded by
+`scalpel-agent-shell' \(:bytes, :truncated, :binary), so a caller
+can tell whether the round produced output worth reading back.
+ON-ERROR receives a plist (:type SYMBOL :message STRING).
+
+Actions are executed in array order; an `edit' or `create' action
+settles from its own LLM callback, so actions stay serialized while
+the caller's command loop keeps running.  Every callback runs in
+the buffer that was current when this function was called, so the
+session's buffer-local context and `scalpel-agent--shell-output'
+are read and written consistently.  One round is one
 request/execute cycle, not a whole conversation: the caller owns
-the loop and the history.  The returned plist has the form
-`(:report STRING :shells SHELLS)'."
-  (let ((reports nil)
-        (shells nil))
-    (dolist (action (scalpel-agent-plan instruction history))
-      (setq scalpel-agent--shell-output nil)
-      (push (scalpel-agent-execute-action action) reports)
-      (when (equal (plist-get action :tool) "shell")
-        (push (append (list :command (plist-get action :command))
-                      scalpel-agent--shell-output)
-              shells)))
-    (list :report (string-join (nreverse reports) "\n")
-          :shells (nreverse shells))))
+the loop and the history.  If the buffer this function was called
+in is killed while a request is in flight, the round stops and
+ON-ERROR is called with :type `session', so a caller holding a
+busy flag still gets a chance to release it."
+  (let ((session (current-buffer)))
+    (cl-macrolet
+        ((in-session (&rest body)
+           ;; Run BODY with SESSION current.  A killed session buffer
+           ;; is reported through ON-ERROR instead: a caller's busy
+           ;; guard is released only by a terminal callback, and the
+           ;; buffer may no longer exist to receive the report.
+           `(progn
+              (unless (buffer-live-p session)
+                (funcall on-error
+                         (list :type 'session
+                               :message "Scalpel: session buffer was killed")))
+              (when (buffer-live-p session)
+                (with-current-buffer session ,@body)))))
+      (scalpel-agent-plan
+       instruction history
+       (lambda (actions)
+         (in-session
+           (let ((reports nil)
+                 (shells nil))
+             (cl-labels
+                 ((finish ()
+                    (funcall on-done
+                             (list :report
+                                   (string-join (nreverse reports) "\n")
+                                   :shells (nreverse shells))))
+                  (step (rest)
+                    (if (null rest)
+                        (finish)
+                      (let ((action (car rest)))
+                        (setq scalpel-agent--shell-output nil)
+                        (scalpel-agent-execute-action
+                         action
+                         (lambda (report)
+                           (in-session
+                            (push report reports)
+                            (when (equal (plist-get action :tool) "shell")
+                              (push (append (list :command
+                                                  (plist-get action :command))
+                                            scalpel-agent--shell-output)
+                                    shells))
+                            (step (cdr rest))))
+                         (lambda (err)
+                           (in-session
+                            (funcall on-error err))))))))
+               (step actions)))))
+       (lambda (err)
+         (in-session
+          (funcall on-error err)))))))
 
 (provide 'scalpel-agent)
 

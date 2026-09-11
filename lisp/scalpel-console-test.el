@@ -45,10 +45,11 @@ RET answered \"nothing to send\"."
         (prompt-sent nil))
     (unwind-protect
         (progn
-          (cl-letf (((symbol-function 'scalpel-llm-request)
-                     (lambda (prompt &optional _system)
+          (cl-letf (((symbol-function 'scalpel-llm-request-async)
+                     (lambda (prompt on-success _on-error &optional _system)
                        (setq prompt-sent prompt)
-                       "[{\"tool\":\"reply\",\"text\":\"done\"}]")))
+                       (funcall on-success
+                                "[{\"tool\":\"reply\",\"text\":\"done\"}]"))))
             (with-current-buffer buf
               (erase-buffer)
               ;; Output written by the same path the console uses, so the
@@ -75,9 +76,10 @@ RET answered \"nothing to send\"."
   (let ((buf (scalpel-console-test--new-console-buffer)))
     (unwind-protect
         (progn
-          (cl-letf (((symbol-function 'scalpel-llm-request)
-                     (lambda (_prompt &optional _system)
-                       "[{\"tool\":\"reply\",\"text\":\"done\"}]")))
+          (cl-letf (((symbol-function 'scalpel-llm-request-async)
+                     (lambda (_prompt on-success _on-error &optional _system)
+                       (funcall on-success
+                                "[{\"tool\":\"reply\",\"text\":\"done\"}]"))))
             (with-current-buffer buf
               (erase-buffer)
               (insert "test instruction")
@@ -98,9 +100,9 @@ RET answered \"nothing to send\"."
   (let ((buf (scalpel-console-test--new-console-buffer)))
     (unwind-protect
         (progn
-          (cl-letf (((symbol-function 'scalpel-llm-request)
-                     (lambda (_prompt &optional _system)
-                       (error "Boom"))))
+          (cl-letf (((symbol-function 'scalpel-llm-request-async)
+                     (lambda (_prompt _on-success on-error &optional _system)
+                       (funcall on-error (list :type 'api :message "Boom")))))
             (with-current-buffer buf
               (erase-buffer)
               (insert "bad instruction\n")
@@ -114,18 +116,19 @@ RET answered \"nothing to send\"."
       (when (buffer-live-p buf) (kill-buffer buf)))))
 
 (ert-deftest scalpel-console-test-send-line-rejected-while-busy ()
-  "A new instruction is rejected while a request is in flight."
+  "A new instruction is rejected while a request is in flight.
+Regression: the guard is buffer-local to the console, so a test
+that binds it in its own buffer never reaches the rejection
+branch."
   (let ((buf (scalpel-console-test--new-console-buffer)))
     (unwind-protect
-        (progn
-          (with-current-buffer buf (erase-buffer))
-          (let ((scalpel-console--busy t))
-            (with-current-buffer buf
-              (insert "second instruction\n")
-              (goto-char (point-max))
-              (scalpel-console-send-line)))
-          (with-current-buffer buf
-            (should-not (search-forward "User: second instruction" nil t))))
+        (with-current-buffer buf
+          (erase-buffer)
+          (setq scalpel-console--busy t)
+          (insert "second instruction\n")
+          (goto-char (point-max))
+          (scalpel-console-send-line)
+          (should-not (search-forward "User: second instruction" nil t)))
       (when (buffer-live-p buf) (kill-buffer buf)))))
 
 (ert-deftest scalpel-console-test-progress-callback-bound-during-request ()
@@ -135,10 +138,11 @@ RET answered \"nothing to send\"."
     (unwind-protect
         (progn
           (with-current-buffer buf (erase-buffer))
-          (cl-letf (((symbol-function 'scalpel-llm-request)
-                     (lambda (_prompt &optional _system)
+          (cl-letf (((symbol-function 'scalpel-llm-request-async)
+                     (lambda (_prompt on-success _on-error &optional _system)
                        (setq seen (functionp scalpel-llm--progress-callback))
-                       "[{\"tool\":\"reply\",\"text\":\"done\"}]")))
+                       (funcall on-success
+                                "[{\"tool\":\"reply\",\"text\":\"done\"}]"))))
             (with-current-buffer buf
               (insert "tick instruction\n")
               (goto-char (point-min))
@@ -150,17 +154,22 @@ RET answered \"nothing to send\"."
   "Opening the console shows a Context line and does not repeat it on send."
   (scalpel-utils-test-with-temp-file ".el"
     (with-temp-file this-file (insert "(defun foo ())"))
-    (let ((scalpel-agent--context-files (list this-file))
-          (buf nil))
+    (let ((buf nil))
       (unwind-protect
-          (cl-letf (((symbol-function 'scalpel-agent-context-reset)
-                     (lambda () nil))
-                    ((symbol-function 'scalpel-llm-request)
-                     (lambda (_p &optional _s)
-                       "[{\"tool\":\"reply\",\"text\":\"done\"}]")))
+          (cl-letf (((symbol-function 'scalpel-llm-request-async)
+                     (lambda (_p on-success _on-error &optional _s)
+                       (funcall on-success
+                                "[{\"tool\":\"reply\",\"text\":\"done\"}]"))))
             (scalpel-console-open)
             (setq buf (current-buffer))
             (with-current-buffer buf
+              ;; The session context is buffer-local to the console, so
+              ;; it is set in the console buffer, not in the test's own
+              ;; buffer; rendering it here also proves the console holds
+              ;; its own copy.
+              (erase-buffer)
+              (setq scalpel-agent--context-files (list this-file))
+              (scalpel-console--show-context)
               (goto-char (point-min))
               (should (search-forward "Context:" nil t))
               (should (search-forward (file-name-nondirectory this-file)
@@ -202,13 +211,15 @@ RET answered \"nothing to send\"."
 
 (ert-deftest scalpel-console-test-context-diff-face-covers-name-only ()
   "The change face starts at the file name, never at the tree graphics."
-  (let ((scalpel-agent--context-files '("/tmp/scalpel-diff-name.el"))
-        (scalpel-agent--context-readonly-files nil)
-        (buf (scalpel-console-test--new-console-buffer)))
+  (let ((buf (scalpel-console-test--new-console-buffer)))
     (unwind-protect
         (progn
           (with-current-buffer buf
             (setq scalpel-console--context-baseline 'none-yet)
+            ;; Session variables are buffer-local to the console.
+            (setq scalpel-agent--context-files
+                  '("/tmp/scalpel-diff-name.el"))
+            (setq scalpel-agent--context-readonly-files nil)
             (scalpel-console--show-context)
             (setq scalpel-agent--context-files nil)
             (scalpel-console--show-context)
@@ -271,13 +282,15 @@ directory."
 
 (ert-deftest scalpel-console-test-context-diff-unchanged-face ()
   "Unchanged context entries are dimmed without strike-through."
-  (let ((scalpel-agent--context-files '("/tmp/scalpel-diff-keep.el"))
-        (scalpel-agent--context-readonly-files nil)
-        (buf (scalpel-console-test--new-console-buffer)))
+  (let ((buf (scalpel-console-test--new-console-buffer)))
     (unwind-protect
         (progn
           (with-current-buffer buf
             (setq scalpel-console--context-baseline 'none-yet)
+            ;; Session variables are buffer-local to the console.
+            (setq scalpel-agent--context-files
+                  '("/tmp/scalpel-diff-keep.el"))
+            (setq scalpel-agent--context-readonly-files nil)
             ;; First refresh establishes the baseline; second sees no delta.
             (scalpel-console--show-context)
             (scalpel-console--show-context)
@@ -297,12 +310,14 @@ directory."
 Regression: `scalpel-console--append' restored point via
 `save-excursion', so after a refresh the cursor sat just before the
 newly inserted Context block."
-  (let ((scalpel-agent--context-files '("/tmp/scalpel-reset-cursor.el"))
-        (scalpel-agent--context-readonly-files nil)
-        (buf (scalpel-console-test--new-console-buffer)))
+  (let ((buf (scalpel-console-test--new-console-buffer)))
     (unwind-protect
         (with-current-buffer buf
           (setq scalpel-console--context-baseline 'none-yet)
+          ;; Session variables are buffer-local to the console.
+          (setq scalpel-agent--context-files
+                '("/tmp/scalpel-reset-cursor.el"))
+          (setq scalpel-agent--context-readonly-files nil)
           (scalpel-console-reset-context)
           (ert-info ((format "Point %d of %d; buffer:\n%S"
                              (point) (point-max) (buffer-string)))
@@ -315,7 +330,7 @@ newly inserted Context block."
         (scalpel-agent--context-readonly-files nil)
         (buf (scalpel-console-test--new-console-buffer)))
     (unwind-protect
-        (cl-letf (((symbol-function 'scalpel-llm-request)
+        (cl-letf (((symbol-function 'scalpel-llm-request-async)
                    (lambda (&rest _)
                      (error "S-RET must not send the instruction"))))
           (with-current-buffer buf
@@ -339,10 +354,11 @@ newly inserted Context block."
         prompt-sent)
     (unwind-protect
         (progn
-          (cl-letf (((symbol-function 'scalpel-llm-request)
-                     (lambda (prompt &optional _system)
+          (cl-letf (((symbol-function 'scalpel-llm-request-async)
+                     (lambda (prompt on-success _on-error &optional _system)
                        (setq prompt-sent prompt)
-                       "[{\"tool\":\"reply\",\"text\":\"done\"}]")))
+                       (funcall on-success
+                                "[{\"tool\":\"reply\",\"text\":\"done\"}]"))))
             (with-current-buffer buf
               (erase-buffer)
               (insert "line one\nline two\n")
@@ -364,9 +380,10 @@ newly inserted Context block."
         (scalpel-agent--context-readonly-files nil)
         (buf (scalpel-console-test--new-console-buffer)))
     (unwind-protect
-        (cl-letf (((symbol-function 'scalpel-llm-request)
-                   (lambda (&rest _)
-                     "[{\"tool\":\"reply\",\"text\":\"ack\"}]")))
+        (cl-letf (((symbol-function 'scalpel-llm-request-async)
+                   (lambda (_prompt on-success _on-error &optional _system)
+                     (funcall on-success
+                              "[{\"tool\":\"reply\",\"text\":\"ack\"}]"))))
           (with-current-buffer buf
             (erase-buffer)
             (scalpel-console--insert-tagged "User: old\n" 'user)
@@ -386,13 +403,14 @@ newly inserted Context block."
   "Display-only output never reaches the LLM.
 Regression: the buffer holds context trees and status lines next to
 the conversation, so dumping the buffer would send all of it."
-  (let ((scalpel-agent--context-files '("/tmp/scalpel-history.el"))
-        (scalpel-agent--context-readonly-files nil)
-        (scalpel-console--context-baseline 'none-yet)
-        (buf (scalpel-console-test--new-console-buffer)))
+  (let ((buf (scalpel-console-test--new-console-buffer)))
     (unwind-protect
         (with-current-buffer buf
           (erase-buffer)
+          (setq scalpel-console--context-baseline 'none-yet)
+          ;; Session variables are buffer-local to the console.
+          (setq scalpel-agent--context-files '("/tmp/scalpel-history.el"))
+          (setq scalpel-agent--context-readonly-files nil)
           (insert "Scalpel console.\n\n")
           (scalpel-console--insert-tagged "User: hello\n" 'user)
           (scalpel-console--show-context)
@@ -408,10 +426,11 @@ the conversation, so dumping the buffer would send all of it."
         (prompts nil))
     (unwind-protect
         (progn
-          (cl-letf (((symbol-function 'scalpel-llm-request)
-                     (lambda (prompt &optional _system)
+          (cl-letf (((symbol-function 'scalpel-llm-request-async)
+                     (lambda (prompt on-success _on-error &optional _system)
                        (push prompt prompts)
-                       "[{\"tool\":\"reply\",\"text\":\"first reply\"}]")))
+                       (funcall on-success
+                                "[{\"tool\":\"reply\",\"text\":\"first reply\"}]"))))
             (with-current-buffer buf
               (erase-buffer)
               (insert "first instruction\n")
@@ -448,12 +467,13 @@ it asked for, so \"run the tests\" could not lead to a fix."
         (prompts nil))
     (unwind-protect
         (progn
-          (cl-letf (((symbol-function 'scalpel-llm-request)
-                     (lambda (prompt &optional _system)
+          (cl-letf (((symbol-function 'scalpel-llm-request-async)
+                     (lambda (prompt on-success _on-error &optional _system)
                        (push prompt prompts)
-                       (if (= (length prompts) 1)
-                           "[{\"tool\":\"shell\",\"command\":\"echo hello\",\"reason\":\"check the loop\",\"read-only\":true,\"long-running\":false}]"
-                         "[{\"tool\":\"reply\",\"text\":\"done\"}]")))
+                       (funcall on-success
+                                (if (= (length prompts) 1)
+                                    "[{\"tool\":\"shell\",\"command\":\"echo hello\",\"reason\":\"check the loop\",\"read-only\":true,\"long-running\":false}]"
+                                  "[{\"tool\":\"reply\",\"text\":\"done\"}]"))))
                     ((symbol-function 'scalpel-sandbox-run)
                      (lambda (&rest _ignore) (cons 0 "hello\n"))))
             (with-current-buffer buf
@@ -484,12 +504,13 @@ the same command over and over."
         (prompts nil))
     (unwind-protect
         (progn
-          (cl-letf (((symbol-function 'scalpel-llm-request)
-                     (lambda (prompt &optional _system)
+          (cl-letf (((symbol-function 'scalpel-llm-request-async)
+                     (lambda (prompt on-success _on-error &optional _system)
                        (push prompt prompts)
-                       (if (= (length prompts) 1)
-                           "[{\"tool\":\"shell\",\"command\":\"echo hello\",\"reason\":\"check\",\"read-only\":true,\"long-running\":false}]"
-                         "[{\"tool\":\"reply\",\"text\":\"done\"}]")))
+                       (funcall on-success
+                                (if (= (length prompts) 1)
+                                    "[{\"tool\":\"shell\",\"command\":\"echo hello\",\"reason\":\"check\",\"read-only\":true,\"long-running\":false}]"
+                                  "[{\"tool\":\"reply\",\"text\":\"done\"}]"))))
                     ((symbol-function 'scalpel-sandbox-run)
                      (lambda (&rest _ignore) (cons 0 "hello\n"))))
             (with-current-buffer buf
@@ -514,13 +535,14 @@ the same command over and over."
   "Forgetting history clears the conversation but keeps the context.
 Regression: the only way to shed a growing conversation was to
 reopen the console, which also discarded the context file list."
-  (let ((scalpel-agent--context-files '("/tmp/scalpel-forget-ctx.el"))
-        (scalpel-agent--context-readonly-files nil)
-        (scalpel-console--context-baseline 'none-yet)
-        (buf (scalpel-console-test--new-console-buffer)))
+  (let ((buf (scalpel-console-test--new-console-buffer)))
     (unwind-protect
         (with-current-buffer buf
           (erase-buffer)
+          (setq scalpel-console--context-baseline 'none-yet)
+          ;; Session variables are buffer-local to the console.
+          (setq scalpel-agent--context-files '("/tmp/scalpel-forget-ctx.el"))
+          (setq scalpel-agent--context-readonly-files nil)
           ;; Same shape as `scalpel-console-open' writes: the header is
           ;; display output, never pending input.
           (let ((beg (point)))
@@ -555,10 +577,11 @@ next turn clean."
         (prompts nil))
     (unwind-protect
         (progn
-          (cl-letf (((symbol-function 'scalpel-llm-request)
-                     (lambda (prompt &optional _system)
+          (cl-letf (((symbol-function 'scalpel-llm-request-async)
+                     (lambda (prompt on-success _on-error &optional _system)
                        (push prompt prompts)
-                       "[{\"tool\":\"reply\",\"text\":\"ack\"}]")))
+                       (funcall on-success
+                                "[{\"tool\":\"reply\",\"text\":\"ack\"}]"))))
             (with-current-buffer buf
               (erase-buffer)
               (insert "first instruction\n")
@@ -595,10 +618,11 @@ away, and the console then stopped without saying why."
         (notices nil))
     (unwind-protect
         (progn
-          (cl-letf (((symbol-function 'scalpel-llm-request)
-                     (lambda (&rest _)
+          (cl-letf (((symbol-function 'scalpel-llm-request-async)
+                     (lambda (_prompt on-success _on-error &optional _system)
                        (setq requests (1+ requests))
-                       "[{\"tool\":\"shell\",\"command\":\"echo hi\",\"reason\":\"check\",\"read-only\":true,\"long-running\":false}]"))
+                       (funcall on-success
+                                "[{\"tool\":\"shell\",\"command\":\"echo hi\",\"reason\":\"check\",\"read-only\":true,\"long-running\":false}]")))
                     ((symbol-function 'yes-or-no-p)
                      (lambda (&rest _) (setq asked (1+ asked)) t))
                     ((symbol-function 'message)
@@ -643,10 +667,11 @@ instruction) after the round-limit notice."
         (prompt-sent nil))
     (unwind-protect
         (progn
-          (cl-letf (((symbol-function 'scalpel-llm-request)
-                     (lambda (prompt &optional _system)
+          (cl-letf (((symbol-function 'scalpel-llm-request-async)
+                     (lambda (prompt on-success _on-error &optional _system)
                        (setq prompt-sent prompt)
-                       "[{\"tool\":\"reply\",\"text\":\"done\"}]")))
+                       (funcall on-success
+                                "[{\"tool\":\"reply\",\"text\":\"done\"}]"))))
             (with-current-buffer buf
               (erase-buffer)
               (insert "Scalpel console.\n")
@@ -712,12 +737,13 @@ means the question was waived, so the large output goes back."
         (asked 0))
     (unwind-protect
         (progn
-          (cl-letf (((symbol-function 'scalpel-llm-request)
-                     (lambda (&rest _)
+          (cl-letf (((symbol-function 'scalpel-llm-request-async)
+                     (lambda (_prompt on-success _on-error &optional _system)
                        (setq requests (1+ requests))
-                       (if (= requests 1)
-                           "[{\"tool\":\"shell\",\"command\":\"seq 1 2000\",\"reason\":\"noise\",\"long-running\":false}]"
-                         "[{\"tool\":\"reply\",\"text\":\"done\"}]")))
+                       (funcall on-success
+                                (if (= requests 1)
+                                    "[{\"tool\":\"shell\",\"command\":\"seq 1 2000\",\"reason\":\"noise\",\"long-running\":false}]"
+                                  "[{\"tool\":\"reply\",\"text\":\"done\"}]"))))
                     ((symbol-function 'yes-or-no-p)
                      (lambda (&rest _) (setq asked (1+ asked)) t))
                     ((symbol-function 'scalpel-sandbox-run)
@@ -748,12 +774,13 @@ a keystroke and bought no information."
         (asked 0))
     (unwind-protect
         (progn
-          (cl-letf (((symbol-function 'scalpel-llm-request)
-                     (lambda (&rest _)
+          (cl-letf (((symbol-function 'scalpel-llm-request-async)
+                     (lambda (_prompt on-success _on-error &optional _system)
                        (setq requests (1+ requests))
-                       (if (= requests 1)
-                           "[{\"tool\":\"shell\",\"command\":\"ls\",\"reason\":\"look\",\"long-running\":false}]"
-                         "[{\"tool\":\"reply\",\"text\":\"done\"}]")))
+                       (funcall on-success
+                                (if (= requests 1)
+                                    "[{\"tool\":\"shell\",\"command\":\"ls\",\"reason\":\"look\",\"long-running\":false}]"
+                                  "[{\"tool\":\"reply\",\"text\":\"done\"}]"))))
                     ((symbol-function 'yes-or-no-p)
                      (lambda (&rest _) (setq asked (1+ asked)) t))
                     ((symbol-function 'scalpel-sandbox-run)
@@ -779,12 +806,13 @@ request -- leaking the boundary the prompt deliberately omits."
         (prompts nil))
     (unwind-protect
         (progn
-          (cl-letf (((symbol-function 'scalpel-llm-request)
-                     (lambda (prompt &optional _system)
+          (cl-letf (((symbol-function 'scalpel-llm-request-async)
+                     (lambda (prompt on-success _on-error &optional _system)
                        (push prompt prompts)
-                       (concat "[{\"tool\":\"shell\",\"command\":\"ls\","
-                               "\"reason\":\"look\",\"read-only\":true,"
-                               "\"long-running\":false}]")))
+                       (funcall on-success
+                                (concat "[{\"tool\":\"shell\",\"command\":\"ls\","
+                                        "\"reason\":\"look\",\"read-only\":true,"
+                                        "\"long-running\":false}]"))))
                     ((symbol-function 'scalpel-sandbox-run)
                      (lambda (&rest _ignore)
                        (signal 'scalpel-sandbox-error
@@ -806,6 +834,117 @@ request -- leaking the boundary the prompt deliberately omits."
           (ert-info ((format "Prompts:\n%S" prompts))
             (should prompts)
             (should-not (string-match-p "sandbox" (car prompts)))))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
+
+(ert-deftest scalpel-console-test-busy-until-deferred-callback-settles ()
+  "The busy guard covers the window after `send-line' has returned.
+Regression: every other console test answers the request from
+inside `scalpel-console-send-line', so the interval in which the
+request is genuinely outstanding was never exercised and a guard
+released too early -- or never -- would still look correct."
+  (let ((buf (scalpel-console-test--new-console-buffer))
+        pending)
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'scalpel-llm-request-async)
+                     (lambda (_prompt on-success on-error &optional _system)
+                       (setq pending (cons on-success on-error)))))
+            (with-current-buffer buf
+              (erase-buffer)
+              (insert "first instruction\n")
+              (goto-char (point-min))
+              (scalpel-console-send-line))
+            (ert-info ("the guard must hold once `send-line' has returned")
+              (with-current-buffer buf
+                (should scalpel-console--busy)
+                (goto-char (point-max))
+                (insert "second instruction\n")
+                (scalpel-console-send-line)
+                (should-not (string-match-p "User: second instruction"
+                                            (buffer-string)))))
+            ;; Settle from outside the call stack of `send-line'.
+            (funcall (car pending)
+                     "[{\"tool\":\"reply\",\"text\":\"done\"}]")
+            (with-current-buffer buf
+              (ert-info ((format "Buffer:\n%S" (buffer-string)))
+                (should-not scalpel-console--busy)
+                (should (string-match-p "Scalpel: done" (buffer-string)))))))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
+
+(ert-deftest scalpel-console-test-progress-callback-cleared-after-settle ()
+  "The status refresh does not outlive the round that installed it.
+Regression: the binding was only ever asserted from inside a
+synchronous mock, so an asynchronous round that left the refresh
+pointing at a console it no longer owns would still pass."
+  (let ((scalpel-llm--progress-callback nil)
+        (buf (scalpel-console-test--new-console-buffer))
+        pending)
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'scalpel-llm-request-async)
+                     (lambda (_prompt on-success on-error &optional _system)
+                       (setq pending (cons on-success on-error)))))
+            (with-current-buffer buf
+              (erase-buffer)
+              (insert "check it\n")
+              (goto-char (point-min))
+              (scalpel-console-send-line))
+            (should (functionp scalpel-llm--progress-callback))
+            (funcall (car pending)
+                     "[{\"tool\":\"reply\",\"text\":\"done\"}]")
+            (ert-info ("the refresh must be unbound once the round settles")
+              (should-not scalpel-llm--progress-callback))))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
+
+(ert-deftest scalpel-console-test-settles-after-console-buffer-is-killed ()
+  "A callback arriving after the console is killed must not signal.
+Regression: the round's callbacks re-selected the console buffer
+unconditionally, so killing it mid-flight made the agent's plan
+callback raise \"Selecting deleted buffer\" from inside gptel's
+process filter; the user got no report and the error surfaced only
+in *Messages*.  The busy guard needs no release here: it is
+buffer-local and died with the buffer."
+  (let ((buf (scalpel-console-test--new-console-buffer))
+        pending)
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'scalpel-llm-request-async)
+                     (lambda (_prompt on-success on-error &optional _system)
+                       (setq pending (cons on-success on-error)))))
+            (with-current-buffer buf
+              (erase-buffer)
+              (insert "inspect it\n")
+              (goto-char (point-min))
+              (scalpel-console-send-line))
+            (should (with-current-buffer buf scalpel-console--busy))
+            (kill-buffer buf)
+            ;; The deferred callback arrives after the buffer is gone;
+            ;; it must return normally rather than signal.
+            (funcall (car pending)
+                     "[{\"tool\":\"reply\",\"text\":\"done\"}]")))
+      (when (buffer-live-p buf) (kill-buffer buf)))))
+
+(ert-deftest scalpel-console-test-add-file-from-another-buffer ()
+  "Adding a file outside the console still reaches the console context.
+Regression: the session context is buffer-local to the console, so
+an add performed in another buffer set that buffer's local value
+and the console context stayed empty."
+  (let ((buf (scalpel-console-test--new-console-buffer)))
+    (unwind-protect
+        (scalpel-utils-test-with-temp-file ".el"
+          (with-temp-file this-file (insert "(defun foo ())"))
+          (cl-letf (((symbol-function 'read-file-name)
+                     (lambda (&rest _) this-file)))
+            (with-temp-buffer
+              (setq default-directory
+                    (file-name-as-directory
+                     (expand-file-name temporary-file-directory)))
+              (scalpel-console-add-file)))
+          (with-current-buffer buf
+            (ert-info ((format "Console context: %S"
+                               scalpel-agent--context-files))
+              (should (member (file-truename (expand-file-name this-file))
+                              scalpel-agent--context-files)))))
       (scalpel-utils-test-kill-buffer (buffer-name buf)))))
 
 (provide 'scalpel-console-test)

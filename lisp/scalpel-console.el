@@ -181,8 +181,10 @@ caller can delete them without invalidating earlier ones."
     map)
   "Keymap used in Scalpel console buffers.")
 
-(defvar scalpel-console--busy nil
-  "Non-nil while an agent request is in flight.")
+(defvar-local scalpel-console--busy nil
+  "Non-nil while an agent request is in flight for this console.
+Buffer-local: a busy console must not refuse instructions in
+another console.")
 
 (defun scalpel-console--status-start ()
   "Insert a one-line status display at point-max.
@@ -337,9 +339,13 @@ delta is highlighted exactly once."
 With prefix argument IGNORE-GITIGNORE, do not filter directory
 expansion through gitignore rules."
   (interactive "P")
-  (let ((path (read-file-name "Add to Scalpel context: ")))
-    (scalpel-agent-context-add path ignore-gitignore)
-    (scalpel-console--show-context)))
+  ;; The session context is buffer-local to the console, so the add has
+  ;; to happen there: run from another buffer it would set that buffer's
+  ;; local value and the console would appear unchanged.
+  (with-current-buffer (scalpel-console--target-buffer)
+    (let ((path (read-file-name "Add to Scalpel context: ")))
+      (scalpel-agent-context-add path ignore-gitignore)
+      (scalpel-console--show-context))))
 
 (defun scalpel-console-add-readonly-file (&optional ignore-gitignore)
   "Prompt for a file or directory and add it as read-only reference.
@@ -347,21 +353,26 @@ Read-only files are shown to the LLM with their full contents and
 cannot be edited.  With prefix argument IGNORE-GITIGNORE, do not
 filter directory expansion through gitignore rules."
   (interactive "P")
-  (let ((path (read-file-name "Add read-only reference: ")))
-    (scalpel-agent-context-add-readonly path ignore-gitignore)
-    (scalpel-console--show-context)))
+  ;; Buffer-local session context: see `scalpel-console-add-file'.
+  (with-current-buffer (scalpel-console--target-buffer)
+    (let ((path (read-file-name "Add read-only reference: ")))
+      (scalpel-agent-context-add-readonly path ignore-gitignore)
+      (scalpel-console--show-context))))
 
 (defun scalpel-console-remove-file ()
   "Prompt for a context file or directory and remove it."
   (interactive)
-  (let ((candidates (append scalpel-agent--context-files
-                            scalpel-agent--context-readonly-files)))
-    (if (null candidates)
-        (message "Scalpel: context is empty")
-      (let ((path (completing-read "Remove from Scalpel context: "
-                                   candidates nil nil)))
-        (scalpel-agent-context-remove path)
-        (scalpel-console--show-context)))))
+  ;; Read the list and remove from it in the console buffer, where the
+  ;; buffer-local session context lives.
+  (with-current-buffer (scalpel-console--target-buffer)
+    (let ((candidates (append scalpel-agent--context-files
+                              scalpel-agent--context-readonly-files)))
+      (if (null candidates)
+          (message "Scalpel: context is empty")
+        (let ((path (completing-read "Remove from Scalpel context: "
+                                     candidates nil nil)))
+          (scalpel-agent-context-remove path)
+          (scalpel-console--show-context))))))
 
 (defun scalpel-console-forget-history ()
   "Stop sending the current conversation to the agent.
@@ -408,8 +419,10 @@ The context is the set of files in scope; it is not the
 conversation.  To clear the conversation instead, use
 `scalpel-console-forget-history', which leaves this list alone."
   (interactive)
-  (scalpel-agent-context-reset)
-  (scalpel-console--show-context))
+  ;; Reset the console's own context, not the caller buffer's.
+  (with-current-buffer (scalpel-console--target-buffer)
+    (scalpel-agent-context-reset)
+    (scalpel-console--show-context)))
 
 (defun scalpel-console-open ()
   "Open (or switch to) the Scalpel console buffer and clear its contents.
@@ -444,28 +457,53 @@ that path."
     (scalpel-console--show-context)
     (goto-char (point-max))))
 
-(defun scalpel-console--run-round (instruction history)
-  "Run one agent round for INSTRUCTION and append its report.
-HISTORY is the conversation text to send along.  Return the plist
-from `scalpel-agent-run', or nil when the round failed; a failure
-is appended like a reply, so the next round can read it instead of
-losing it."
-  (let ((status (scalpel-console--status-start)))
-    (let ((refresh (car status))
-          (stop (cdr status)))
-      (unwind-protect
-          (condition-case err
-              (let* ((scalpel-llm--progress-callback refresh)
-                     (result (scalpel-agent-run instruction history)))
-                (funcall stop)
-                (let ((inhibit-read-only t))
-                  (scalpel-console--insert-tagged
-                   (format "Scalpel: %s\n\n" (plist-get result :report))
-                   'assistant))
-                result)
-            (error
-             (funcall stop)
-             (if (eq (car err) 'scalpel-sandbox-error)
+(defun scalpel-console--run-round (instruction history on-complete)
+  "Run one agent round for INSTRUCTION without blocking.
+HISTORY is the conversation text to send along.  ON-COMPLETE
+receives the plist `scalpel-agent-run' delivers, or nil when the
+round failed; a failure is appended like a reply, so the next
+round can read it instead of losing it.  The console buffer is
+captured up front: if the user kills it while the request is in
+flight, writes are skipped but the round still settles.  The
+progress callback is installed for the duration and cleared before
+ON-COMPLETE, so it is never left pointing at a dead buffer."
+  (let* ((target (scalpel-console--target-buffer))
+         (status (with-current-buffer target
+                   (scalpel-console--status-start)))
+         (refresh (car status))
+         (stop (cdr status))
+         (settled nil)
+         (settle (lambda (result)
+                   (unless settled
+                     (setq settled t)
+                     (setq scalpel-llm--progress-callback nil)
+                     (when (buffer-live-p target)
+                       (with-current-buffer target
+                         (funcall stop)))
+                     (if (buffer-live-p target)
+                         (funcall on-complete result)
+                       ;; The round callback re-selects the console
+                       ;; buffer, so with the console gone it cannot
+                       ;; run at all.  Nothing needs releasing here:
+                       ;; the busy guard is buffer-local and died with
+                       ;; the buffer.
+                       nil)))))
+    (setq scalpel-llm--progress-callback refresh)
+    (with-current-buffer target
+      (scalpel-agent-run
+       instruction history
+       (lambda (result)
+         (when (buffer-live-p target)
+           (with-current-buffer target
+             (let ((inhibit-read-only t))
+               (scalpel-console--insert-tagged
+                (format "Scalpel: %s\n\n" (plist-get result :report))
+                'assistant))))
+         (funcall settle result))
+       (lambda (err)
+         (when (buffer-live-p target)
+           (with-current-buffer target
+             (if (eq (plist-get err :type) 'sandbox)
                  ;; A sandbox failure is infrastructure, not
                  ;; conversation.  Its message names the backend, so it
                  ;; is shown to the user but never recorded as an
@@ -474,15 +512,12 @@ losing it."
                  ;; round failure that says something about the planner
                  ;; -- malformed JSON, for one -- stays in the history.
                  (scalpel-console--append
-                  (format "Scalpel error: %s" (error-message-string err)))
+                  (format "Scalpel error: %s" (plist-get err :message)))
                (let ((inhibit-read-only t))
                  (scalpel-console--insert-tagged
-                  (format "Scalpel error: %s\n\n" (error-message-string err))
-                  'assistant)))
-             nil))
-        ;; The report or error text appended above carries an
-        ;; `assistant' role, so nothing needs to be reset here.
-        (ignore)))))
+                  (format "Scalpel error: %s\n\n" (plist-get err :message))
+                  'assistant)))))
+         (funcall settle nil))))))
 
 (defun scalpel-console--shell-description (shell)
   "Describe one entry of the :shells list for a confirmation prompt.
@@ -538,48 +573,67 @@ run can never block on a prompt."
 
 (defun scalpel-console--run-rounds (instruction history)
   "Run agent rounds for INSTRUCTION until the loop ends.
-HISTORY is the conversation recorded before INSTRUCTION.  A round
-that ran shell commands may be followed by another, up to
-`scalpel-console-max-rounds'.  Whether a round actually continues
-is decided by `scalpel-console--continue-p', which questions the
-user only when the round's output is noisy.  Each round re-reads
-the conversation from the buffer, so shell output reaches the next
-round without anything being carried in a variable.  A continued
-round sends
+HISTORY is the conversation recorded before INSTRUCTION.  Return
+after dispatching the first round; each round's outcome is handled
+in its own callback, which re-reads the conversation from the
+buffer, so shell output reaches the next round without anything
+being carried in a variable.  A round that ran shell commands may
+be followed by another, up to `scalpel-console-max-rounds'.
+Whether a round actually continues is decided by
+`scalpel-console--continue-p', which questions the user only when
+the round's output is noisy.  A continued round sends
 `scalpel-console--continuation-instruction' instead of INSTRUCTION:
 the original instruction is already inside the history, and
-re-sending it makes the planner run the same shell command again."
-  (let ((scalpel-console--busy t)
+re-sending it makes the planner run the same shell command again.
+`scalpel-console--busy' is set here and cleared at every terminal
+point, so a second RET during a round is refused."
+  (setq scalpel-console--busy t)
+  (let ((target (scalpel-console--target-buffer))
         (round 0)
         (conversation history)
-        (next-instruction instruction)
-        (more t))
-    (while (and more (< round scalpel-console-max-rounds))
-      (setq round (1+ round))
-      (let ((result (scalpel-console--run-round next-instruction conversation)))
-        (setq conversation (scalpel-console--history))
-        (cond
-         ((not (and result (plist-get result :shells)))
-          (setq more nil))
-         ((>= round scalpel-console-max-rounds)
-          ;; No round is left, so asking would throw the answer away and
-          ;; the console would look hung.  Report the limit instead.
-          ;; Echo it as well as append it: the user may not be looking
-          ;; at the end of the console buffer when the loop stops.
-          (setq more nil)
-          (let ((notice
-                 (format "Scalpel: round limit (%d) reached; send the next instruction when ready"
-                         scalpel-console-max-rounds)))
-            (scalpel-console--append notice)
-            (message "%s" notice)))
-         ((scalpel-console--continue-p result)
-          ;; A continued round must not re-send the user's original
-          ;; instruction: it is already in the history above, and
-          ;; repeating it makes the planner re-issue the same shell
-          ;; action in a loop.
-          (setq next-instruction scalpel-console--continuation-instruction))
-         (t
-          (setq more nil)))))))
+        (next-instruction instruction))
+    (cl-labels
+        ((run-next ()
+           (setq round (1+ round))
+           (scalpel-console--run-round
+            next-instruction conversation
+            (lambda (result)
+              (with-current-buffer target
+                (setq conversation (scalpel-console--history))
+                (cond
+                 ((not (and result (plist-get result :shells)))
+                  (setq scalpel-console--busy nil))
+                 ((>= round scalpel-console-max-rounds)
+                  ;; No round is left, so asking would throw the answer
+                  ;; away and the console would look hung.  Report the
+                  ;; limit instead.  Echo it as well as append it: the
+                  ;; user may not be looking at the end of the console
+                  ;; buffer when the loop stops.
+                  (setq scalpel-console--busy nil)
+                  (let ((notice
+                         (format "Scalpel: round limit (%d) reached; send the next instruction when ready"
+                                 scalpel-console-max-rounds)))
+                    (scalpel-console--append notice)
+                    (message "%s" notice)))
+                 ((scalpel-console--continue-p result)
+                  ;; A continued round must not re-send the user's
+                  ;; original instruction: it is already in the history
+                  ;; above, and repeating it makes the planner re-issue
+                  ;; the same shell action in a loop.
+                  (setq next-instruction
+                        scalpel-console--continuation-instruction)
+                  (run-next))
+                 (t
+                  (setq scalpel-console--busy nil))))))))
+      (run-next))))
+
+(defun scalpel-console--busy-p ()
+  "Return non-nil when the target console has a request in flight.
+`scalpel-console--busy' is buffer-local to the console, so it has
+to be read there: read from whichever buffer the command was
+invoked in, it would answer for that buffer instead."
+  (with-current-buffer (scalpel-console--target-buffer)
+    scalpel-console--busy))
 
 (defun scalpel-console-send-line ()
   "Send the pending instruction to the Scalpel agent and append the reply.
@@ -588,7 +642,7 @@ output, so text composed with S-RET is sent as a single message.
 Every round re-sends the conversation recorded in this buffer, so
 the agent can read its own earlier replies and shell output."
   (interactive)
-  (if scalpel-console--busy
+  (if (scalpel-console--busy-p)
       (progn
         (message "Scalpel: still working on the previous instruction...")
         (ding))
