@@ -91,6 +91,11 @@ absolute path that points outside them, and never pipe output into
 a command that writes elsewhere.  When the request cannot be
 carried out that way, do not approximate it: emit a confirm action
 and let the user decide.
+Keep every command's output small and bounded: pass -m or -l limits
+to grep, use head or tail, and never dump a whole file or directory
+with cat, ls -R or find.  A command whose output could run to
+megabytes is the wrong command; ask the user with a confirm action
+instead.
 If the conversation already contains the output of a shell command
 you were asked to run, read that output and respond with the
 conclusion instead of running the same command again.  A continued
@@ -143,6 +148,14 @@ ones that write."
 
 (defvar scalpel-agent--context-readonly-files nil
   "Read-only reference files in the session context, as absolute names.")
+
+(defvar scalpel-agent--shell-output nil
+  "Metadata plist for the most recent shell action.
+Set by `scalpel-agent-shell' right after the command runs and read
+by `scalpel-agent-run' before the next action.  Keys: :bytes is the
+raw output size; :truncated is non-nil when the report holds only a
+prefix of it; :binary is non-nil when the raw output held a NUL byte.
+Nil until a shell action runs.")
 
 (defun scalpel-agent--git-environment ()
   "Return `process-environment' with effectful git overrides removed.
@@ -859,7 +872,11 @@ explicit markers, so a reader (human or LLM) can tell which command
 produced what.  Output is truncated to
 `scalpel-agent-shell-max-bytes' bytes, and control characters other
 than newline and tab are dropped from it.  REASON is the planner's
-stated intent, echoed in the report."
+stated intent, echoed in the report.
+The report always states the true output size, so a command that
+dumped far more than it should is visible to the user and to the
+planner.  Output holding a NUL byte is reported as binary and its
+contents are dropped."
   (unless (and command reason)
     (user-error "Scalpel: malformed shell action"))
   (let* ((root (or (and (bound-and-true-p scalpel-console--root)
@@ -877,15 +894,26 @@ stated intent, echoed in the report."
                         (buffer-string))
                 (error (cons nil (error-message-string err)))))))
          (exit (car result))
-         (output (scalpel-agent--printable-output (cdr result)))
+         (raw (cdr result))
+         ;; Measure and classify RAW before sanitizing: the sanitizer
+         ;; drops NUL bytes, so binary detection must happen here.
+         (raw-bytes (string-bytes raw))
+         (binary (and (cl-position 0 raw) t))
+         (output (scalpel-agent--printable-output raw))
          (truncated (> (length output) max-bytes))
-         (body (if truncated
-                   (concat (substring output 0 max-bytes)
-                           (format "\n[truncated at %d bytes]" max-bytes))
-                 output)))
-    (format (concat "Shell: %s\nReason: %s\nExit: %s\n"
+         (body (cond
+                (binary
+                 (format "[binary output suppressed: %d bytes]" raw-bytes))
+                (truncated
+                 (concat (substring output 0 max-bytes)
+                         (format "\n[truncated: showing first %d of %d bytes]"
+                                 max-bytes raw-bytes)))
+                (t output))))
+    (setq scalpel-agent--shell-output
+          (list :bytes raw-bytes :truncated truncated :binary binary))
+    (format (concat "Shell: %s\nReason: %s\nExit: %s\nOutput: %d bytes\n"
                     "--- output ---\n%s\n--- end output ---")
-            command reason (or exit "unknown") body)))
+            command reason (or exit "unknown") raw-bytes body)))
 
 (defun scalpel-agent-confirm (text)
   "Return TEXT as a confirmation request to the user.
@@ -969,17 +997,23 @@ the action has no target."
 (defun scalpel-agent-run (instruction &optional history)
   "Run one agent round for INSTRUCTION and return its result.
 HISTORY is the conversation text recorded before INSTRUCTION, or
-nil.  Return a plist (:report STRING :shells LIST); :shells holds
-the command string of every shell action the round executed, so a
-caller can tell whether the round produced output worth reading
-back.  One round is one request/execute cycle, not a whole
-conversation: the caller owns the loop and the history."
+nil.  Return a plist (:report STRING :shells SHELLS); SHELLS holds
+one entry per shell action the round executed, as a plist with
+:command plus the output metadata recorded by `scalpel-agent-shell'
+\(:bytes, :truncated, :binary), so a caller can tell whether the
+round produced output worth reading back.  One round is one
+request/execute cycle, not a whole conversation: the caller owns
+the loop and the history.  The returned plist has the form
+`(:report STRING :shells SHELLS)'."
   (let ((reports nil)
         (shells nil))
     (dolist (action (scalpel-agent-plan instruction history))
+      (setq scalpel-agent--shell-output nil)
       (push (scalpel-agent-execute-action action) reports)
       (when (equal (plist-get action :tool) "shell")
-        (push (plist-get action :command) shells)))
+        (push (append (list :command (plist-get action :command))
+                      scalpel-agent--shell-output)
+              shells)))
     (list :report (string-join (nreverse reports) "\n")
           :shells (nreverse shells))))
 

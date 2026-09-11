@@ -662,6 +662,61 @@ instruction) after the round-limit notice."
                 (should (string-match-p "Scalpel: done" (buffer-string)))))))
       (scalpel-utils-test-kill-buffer (buffer-name buf)))))
 
+(ert-deftest scalpel-console-test-continue-prompt-reports-output-size ()
+  "The continuation prompt names each command and its output size.
+Regression: the prompt showed only command names, so a command
+that dumped a large file could be approved unnoticed."
+  (let ((scalpel-console-continue-after-shell 'ask)
+        (noninteractive nil)
+        prompt)
+    (cl-letf (((symbol-function 'yes-or-no-p)
+               (lambda (p) (setq prompt p) t)))
+      (should (scalpel-console--continue-p
+               '(:shells ((:command "cat big.log" :bytes 12345
+                                    :truncated t :binary nil))))))
+    (ert-info ((format "Prompt:\n%S" prompt))
+      (should (string-match-p "cat big.log" prompt))
+      (should (string-match-p "12345 bytes, truncated" prompt)))))
+
+(ert-deftest scalpel-console-test-noisy-round-p ()
+  "A round is noisy when output is huge, truncated, or binary."
+  (should (scalpel-console--noisy-round-p
+           '(:shells ((:command "a" :bytes 5000)))))
+  (should (scalpel-console--noisy-round-p
+           '(:shells ((:command "a" :bytes 10 :truncated t)))))
+  (should (scalpel-console--noisy-round-p
+           '(:shells ((:command "a" :bytes 10 :binary t)))))
+  (should-not (scalpel-console--noisy-round-p
+               '(:shells ((:command "a" :bytes 10))))))
+
+(ert-deftest scalpel-console-test-always-skips-noisy-output ()
+  "Under `always', a noisy round is refused and the user is told.
+Regression: `always' sent truncated megabytes back automatically."
+  (let ((scalpel-agent--context-files nil)
+        (scalpel-agent--context-readonly-files nil)
+        (scalpel-agent-confirm-tools nil)
+        (scalpel-console-continue-after-shell 'always)
+        (scalpel-console-max-rounds 5)
+        (buf (scalpel-console-test--new-console-buffer))
+        (requests 0))
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'scalpel-llm-request)
+                     (lambda (&rest _)
+                       (setq requests (1+ requests))
+                       "[{\"tool\":\"shell\",\"command\":\"seq 1 2000\",\"reason\":\"noise\",\"read-only\":true,\"long-running\":false}]")))
+            (with-current-buffer buf
+              (erase-buffer)
+              (insert "dump it\n")
+              (goto-char (point-min))
+              (scalpel-console-send-line)))
+          (ert-info ((format "requests=%d" requests))
+            (should (= requests 1))
+            (with-current-buffer buf
+              (should (string-match-p "not sent back automatically"
+                                      (buffer-string))))))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
+
 (provide 'scalpel-console-test)
 
 ;;; scalpel-console-test.el ends here

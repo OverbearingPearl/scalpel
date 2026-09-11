@@ -624,6 +624,52 @@ literally, so the offending character could not be seen."
       (should-not (string-match-p "[\t\u00A0]" shown))
       (should (string-match-p "\\\\" shown)))))
 
+(ert-deftest scalpel-agent-test-shell-report-states-output-size ()
+  "The report always states the true output size.
+Regression: only a truncation marker named a size, so a command
+that dumped a large file looked exactly like a small one."
+  (let ((scalpel-console--root nil)
+        (default-directory (file-name-as-directory
+                            (expand-file-name temporary-file-directory))))
+    (let ((report (scalpel-agent-shell "printf abc" "measure output")))
+      (ert-info ((format "Report:\n%S" report))
+        (should (string-match-p "\nOutput: 3 bytes\n" report))))))
+
+(ert-deftest scalpel-agent-test-shell-suppresses-binary-output ()
+  "Output holding a NUL byte is reported as binary, contents dropped."
+  (skip-unless (not (memq system-type '(windows-nt ms-dos))))
+  (let ((scalpel-console--root nil)
+        (default-directory (file-name-as-directory
+                            (expand-file-name temporary-file-directory))))
+    (let ((report (scalpel-agent-shell "printf 'a\\000b'" "check binary")))
+      (ert-info ((format "Report:\n%S" report))
+        (should (string-match-p
+                 "\\[binary output suppressed: 3 bytes\\]" report))
+        (should-not (string-match-p "a\0b" report))))))
+
+(ert-deftest scalpel-agent-test-run-records-shell-output-size ()
+  "A round reports the raw size of every shell command it ran.
+The report preserves the raw output size for continuation decisions."
+  (let ((scalpel-agent--context-files nil)
+        (scalpel-agent--context-readonly-files nil)
+        (scalpel-console--root nil)
+        (default-directory (file-name-as-directory
+                            (expand-file-name temporary-file-directory))))
+    (cl-letf (((symbol-function 'scalpel-llm-request)
+               (lambda (&rest _)
+                 (concat "[{\"tool\":\"shell\",\"command\":\"printf abc\","
+                         "\"reason\":\"size\",\"read-only\":true,"
+                         "\"long-running\":false}]"))))
+      (let* ((result (scalpel-agent-run "measure"))
+             (shell (car (plist-get result :shells))))
+        (ert-info ((format "Result:\n%S" result))
+          (should (equal (plist-get shell :command)
+                         "printf abc"))
+          (should (= (plist-get shell :bytes)
+                     3))
+          (should-not (plist-get shell :truncated))
+          (should-not (plist-get shell :binary)))))))
+
 (provide 'scalpel-agent-test)
 
 ;;; scalpel-agent-test.el ends here
