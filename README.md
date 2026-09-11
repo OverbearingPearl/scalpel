@@ -285,9 +285,6 @@ Then install Scalpel itself:
   :load-path "~/path/to/scalpel"   ; replace with the actual path
   :after (gptel)
   :commands (scalpel-open)
-  ;; Scalpel ships no global prefix (Emacs reserves that space);
-  ;; pick your own and bind the command map:
-  :bind-keymap ("C-c s" . scalpel-command-map))
 ```
 
 After evaluating the above, run `M-x scalpel-open`.
