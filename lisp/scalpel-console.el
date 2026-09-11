@@ -139,6 +139,7 @@ unset, and clamp to `point-max' so a stale value from
     (define-key map (kbd "C-c C-o") #'scalpel-console-add-readonly-file)
     (define-key map (kbd "C-c C-d") #'scalpel-console-remove-file)
     (define-key map (kbd "C-c C-r") #'scalpel-console-reset-context)
+    (define-key map (kbd "C-c C-f") #'scalpel-console-forget-history)
     map)
   "Keymap used in Scalpel console buffers.")
 
@@ -197,7 +198,10 @@ also anchors the buffer to a root directory."
   "Insert TEXT at point tagged with ROLE in `scalpel-console-role'.
 The tag is what `scalpel-console--history' reads back, so text
 inserted through here becomes part of the conversation sent to the
-LLM.  Display-only output must not use it."
+LLM.  Display-only output must not use it.  The tag is not
+permanent: `scalpel-console-forget-history' clears it, which
+removes the region from the conversation while leaving the visible
+text alone."
   (let ((beg (point)))
     (insert text)
     (put-text-property beg (point) 'scalpel-console-role role)))
@@ -311,8 +315,49 @@ filter directory expansion through gitignore rules."
         (scalpel-agent-context-remove path)
         (scalpel-console--show-context)))))
 
+(defun scalpel-console-forget-history ()
+  "Stop sending the current conversation to the agent.
+Every prior turn keeps its place in the buffer but loses its
+`scalpel-console-role' tag, so `scalpel-console--history' no
+longer returns it.  Forgetting is about what the agent reads, not
+about what the user sees: the turns stay on screen and can still
+be reviewed.  The next instruction is sent as the first turn of a
+new session, so the request no longer grows with the length of the
+session.  The header, the context tree and the file list are kept:
+the context is input, not memory — to reset it use
+`scalpel-console-reset-context'."
+  (interactive)
+  (with-current-buffer (scalpel-console--target-buffer)
+    (let ((inhibit-read-only t)
+          (pos (point-min))
+          ranges)
+      ;; Collect every conversation region before touching anything:
+      ;; clearing the role places a new property boundary, and
+      ;; `next-single-property-change' below must see the original
+      ;; layout.
+      (while (< pos (point-max))
+        (let ((next (next-single-property-change
+                     pos 'scalpel-console-role nil (point-max))))
+          (when (get-text-property pos 'scalpel-console-role)
+            (push (cons pos next) ranges))
+          (setq pos next)))
+      ;; Drop the role tag instead of the text: `scalpel-console--history'
+      ;; reads only tagged regions, so clearing the tag removes the turn
+      ;; from the conversation while leaving it visible in the buffer.
+      (dolist (range ranges)
+        (put-text-property (car range) (cdr range)
+                           'scalpel-console-role nil))
+      (goto-char (point-max))
+      ;; Nothing is pending after a forget: the next text typed is a
+      ;; fresh instruction.
+      (setq scalpel-console--input-start (point-max))
+      (message "Scalpel: conversation forgotten; the text stays on screen."))))
+
 (defun scalpel-console-reset-context ()
-  "Reset the agent context to currently open located files."
+  "Reset the agent context to currently open located files.
+The context is the set of files in scope; it is not the
+conversation.  To clear the conversation instead, use
+`scalpel-console-forget-history', which leaves this list alone."
   (interactive)
   (scalpel-agent-context-reset)
   (scalpel-console--show-context))

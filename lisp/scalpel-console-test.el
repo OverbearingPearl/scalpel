@@ -466,6 +466,71 @@ the same command over and over."
                                         (car prompts)))))
       (scalpel-utils-test-kill-buffer (buffer-name buf)))))
 
+(ert-deftest scalpel-console-test-forget-history-keeps-context ()
+  "Forgetting history clears the conversation but keeps the context.
+Regression: the only way to shed a growing conversation was to
+reopen the console, which also discarded the context file list."
+  (let ((scalpel-agent--context-files '("/tmp/scalpel-forget-ctx.el"))
+        (scalpel-agent--context-readonly-files nil)
+        (scalpel-console--context-baseline 'none-yet)
+        (buf (scalpel-console-test--new-console-buffer)))
+    (unwind-protect
+        (with-current-buffer buf
+          (erase-buffer)
+          (insert "Scalpel console.\n\n")
+          (scalpel-console--show-context)
+          (scalpel-console--insert-tagged "User: first\n" 'user)
+          (scalpel-console--insert-tagged "Scalpel: reply\n\n" 'assistant)
+          (scalpel-console-forget-history)
+          (ert-info ((format "After forget:\n%S" (buffer-string)))
+            ;; Conversation is no longer sent to the agent.
+            (should (string= (scalpel-console--history) ""))
+            ;; The turns stay visible: forgetting is not erasing.
+            (should (string-match-p "User: first" (buffer-string)))
+            (should (string-match-p "Scalpel: reply" (buffer-string)))
+            ;; Context tree kept.
+            (should (string-match-p "scalpel-forget-ctx.el"
+                                    (buffer-string)))
+            ;; Nothing pending.
+            (should (= scalpel-console--input-start (point-max)))))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
+
+(ert-deftest scalpel-console-test-forget-history-frees-next-request ()
+  "After a forget, the next request carries no earlier conversation.
+Regression: `forget-history' deleted the text, so nothing verified
+that a live console (text kept, tags dropped) really starts the
+next turn clean."
+  (let ((scalpel-agent--context-files nil)
+        (scalpel-agent--context-readonly-files nil)
+        (scalpel-console--context-baseline 'none-yet)
+        (buf (scalpel-console-test--new-console-buffer))
+        (prompts nil))
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'scalpel-llm-request)
+                     (lambda (prompt &optional _system)
+                       (push prompt prompts)
+                       "[{\"tool\":\"reply\",\"text\":\"ack\"}]")))
+            (with-current-buffer buf
+              (erase-buffer)
+              (insert "first instruction\n")
+              (goto-char (point-min))
+              (scalpel-console-send-line)
+              (scalpel-console-forget-history)
+              (goto-char (point-max))
+              (insert "second instruction\n")
+              (scalpel-console-send-line))
+            (ert-info ((format "Second prompt:\n%S" (car prompts)))
+              (should-not (string-match-p "first instruction" (car prompts)))
+              (should-not (string-match-p "Scalpel: ack" (car prompts)))
+              (should (string-suffix-p "User instruction:\nsecond instruction"
+                                       (car prompts))))
+            (with-current-buffer buf
+              ;; The old turns are still readable in the console.
+              (should (string-match-p "first instruction" (buffer-string)))
+              (should (string-match-p "Scalpel: ack" (buffer-string))))))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
+
 (provide 'scalpel-console-test)
 
 ;;; scalpel-console-test.el ends here

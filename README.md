@@ -269,6 +269,7 @@ Inside the console:
 - `C-c C-o` – add a file or directory as read-only reference
 - `C-c C-d` – remove a file or directory from the context
 - `C-c C-r` – reset the context to currently open located files
+- `C-c C-f` – forget the conversation; keeps the context files
 - `M-x scalpel-history` – show previous Scalpel sessions
 - `M-x scalpel-revert-session` – revert one session completely
 
