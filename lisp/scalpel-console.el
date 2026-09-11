@@ -458,10 +458,20 @@ losing it."
                 result)
             (error
              (funcall stop)
-             (let ((inhibit-read-only t))
-               (scalpel-console--insert-tagged
-                (format "Scalpel error: %s\n\n" (error-message-string err))
-                'assistant))
+             (if (eq (car err) 'scalpel-sandbox-error)
+                 ;; A sandbox failure is infrastructure, not
+                 ;; conversation.  Its message names the backend, so it
+                 ;; is shown to the user but never recorded as an
+                 ;; assistant turn: sending it back would hand the
+                 ;; planner the very boundary the prompt omits.  Only a
+                 ;; round failure that says something about the planner
+                 ;; -- malformed JSON, for one -- stays in the history.
+                 (scalpel-console--append
+                  (format "Scalpel error: %s" (error-message-string err)))
+               (let ((inhibit-read-only t))
+                 (scalpel-console--insert-tagged
+                  (format "Scalpel error: %s\n\n" (error-message-string err))
+                  'assistant)))
              nil))
         ;; The report or error text appended above carries an
         ;; `assistant' role, so nothing needs to be reset here.

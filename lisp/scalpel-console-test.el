@@ -453,7 +453,9 @@ it asked for, so \"run the tests\" could not lead to a fix."
                        (push prompt prompts)
                        (if (= (length prompts) 1)
                            "[{\"tool\":\"shell\",\"command\":\"echo hello\",\"reason\":\"check the loop\",\"read-only\":true,\"long-running\":false}]"
-                         "[{\"tool\":\"reply\",\"text\":\"done\"}]"))))
+                         "[{\"tool\":\"reply\",\"text\":\"done\"}]")))
+                    ((symbol-function 'scalpel-sandbox-run)
+                     (lambda (&rest _ignore) (cons 0 "hello\n"))))
             (with-current-buffer buf
               (erase-buffer)
               (insert "run the tests\n")
@@ -487,7 +489,9 @@ the same command over and over."
                        (push prompt prompts)
                        (if (= (length prompts) 1)
                            "[{\"tool\":\"shell\",\"command\":\"echo hello\",\"reason\":\"check\",\"read-only\":true,\"long-running\":false}]"
-                         "[{\"tool\":\"reply\",\"text\":\"done\"}]"))))
+                         "[{\"tool\":\"reply\",\"text\":\"done\"}]")))
+                    ((symbol-function 'scalpel-sandbox-run)
+                     (lambda (&rest _ignore) (cons 0 "hello\n"))))
             (with-current-buffer buf
               (erase-buffer)
               (insert "run the tests\n")
@@ -599,7 +603,9 @@ away, and the console then stopped without saying why."
                      (lambda (&rest _) (setq asked (1+ asked)) t))
                     ((symbol-function 'message)
                      (lambda (fmt &rest args)
-                       (push (apply #'format fmt args) notices))))
+                       (push (apply #'format fmt args) notices)))
+                    ((symbol-function 'scalpel-sandbox-run)
+                     (lambda (&rest _ignore) (cons 0 "hello\n"))))
             ;; `scalpel-console--continue-p' asks only outside batch.
             (let ((noninteractive nil))
               (with-current-buffer buf
@@ -718,6 +724,46 @@ Regression: `always' sent truncated megabytes back automatically."
             (with-current-buffer buf
               (should (string-match-p "not sent back automatically"
                                       (buffer-string))))))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
+
+(ert-deftest scalpel-console-test-sandbox-error-stays-out-of-conversation ()
+  "A sandbox failure reaches the user but never the planner.
+Regression: every round error was recorded as an assistant turn, so
+a message naming bubblewrap or sandbox-exec was re-sent in the next
+request -- leaking the boundary the prompt deliberately omits."
+  (let ((scalpel-agent--context-files nil)
+        (scalpel-agent--context-readonly-files nil)
+        (buf (scalpel-console-test--new-console-buffer))
+        (prompts nil))
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'scalpel-llm-request)
+                     (lambda (prompt &optional _system)
+                       (push prompt prompts)
+                       (concat "[{\"tool\":\"shell\",\"command\":\"ls\","
+                               "\"reason\":\"look\",\"read-only\":true,"
+                               "\"long-running\":false}]")))
+                    ((symbol-function 'scalpel-sandbox-run)
+                     (lambda (&rest _ignore)
+                       (signal 'scalpel-sandbox-error
+                               (list "Scalpel: no supported command sandbox")))))
+            (with-current-buffer buf
+              (erase-buffer)
+              (insert "look around\n")
+              (goto-char (point-min))
+              (scalpel-console-send-line))
+            (with-current-buffer buf
+              (ert-info ((format "Buffer:\n%S" (buffer-string)))
+                ;; The user must still see what went wrong...
+                (should (string-match-p "no supported command sandbox"
+                                        (buffer-string)))
+                ;; ...without the failure joining the conversation.
+                (should-not (string-match-p
+                             "no supported command sandbox"
+                             (scalpel-console--history))))))
+          (ert-info ((format "Prompts:\n%S" prompts))
+            (should prompts)
+            (should-not (string-match-p "sandbox" (car prompts)))))
       (scalpel-utils-test-kill-buffer (buffer-name buf)))))
 
 (provide 'scalpel-console-test)

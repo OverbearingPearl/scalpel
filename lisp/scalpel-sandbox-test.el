@@ -17,6 +17,16 @@
    (scalpel-sandbox--bwrap-argv "true" nil nil)
    :type 'user-error))
 
+(ert-deftest scalpel-sandbox-test-failures-use-the-sandbox-error-type ()
+  "Sandbox failures signal `scalpel-sandbox-error', a `user-error'.
+The console keys off this type to keep a message that names the
+backend out of the conversation sent to the planner; the type must
+stay a `user-error', so existing handlers keep catching it."
+  (should (memq 'user-error
+                (get 'scalpel-sandbox-error 'error-conditions)))
+  (should-error (scalpel-sandbox--bwrap-argv "true" nil nil)
+                :type 'scalpel-sandbox-error))
+
 (ert-deftest scalpel-sandbox-test-generates-readonly-and-writable-binds ()
   "Readonly files use ro-bind and writable files use bind."
   (scalpel-utils-test-with-temp-file ".txt"
@@ -85,7 +95,12 @@
                   ;; DESTINATION may be t (current buffer) in the real
                   ;; `call-process', so insert into the current buffer
                   ;; instead of using BUFFER as a buffer object.
-                  (insert "ok")
+                  ;; The preflight probe must come back with its
+                  ;; sentinel; the real command answers "ok".
+                  (insert (if (string-match-p scalpel-sandbox--probe-sentinel
+                                              (car (last args)))
+                              scalpel-sandbox--probe-sentinel
+                            "ok"))
                   0))
           (let ((file (make-temp-file "scalpel-sandbox-run-")))
             (unwind-protect
@@ -143,6 +158,221 @@
                            profile)))))
       (delete-file writable-file)
       (delete-file readonly-file))))
+
+(ert-deftest scalpel-sandbox-test-invoke-refuses-signalled-runtime ()
+  "A runtime killed by a signal is refused, not reported as output."
+  (let ((scalpel-sandbox-program "bwrap")
+        (system-type 'gnu/linux)
+        (orig-call-process (symbol-function 'call-process))
+        (file (make-temp-file "scalpel-sandbox-signal-")))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "x"))
+          (fset 'call-process (lambda (&rest _ignore) "Abort trap: 6"))
+          (should-error (scalpel-sandbox--invoke "true" (list file) nil)
+                        :type 'user-error))
+      (fset 'call-process orig-call-process)
+      (delete-file file))))
+
+(ert-deftest scalpel-sandbox-test-run-refuses-when-probe-fails ()
+  "A failing sandbox probe blocks the command instead of running it."
+  (let ((system-type 'gnu/linux)
+        (orig-supported (symbol-function 'scalpel-sandbox-supported-p))
+        (orig-invoke (symbol-function 'scalpel-sandbox--invoke))
+        (ran 0)
+        (file (make-temp-file "scalpel-sandbox-probe-fail-")))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "x"))
+          (fset 'scalpel-sandbox-supported-p (lambda () t))
+          (fset 'scalpel-sandbox--invoke
+                (lambda (&rest _ignore)
+                  (setq ran (1+ ran))
+                  (cons 0 "not the sentinel")))
+          (should-error (scalpel-sandbox-run "true" nil (list file) nil)
+                        :type 'user-error)
+          (ert-info ((format "invoke calls: %d" ran))
+            ;; Only the probe ran; the real command never did.
+            (should (= ran 1))))
+      (fset 'scalpel-sandbox-supported-p orig-supported)
+      (fset 'scalpel-sandbox--invoke orig-invoke)
+      (delete-file file))))
+
+(ert-deftest scalpel-sandbox-test-run-proceeds-when-probe-passes ()
+  "A passing probe lets the command run through the sandbox."
+  (let ((system-type 'gnu/linux)
+        (orig-supported (symbol-function 'scalpel-sandbox-supported-p))
+        (orig-invoke (symbol-function 'scalpel-sandbox--invoke))
+        (commands nil)
+        (file (make-temp-file "scalpel-sandbox-probe-ok-")))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "x"))
+          (fset 'scalpel-sandbox-supported-p (lambda () t))
+          (fset 'scalpel-sandbox--invoke
+                (lambda (command _writable _readonly)
+                  (push command commands)
+                  (if (string-match-p scalpel-sandbox--probe-sentinel command)
+                      (cons 0 scalpel-sandbox--probe-sentinel)
+                    (cons 0 "ok"))))
+          (let ((result (scalpel-sandbox-run "true" nil (list file) nil)))
+            (should (= (car result) 0))
+            (should (string= (cdr result) "ok"))
+            (should (= (length commands) 2))
+            (should (string= (car commands) "true"))))
+      (fset 'scalpel-sandbox-supported-p orig-supported)
+      (fset 'scalpel-sandbox--invoke orig-invoke)
+      (delete-file file))))
+
+(ert-deftest scalpel-sandbox-test-sandbox-argv-p ()
+  "Argv validation rejects anything that is not a sandbox invocation."
+  (let ((scalpel-sandbox-program "bwrap")
+        (scalpel-sandbox-macos-program "sandbox-exec"))
+    (should (scalpel-sandbox--sandbox-argv-p
+             '("bwrap" "--unshare-net" "/bin/sh" "-c" "true")))
+    (should (scalpel-sandbox--sandbox-argv-p
+             '("sandbox-exec" "-p" "(version 1)" "/bin/sh" "-c" "true")))
+    (should-not (scalpel-sandbox--sandbox-argv-p
+                 '("/bin/sh" "-c" "true")))
+    (should-not (scalpel-sandbox--sandbox-argv-p nil))))
+
+(ert-deftest scalpel-sandbox-test-macos-profile-names-resolved-paths ()
+  "The macOS profile names the resolved path of a context file.
+Regression: the sandbox matches its rules against resolved paths,
+so a rule written only for a path reached through a symlinked
+directory never matched, and the sandboxed shell could not resolve
+its own working directory."
+  (skip-unless (fboundp 'make-symbolic-link))
+  (let* ((root (make-temp-file "scalpel-sandbox-real-" t))
+         (link (make-temp-file "scalpel-sandbox-link-")))
+    (unwind-protect
+        (progn
+          (delete-file link)
+          (make-symbolic-link (directory-file-name root) link)
+          (let* ((file (expand-file-name "ctx.el" link))
+                 (resolved (file-truename file)))
+            (with-temp-file file (insert "(defun foo ())"))
+            (let ((profile (scalpel-sandbox--macos-profile (list file) nil)))
+              (ert-info ((format "Profile:\n%s" profile))
+                (should (string-match-p
+                         (regexp-quote
+                          (format "(allow file-read* (literal \"%s\"))"
+                                  file))
+                         profile))
+                (should (string-match-p
+                         (regexp-quote
+                          (format "(allow file-read* (literal \"%s\"))"
+                                  resolved))
+                         profile))))))
+      (delete-directory root t)
+      (when (file-symlink-p link) (delete-file link)))))
+
+(ert-deftest scalpel-sandbox-test-macos-profile-grants-ancestors ()
+  "Every ancestor directory of a context file is readable.
+Regression: only the files themselves were granted, so `cd' into a
+context file's parent reported ENOTDIR and `getcwd' failed inside
+it, and the shell error leaked the sandbox to the user."
+  (let ((file (make-temp-file "scalpel-sandbox-anc-" nil ".el")))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "x"))
+          (let* ((resolved (file-truename file))
+                 (profile (scalpel-sandbox--macos-profile
+                           (list resolved) nil)))
+            (ert-info ((format "Profile:\n%s" profile))
+              (dolist (dir (scalpel-sandbox--ancestor-dirs resolved))
+                (should
+                 (string-match-p
+                  (regexp-quote
+                   (format "(allow file-read* (literal %S))"
+                           (file-truename dir)))
+                  profile))))))
+      (delete-file file))))
+
+(ert-deftest scalpel-sandbox-test-macos-profile-grants-no-directory-read ()
+  "The macOS profile never grants reads beyond the context files.
+Regression risk: a `(allow file-read* (subpath DIR))' clause for a
+context file's parent directory exposes every sibling file, so a
+command could read files the user never added to the context.
+The Linux backend binds individual files and has no such exposure."
+  (let ((file (make-temp-file "scalpel-sandbox-boundary-" nil ".el")))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "(defun foo ())"))
+          (let* ((resolved (expand-file-name file))
+                 (dir (file-name-directory resolved))
+                 (profile (scalpel-sandbox--macos-profile (list file) nil)))
+            (ert-info ((format "Profile:\n%s" profile))
+              (dolist (candidate (list dir (directory-file-name dir)))
+                (should-not
+                 (string-match-p
+                  (regexp-quote
+                   (format "(allow file-read* (subpath %S))" candidate))
+                  profile)))
+              ;; The context file itself stays readable.
+              (should
+               (string-match-p
+                (regexp-quote
+                 (format "(allow file-read* (literal %S))" resolved))
+                profile)))))
+      (delete-file file))))
+
+(ert-deftest scalpel-sandbox-test-workdir-is-readable-tmp ()
+  "The child's cwd is the temp directory, which every profile grants.
+Regression: the cwd was a context file's parent, whose directory
+read was removed to stop exposing sibling files, so `/bin/sh'
+could no longer resolve its cwd and wrote a getcwd warning to
+stderr -- stderr that `call-process' captures together with stdout."
+  (should (string= (scalpel-sandbox--workdir)
+                   (file-name-as-directory
+                    (file-truename
+                     (expand-file-name temporary-file-directory))))))
+
+(ert-deftest scalpel-sandbox-test-macos-executes-read-and-write-on-context-file ()
+  "The macOS profile must read and write a context file in the temp dir.
+Regression: the profile named both spellings of the temp directory, but
+the sandbox matches the resolved path, so a command naming the
+unresolved `/var/folders/...' spelling was denied with EPERM."
+  (skip-unless (and (eq system-type 'darwin)
+                    (executable-find scalpel-sandbox-macos-program)))
+  (scalpel-utils-test-with-temp-file ".txt"
+    (with-temp-file this-file (insert "ORIGINAL"))
+    (let ((result (scalpel-sandbox-run
+                   (format "printf MORE >> %s && cat %s"
+                           (shell-quote-argument (file-truename this-file))
+                           (shell-quote-argument (file-truename this-file)))
+                   nil (list (file-truename this-file)) nil)))
+      (ert-info ((format "Result: %S" result))
+        (should (= (car result) 0))
+        (should (string-match-p "ORIGINAL" (cdr result)))))))
+
+(ert-deftest scalpel-sandbox-test-preflight-touches-a-file ()
+  "The probe must read and write a file, not only print a sentinel.
+Regression: a profile whose path rules were entirely wrong passed the
+probe, because printing a sentinel needs no file access at all."
+  (let ((system-type 'gnu/linux)
+        (orig-supported (symbol-function 'scalpel-sandbox-supported-p))
+        (orig-invoke (symbol-function 'scalpel-sandbox--invoke))
+        (commands nil)
+        (file (make-temp-file "scalpel-sandbox-probe-")))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "x"))
+          (fset 'scalpel-sandbox-supported-p (lambda () t))
+          (fset 'scalpel-sandbox--invoke
+                (lambda (command _writable _readonly)
+                  (push command commands)
+                  (if (string-match-p scalpel-sandbox--probe-sentinel command)
+                      (cons 0 scalpel-sandbox--probe-sentinel)
+                    (cons 0 "ok"))))
+          (scalpel-sandbox-run "true" nil (list file) nil)
+          (let ((probe (car (last commands))))
+            (ert-info ((format "Probe command: %S" probe))
+              (should (string-match-p ">" probe))
+              (should (string-match-p "cat" probe)))))
+      (fset 'scalpel-sandbox-supported-p orig-supported)
+      (fset 'scalpel-sandbox--invoke orig-invoke)
+      (delete-file file))))
 
 (provide 'scalpel-sandbox-test)
 

@@ -181,7 +181,7 @@ error reported a bare JSON failure without naming the cause."
       (with-temp-file this-file (insert "(defun foo ())"))
       (scalpel-agent-context-add-readonly this-file)
       (should (equal scalpel-agent--context-readonly-files
-                     (list (expand-file-name this-file))))
+                     (list (file-truename (expand-file-name this-file)))))
       (should (null scalpel-agent--context-files)))))
 
 (ert-deftest scalpel-agent-test-context-renders-readonly-content ()
@@ -209,15 +209,15 @@ error reported a bare JSON failure without naming the cause."
     (scalpel-utils-test-with-temp-file ".el"
       (with-temp-file this-file (insert "(defun foo ())"))
       (scalpel-agent-context-add-readonly this-file)
-      (should (member (expand-file-name this-file)
+      (should (member (file-truename (expand-file-name this-file))
                       scalpel-agent--context-readonly-files))
       (scalpel-agent-context-add this-file)
       (should (null scalpel-agent--context-readonly-files))
-      (should (member (expand-file-name this-file)
+      (should (member (file-truename (expand-file-name this-file))
                       scalpel-agent--context-files))
       (scalpel-agent-context-add-readonly this-file)
       (should (null scalpel-agent--context-files))
-      (should (member (expand-file-name this-file)
+      (should (member (file-truename (expand-file-name this-file))
                       scalpel-agent--context-readonly-files)))))
 
 (ert-deftest scalpel-agent-test-context-remove-by-directory-prefix ()
@@ -246,7 +246,7 @@ error reported a bare JSON failure without naming the cause."
     (scalpel-utils-test-with-temp-file ".el"
       (with-temp-file this-file (insert "(defun foo (x)\n  (+ x 1))\n"))
       (setq scalpel-agent--context-readonly-files
-            (list (expand-file-name this-file)))
+            (list (file-truename (expand-file-name this-file))))
       (cl-letf (((symbol-function 'scalpel-llm-request)
                  (lambda (_prompt &optional _system)
                    "(defun foo (x)\n  (+ x 2))")))
@@ -263,7 +263,7 @@ error reported a bare JSON failure without naming the cause."
           (scalpel-agent-context-add file)
           (scalpel-agent-context-add file)  ; dedupe
           (should (equal scalpel-agent--context-files
-                         (list (expand-file-name file))))
+                         (list (file-truename (expand-file-name file)))))
           (scalpel-agent-context-remove (concat file "/nope"))
           (should (= (length scalpel-agent--context-files) 1))
           (scalpel-agent-context-remove file)
@@ -284,8 +284,9 @@ error reported a bare JSON failure without naming the cause."
             (scalpel-agent-context-add dir)
             (should (equal (sort (copy-sequence scalpel-agent--context-files)
                                  #'string<)
-                           (sort (list file
-                                       (expand-file-name "notes.md" dir))
+                           (sort (list (file-truename file)
+                                       (file-truename
+                                        (expand-file-name "notes.md" dir)))
                                  #'string<)))))
       (delete-directory dir t)
       (scalpel-utils-test-delete-file other))))
@@ -391,8 +392,15 @@ error reported a bare JSON failure without naming the cause."
             (insert "noise\n"))
           (let ((files (scalpel-agent--expanded-files
                         (directory-file-name dir))))
-            (should (member (expand-file-name "keep.el" dir) files))
-            (should-not (member (expand-file-name "drop.log" dir) files))))
+            ;; `--expanded-files' canonicalizes its input and every path
+            ;; it returns, because the sandbox matches its rules against
+            ;; the resolved path; the temp directory is reached through
+            ;; the `/var -> /private/var' symlink, so the expected names
+            ;; must be resolved too or the comparison can never hold.
+            (should (member (file-truename (expand-file-name "keep.el" dir))
+                            files))
+            (should-not (member (file-truename (expand-file-name "drop.log" dir))
+                                files))))
       (delete-directory dir t))))
 
 (ert-deftest scalpel-agent-test-walk-all-files-skips-dot-git ()
@@ -506,6 +514,17 @@ from the system prompt, so the planner could never emit it."
       (should (string-match-p
                (format "\"tool\"[ \t]*:[ \t]*\"%s\"" (regexp-quote tool))
                scalpel-agent-system-prompt)))))
+
+(ert-deftest scalpel-agent-test-system-prompt-hides-the-sandbox ()
+  "The planner must not be told that commands run under a sandbox.
+Regression: the prompt named the OS sandbox, so the planner could
+reason about the boundary and probe or route around it; the user
+experience is meant to be an ordinary shell with a smaller
+filesystem, not a sandboxed one."
+  (dolist (word '("sandbox" "bwrap" "bubblewrap" "sandbox-exec"))
+    (ert-info ((format "Prompt mentions %S" word))
+      (should-not (string-match-p (regexp-quote word)
+                                  (downcase scalpel-agent-system-prompt))))))
 
 (ert-deftest scalpel-agent-test-shell-runs-command-through-a-shell ()
   "Shell actions delegate execution to the sandbox and report its status."

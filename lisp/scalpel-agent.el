@@ -85,13 +85,12 @@ command that changes state defeats the gate the user relies on.
 Never invent commands the user did not ask for, and never use shell
 to change files: all file changes go through edit, create and
 delete.
-A shell command may act only on the files listed in the context
-above, and only inside the directories those paths name.  Write
-those paths exactly as they are given; never use cd, ~, .., or an
-absolute path that points outside them, and never pipe output into
-a command that writes elsewhere.  When the request cannot be
-carried out that way, do not approximate it: emit a confirm action
-and let the user decide.
+Shell commands run with the context files above as the whole
+filesystem: they are the only files you may read or change, and
+they must be named by the absolute paths exactly as given.  A file
+that exists on disk but is absent from the context is off-limits:
+when a request needs one, ask the user to add it with a confirm
+action instead of reaching for it with a different command.
 Keep every command's output small and bounded: pass -m or -l limits
 to grep, use head or tail, and never dump a whole file or directory
 with cat, ls -R or find.  A command whose output could run to
@@ -226,7 +225,7 @@ gitfile (worktree or submodule)."
   "Return the file list that PATH expands to.
 PATH is a regular file or a directory.  Directory contents respect
 gitignore unless IGNORE-GITIGNORE is non-nil."
-  (let* ((path (expand-file-name path))
+  (let* ((path (file-truename (expand-file-name path)))
          (files
           (cond
            ((file-regular-p path) (list path))
@@ -276,13 +275,14 @@ IGNORE-GITIGNORE is non-nil."
 (defun scalpel-agent-readonly-p (file)
   "Return non-nil when FILE is a read-only context file."
   (and file
-       (member (expand-file-name file) scalpel-agent--context-readonly-files)))
+       (member (file-truename (expand-file-name file))
+               scalpel-agent--context-readonly-files)))
 
 (defun scalpel-agent-context-remove (path)
   "Remove PATH from the session context.
 PATH is a file or a directory; a directory removes every file under
 it.  No-op with a message when nothing matched."
-  (let* ((path (expand-file-name path))
+  (let* ((path (file-truename (expand-file-name path)))
          (prefix (file-name-as-directory path))
          (match-p (lambda (f) (or (string= f path) (string-prefix-p prefix f))))
          (removed (cl-remove-if-not match-p
@@ -862,10 +862,9 @@ byte is display junk."
 
 (defun scalpel-agent-shell (command reason)
   "Run COMMAND through a shell in the console root.
-The command's reach is bounded only by the working directory it
-runs in and by the confirmation gate driven by
-`scalpel-agent-confirm-tools'; the planner is asked to stay inside
-the context files, but that is guidance, not a check.
+The command's reach is bounded by the sandbox, whose file scope is
+exactly the current context files, and by the confirmation gate
+driven by `scalpel-agent-confirm-tools'.
 COMMAND may use pipes, redirection and quoting.  The report names
 the command, always states the exit status, and wraps the output in
 explicit markers, so a reader (human or LLM) can tell which command
@@ -876,7 +875,9 @@ stated intent, echoed in the report.
 The report always states the true output size, so a command that
 dumped far more than it should is visible to the user and to the
 planner.  Output holding a NUL byte is reported as binary and its
-contents are dropped."
+contents are dropped.
+Signal `user-error' when the sandbox is unavailable or fails its
+probe, so a command is never run outside the sandbox."
   (unless (and command reason)
     (user-error "Scalpel: malformed shell action"))
   (let* ((root (or (and (bound-and-true-p scalpel-console--root)
@@ -884,13 +885,14 @@ contents are dropped."
                    default-directory))
          (max-bytes scalpel-agent-shell-max-bytes)
          (result
-          (condition-case err
-              (scalpel-sandbox-run
-               command
-               root
-               scalpel-agent--context-files
-               scalpel-agent--context-readonly-files)
-            (error (cons nil (error-message-string err)))))
+          ;; No `condition-case' here: a sandbox refusal must abort the
+          ;; action loudly, never degrade into a shell report that looks
+          ;; like the command ran.
+          (scalpel-sandbox-run
+           command
+           root
+           scalpel-agent--context-files
+           scalpel-agent--context-readonly-files))
          (exit (car result))
          (raw (cdr result))
          ;; Measure and classify RAW before sanitizing: the sanitizer
