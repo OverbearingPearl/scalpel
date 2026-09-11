@@ -13,7 +13,7 @@
 (ert-deftest scalpel-llm-test-api-key-error-p ()
   "Recognize gptel's missing-API-key setup error."
   (should (scalpel-llm--api-key-error-p "‘gptel-api-key’ is not valid"))
-  (should-not (scalpel-llm--api-key-error-p "Scalpel: LLM request timed out")))
+  (should-not (scalpel-llm--api-key-error-p "Scalpel: LLM request idle for more than 30 seconds")))
 
 (ert-deftest scalpel-llm-test-fails-loudly-without-gptel ()
   "Requiring `scalpel-llm' must fail loudly when gptel is absent.
@@ -87,6 +87,47 @@ conses of the form (reasoning . TEXT) in the RESPONSE argument."
           (should (string= (buffer-string) "step 1 step 2"))))
     (when (get-buffer scalpel-llm-reasoning-buffer-name)
       (kill-buffer scalpel-llm-reasoning-buffer-name))))
+
+(ert-deftest scalpel-llm-test-idle-timeout-abandons-request ()
+  "A silent backend trips the idle timeout and its late callback is dropped.
+The abandoned request must not mutate the shared token counters, or a
+late response would corrupt the next request."
+  (let ((scalpel-llm-timeout 0.2)
+        (late-callback nil))
+    (cl-letf (((symbol-function 'gptel-request)
+               (lambda (_prompt &rest args)
+                 (setq late-callback (plist-get args :callback))
+                 'fake-fsm)))
+      (should-error (scalpel-llm-request "test prompt") :type 'user-error))
+    (should late-callback)
+    (let ((tokens scalpel-llm--tokens-received))
+      (funcall late-callback "late chunk" nil)
+      (should (= tokens scalpel-llm--tokens-received)))))
+
+(ert-deftest scalpel-llm-test-active-stream-survives-idle-timeout ()
+  "A stream that outlives the idle budget but keeps talking must succeed.
+Total request time exceeds `scalpel-llm-timeout', so a wall-clock
+deadline would kill it; the idle budget must not."
+  (let* ((scalpel-llm-timeout 0.3)
+         (saved-callback nil)
+         (ticks 0))
+    (cl-letf (((symbol-function 'gptel-request)
+               (lambda (_prompt &rest args)
+                 (setq saved-callback (plist-get args :callback))
+                 'fake-fsm))
+              ((symbol-function 'accept-process-output)
+               (lambda (&rest _ignore)
+                 ;; Each poll burns wall-clock time, then delivers a chunk,
+                 ;; so the stream stays active across a span longer than a
+                 ;; wall-clock deadline would allow.
+                 (sit-for 0.2)
+                 (setq ticks (1+ ticks))
+                 (funcall saved-callback "." nil)
+                 (when (>= ticks 3)
+                   (funcall saved-callback t nil)))))
+      (let ((result (scalpel-llm-request "test prompt")))
+        (ert-info ((format "Result: %S (ticks=%d)" result ticks))
+          (should (string= result "...")))))))
 
 (provide 'scalpel-llm-test)
 

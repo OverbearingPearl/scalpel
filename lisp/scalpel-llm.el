@@ -16,7 +16,18 @@
 (require 'gptel-transient)
 
 (defvar scalpel-llm-timeout 30
-  "Maximum seconds to wait for an LLM response before raising an error.")
+  "Seconds of total callback silence before a request is abandoned.
+This is an *idle* budget, not a wall-clock deadline: every gptel
+callback -- content chunk, reasoning chunk, or completion -- resets the
+clock, so a slow but active stream is never killed.  Time spent queued
+inside gptel counts as idle, because no callback arrives during it.
+Raise this for backends that think before emitting their first chunk.")
+
+(defvar scalpel-llm--request-id 0
+  "Monotonic id of the most recent request.
+A callback captures the id it was created under and drops itself once
+that id no longer matches, so a request abandoned by a timeout cannot
+leak into the next one.")
 
 (defvar scalpel-llm--progress-callback nil
   "Optional zero-arg function called once per wait-loop iteration.")
@@ -54,10 +65,16 @@ status display."
 (defun scalpel-llm-request (prompt &optional system)
   "Send PROMPT to the configured gptel backend.
 SYSTEM overrides the default system message.  Returns the response string.
-Waits synchronously but calls `accept-process-output' so user interrupts work."
+Waits synchronously but calls `accept-process-output' so user interrupts work.
+Abandons the request after `scalpel-llm-timeout' seconds without any callback;
+abandoning invalidates the callback, so a late response cannot corrupt a later
+request.  The underlying gptel request keeps running until gptel settles it;
+only its callback is dropped."
   (let* ((response nil)
          (done nil)
-         (start (float-time))
+         (request-id (setq scalpel-llm--request-id
+                           (1+ scalpel-llm--request-id)))
+         (last-activity (float-time))
          (accumulated "")
          (upload-tokens (scalpel-llm--count-tokens prompt))
          (received-tokens 0))
@@ -70,46 +87,57 @@ Waits synchronously but calls `accept-process-output' so user interrupts work."
             :system system
             :stream t
             :callback (lambda (resp info)
-                        (cond
-                         ;; End of streamed response: gptel signals success
-                         ;; by calling back with RESPONSE = t.
-                         ((eq resp t)
-                          (setq response accumulated)
-                          (setq done t))
-                         ;; Failure: gptel calls back with a nil RESPONSE;
-                         ;; the human-readable cause is in INFO's :status.
-                         ((null resp)
-                          (setq response
-                                (cons 'error
-                                      (or (plist-get info :status) "unknown")))
-                          (setq done t))
-                         ;; Content chunk.
-                         ((stringp resp)
-                          (setq accumulated (concat accumulated resp))
-                          (setq received-tokens
-                                (+ received-tokens
-                                   (scalpel-llm--count-tokens resp)))
-                          (setq scalpel-llm--tokens-received received-tokens)
-                          (when scalpel-llm--progress-callback
-                            (funcall scalpel-llm--progress-callback)))
-                         ;; Reasoning chunk: delivered as the RESPONSE
-                         ;; argument (a (reasoning . TEXT) cons), never as
-                         ;; an INFO key.
-                         ((and (consp resp) (eq (car resp) 'reasoning))
-                          (when (stringp (cdr resp))
-                            (scalpel-llm--append-reasoning (cdr resp))
+                        ;; A callback from an abandoned request must not touch
+                        ;; shared state: drop it unless it belongs to the
+                        ;; newest request.
+                        (when (eql request-id scalpel-llm--request-id)
+                          (setq last-activity (float-time))
+                          (cond
+                           ;; End of streamed response: gptel signals success
+                           ;; by calling back with RESPONSE = t.
+                           ((eq resp t)
+                            (setq response accumulated)
+                            (setq done t))
+                           ;; Failure: gptel calls back with a nil RESPONSE;
+                           ;; the human-readable cause is in INFO's :status.
+                           ((null resp)
+                            (setq response
+                                  (cons 'error
+                                        (or (plist-get info :status) "unknown")))
+                            (setq done t))
+                           ;; Content chunk.
+                           ((stringp resp)
+                            (setq accumulated (concat accumulated resp))
+                            (setq received-tokens
+                                  (+ received-tokens
+                                     (scalpel-llm--count-tokens resp)))
+                            (setq scalpel-llm--tokens-received received-tokens)
                             (when scalpel-llm--progress-callback
-                              (funcall scalpel-llm--progress-callback)))))))
+                              (funcall scalpel-llm--progress-callback)))
+                           ;; Reasoning chunk: delivered as the RESPONSE
+                           ;; argument (a (reasoning . TEXT) cons), never as
+                           ;; an INFO key.
+                           ((and (consp resp) (eq (car resp) 'reasoning))
+                            (when (stringp (cdr resp))
+                              (scalpel-llm--append-reasoning (cdr resp))
+                              (when scalpel-llm--progress-callback
+                                (funcall scalpel-llm--progress-callback))))))))
           (while (not done)
             (let ((inhibit-quit t))
-              (when (> (- (float-time) start) scalpel-llm-timeout)
-                (user-error "Scalpel: LLM request timed out after %s seconds" scalpel-llm-timeout))
+              (when (> (- (float-time) last-activity) scalpel-llm-timeout)
+                ;; Invalidate the request before bailing out: any callback
+                ;; still in flight is now dropped instead of mutating the
+                ;; token counters or the reasoning buffer.
+                (setq scalpel-llm--request-id (1+ scalpel-llm--request-id))
+                (user-error "Scalpel: LLM request idle for more than %s seconds"
+                            scalpel-llm-timeout))
               (accept-process-output nil 0.1)
               (when scalpel-llm--progress-callback
                 (funcall scalpel-llm--progress-callback))
               (redisplay))
             (when quit-flag
               (setq quit-flag nil)
+              (setq scalpel-llm--request-id (1+ scalpel-llm--request-id))
               (user-error "Scalpel: LLM request interrupted")))
           (cond
            ((stringp response) response)
