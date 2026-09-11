@@ -704,7 +704,10 @@ Regression: `always' sent truncated megabytes back automatically."
           (cl-letf (((symbol-function 'scalpel-llm-request)
                      (lambda (&rest _)
                        (setq requests (1+ requests))
-                       "[{\"tool\":\"shell\",\"command\":\"seq 1 2000\",\"reason\":\"noise\",\"read-only\":true,\"long-running\":false}]")))
+                       "[{\"tool\":\"shell\",\"command\":\"seq 1 2000\",\"reason\":\"noise\",\"read-only\":true,\"long-running\":false}]"))
+                    ((symbol-function 'scalpel-sandbox-run)
+                     (lambda (&rest _ignore)
+                       (cons 0 (make-string 5000 ?x)))))
             (with-current-buffer buf
               (erase-buffer)
               (insert "dump it\n")

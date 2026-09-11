@@ -508,19 +508,28 @@ from the system prompt, so the planner could never emit it."
                scalpel-agent-system-prompt)))))
 
 (ert-deftest scalpel-agent-test-shell-runs-command-through-a-shell ()
-  "Shell actions support pipes and report the command's exit status.
-Regression: the command was split on spaces and handed to
-`call-process', so shell syntax worked only by accident."
+  "Shell actions delegate execution to the sandbox and report its status."
   (let ((scalpel-console--root nil)
+        (scalpel-agent--context-files nil)
+        (scalpel-agent--context-readonly-files nil)
         (default-directory (file-name-as-directory
                             (expand-file-name temporary-file-directory))))
-    (let ((piped (scalpel-agent-shell "echo hello | tr a-z A-Z"
-                                      "check shell semantics")))
+    (cl-letf (((symbol-function 'scalpel-sandbox-run)
+               (lambda (command root writable readonly)
+                 (should (string= command "echo hello | tr a-z A-Z"))
+                 (should root)
+                 (should (null writable))
+                 (should (null readonly))
+                 (cons 0 "HELLO\n"))))
+      (let ((piped (scalpel-agent-shell "echo hello | tr a-z A-Z"
+                                        "check shell semantics")))
       (ert-info ((format "Report:\n%S" piped))
-        (should (string-match-p "HELLO" piped))))
-    (let ((failed (scalpel-agent-shell "exit 3" "check exit status")))
+        (should (string-match-p "HELLO" piped)))))
+    (cl-letf (((symbol-function 'scalpel-sandbox-run)
+               (lambda (&rest _ignore) (cons 3 ""))))
+      (let ((failed (scalpel-agent-shell "exit 3" "check exit status")))
       (ert-info ((format "Report:\n%S" failed))
-        (should (string-match-p "Exit: 3" failed))))))
+          (should (string-match-p "Exit: 3" failed)))))))
 
 (ert-deftest scalpel-agent-test-action-summary-prefers-target ()
   "Confirmation prompts describe what will run or change.
@@ -572,31 +581,34 @@ every read-only command needed a prompt."
         (should (= ran 3))))))
 
 (ert-deftest scalpel-agent-test-shell-report-is-delimited ()
-  "Shell reports name the command, state the exit status, and end.
-Regression: success omitted the exit status and nothing marked the
-end of the output, so the report of several commands could not be
-told apart from one command whose output contained the same text."
+  "Shell reports name the command, state the exit status, and end."
   (let ((scalpel-console--root nil)
+        (scalpel-agent--context-files nil)
+        (scalpel-agent--context-readonly-files nil)
         (default-directory (file-name-as-directory
                             (expand-file-name temporary-file-directory))))
-    (let ((report (scalpel-agent-shell "echo hi" "check delimiters")))
+    (cl-letf (((symbol-function 'scalpel-sandbox-run)
+               (lambda (&rest _ignore) (cons 0 "hi\n"))))
+      (let ((report (scalpel-agent-shell "echo hi" "check delimiters")))
       (ert-info ((format "Report:\n%S" report))
         (should (string-match-p "\\`Shell: echo hi\n" report))
         (should (string-match-p "\nExit: 0\n" report))
         (should (string-match-p "\n--- output ---\n" report))
-        (should (string-match-p "--- end output ---\\'" report))))))
+        (should (string-match-p "--- end output ---\\'" report)))))))
 
 (ert-deftest scalpel-agent-test-shell-report-drops-control-characters ()
-  "Control characters in command output never reach the report.
-Regression: a BEL byte in the captured output showed up in the
-console and in the next prompt as ^G."
+  "Control characters in sandbox output never reach the report."
   (let ((scalpel-console--root nil)
+        (scalpel-agent--context-files nil)
+        (scalpel-agent--context-readonly-files nil)
         (default-directory (file-name-as-directory
                             (expand-file-name temporary-file-directory))))
-    (let ((report (scalpel-agent-shell "printf 'a\\ab\\n'" "check controls")))
+    (cl-letf (((symbol-function 'scalpel-sandbox-run)
+               (lambda (&rest _ignore) (cons 0 "a\ab\n"))))
+      (let ((report (scalpel-agent-shell "printf 'a\\ab\\n'" "check controls")))
       (ert-info ((format "Report:\n%S" report))
         (should (string-match-p "\n--- output ---\nab\n" report))
-        (should-not (string-match-p "[\0-\10\13-\37\177-\237]" report))))))
+        (should-not (string-match-p "[\0-\10\13-\37\177-\237]" report)))))))
 
 (ert-deftest scalpel-agent-test-prompt-includes-history ()
   "The prompt carries the conversation before the instruction.
@@ -625,27 +637,33 @@ literally, so the offending character could not be seen."
       (should (string-match-p "\\\\" shown)))))
 
 (ert-deftest scalpel-agent-test-shell-report-states-output-size ()
-  "The report always states the true output size.
-Regression: only a truncation marker named a size, so a command
-that dumped a large file looked exactly like a small one."
+  "The report always states the true output size."
   (let ((scalpel-console--root nil)
+        (scalpel-agent--context-files nil)
+        (scalpel-agent--context-readonly-files nil)
         (default-directory (file-name-as-directory
                             (expand-file-name temporary-file-directory))))
-    (let ((report (scalpel-agent-shell "printf abc" "measure output")))
+    (cl-letf (((symbol-function 'scalpel-sandbox-run)
+               (lambda (&rest _ignore) (cons 0 "abc"))))
+      (let ((report (scalpel-agent-shell "printf abc" "measure output")))
       (ert-info ((format "Report:\n%S" report))
-        (should (string-match-p "\nOutput: 3 bytes\n" report))))))
+        (should (string-match-p "\nOutput: 3 bytes\n" report)))))))
 
 (ert-deftest scalpel-agent-test-shell-suppresses-binary-output ()
   "Output holding a NUL byte is reported as binary, contents dropped."
   (skip-unless (not (memq system-type '(windows-nt ms-dos))))
   (let ((scalpel-console--root nil)
+        (scalpel-agent--context-files nil)
+        (scalpel-agent--context-readonly-files nil)
         (default-directory (file-name-as-directory
                             (expand-file-name temporary-file-directory))))
-    (let ((report (scalpel-agent-shell "printf 'a\\000b'" "check binary")))
+    (cl-letf (((symbol-function 'scalpel-sandbox-run)
+               (lambda (&rest _ignore) (cons 0 "a\0b"))))
+      (let ((report (scalpel-agent-shell "printf 'a\\000b'" "check binary")))
       (ert-info ((format "Report:\n%S" report))
         (should (string-match-p
                  "\\[binary output suppressed: 3 bytes\\]" report))
-        (should-not (string-match-p "a\0b" report))))))
+        (should-not (string-match-p "a\0b" report)))))))
 
 (ert-deftest scalpel-agent-test-run-records-shell-output-size ()
   "A round reports the raw size of every shell command it ran.
@@ -654,21 +672,36 @@ The report preserves the raw output size for continuation decisions."
         (scalpel-agent--context-readonly-files nil)
         (scalpel-console--root nil)
         (default-directory (file-name-as-directory
-                            (expand-file-name temporary-file-directory))))
-    (cl-letf (((symbol-function 'scalpel-llm-request)
-               (lambda (&rest _)
-                 (concat "[{\"tool\":\"shell\",\"command\":\"printf abc\","
-                         "\"reason\":\"size\",\"read-only\":true,"
-                         "\"long-running\":false}]"))))
-      (let* ((result (scalpel-agent-run "measure"))
-             (shell (car (plist-get result :shells))))
-        (ert-info ((format "Result:\n%S" result))
-          (should (equal (plist-get shell :command)
-                         "printf abc"))
-          (should (= (plist-get shell :bytes)
-                     3))
-          (should-not (plist-get shell :truncated))
-          (should-not (plist-get shell :binary)))))))
+                            (expand-file-name temporary-file-directory)))
+        (orig-llm-request (symbol-function 'scalpel-llm-request))
+        (orig-sandbox-run (symbol-function 'scalpel-sandbox-run))
+        (orig-agent-shell (symbol-function 'scalpel-agent-shell)))
+    (unwind-protect
+        (progn
+          (fset 'scalpel-llm-request
+                (lambda (&rest _)
+                  (concat "[{\"tool\":\"shell\",\"command\":\"printf abc\","
+                          "\"reason\":\"size\",\"read-only\":true,"
+                          "\"long-running\":false}]")))
+          (fset 'scalpel-sandbox-run
+                (lambda (&rest _ignore) (cons 0 "abc")))
+          (fset 'scalpel-agent-shell
+                (lambda (_command _reason)
+                  (setq scalpel-agent--shell-output
+                        '(:bytes 3 :truncated nil :binary nil))
+                  "Shell: printf abc\nReason: size\nExit: 0\nOutput: 3 bytes"))
+          (let* ((result (scalpel-agent-run "measure"))
+                 (shell (car (plist-get result :shells))))
+            (ert-info ((format "Result:\n%S" result))
+              (should (equal (plist-get shell :command)
+                             "printf abc"))
+              (should (= (plist-get shell :bytes)
+                         3))
+              (should-not (plist-get shell :truncated))
+              (should-not (plist-get shell :binary)))))
+      (fset 'scalpel-llm-request orig-llm-request)
+      (fset 'scalpel-sandbox-run orig-sandbox-run)
+      (fset 'scalpel-agent-shell orig-agent-shell))))
 
 (provide 'scalpel-agent-test)
 

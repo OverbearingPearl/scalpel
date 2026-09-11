@@ -22,8 +22,10 @@
 
 (defun scalpel-test--lisp-files ()
   "Return Scalpel `lisp' directory file names (no directory)."
-  (directory-files (expand-file-name "lisp" scalpel-test--package-root)
-                   nil "^[^.]+\\.el$"))
+  (sort
+   (directory-files (expand-file-name "lisp" scalpel-test--package-root)
+                    nil "^[^.]+\\.el$")
+   #'string<))
 
 (defun scalpel-test--module-features ()
   "Derive feature symbols of all Scalpel modules from lisp/ file names."

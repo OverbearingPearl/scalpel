@@ -189,6 +189,7 @@ never speculative whole-file changes.
 
 - Emacs 29.1+
 - a working `gptel` setup (any backend: OpenAI, Anthropic, Ollama, ...)
+- Linux `bubblewrap` (`bwrap`) for shell actions
 - Git (used for local undo/rollback)
 - optionally `lsp-mode`/`eglot` and language servers for richer semantics
 
@@ -279,6 +280,12 @@ Inside the console:
 
 - All LLM traffic goes through `gptel`; Scalpel never connects directly to an
   LLM or sends data outside your configured backend.
+- Shell actions run through Linux `bubblewrap`.  The sandbox policy is rebuilt
+  from the current context files for every action.  Context files are exposed
+  under `/context/<id>`; writable files are writable in the sandbox and
+  read-only files are mounted read-only.  There is no macOS shell backend yet.
+  If `bubblewrap` is unavailable, shell actions fail closed instead of falling
+  back to an unsandboxed shell.
 - For local models (Ollama, llama.cpp), no source leaves your machine.
 - Every accepted edit is committed to the orphan branch `scalpel/autosave`; the
   current Git working tree stays clean until you decide to commit.
@@ -292,6 +299,8 @@ Scalpel is in active, deliberately small MVP stages.
 **Currently implemented**
 - Emacs Lisp structural location
 - Console UI skeleton
+- Linux shell execution through `bubblewrap`; shell actions are refused when
+  `bubblewrap` is unavailable
 
 **Near-term**
 - Deterministic locator API with LSP integration
