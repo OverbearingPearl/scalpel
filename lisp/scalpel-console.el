@@ -45,6 +45,17 @@ runs never continue regardless of this value."
                  (const :tag "Always continue" always))
   :group 'scalpel)
 
+(defconst scalpel-console--continuation-instruction
+  (concat "The shell command from the previous round already ran; its\n"
+          "output is in the conversation above.  Read that output and\n"
+          "decide now: if it already answers the user's request, reply\n"
+          "with the conclusion; otherwise issue at most one concrete\n"
+          "next action.  Do not run the same shell command again.")
+  "Instruction sent on a continued round after a shell command ran.
+The user's original instruction is already in the conversation, so
+re-sending it makes the planner re-issue the same shell action.
+Structural contract shared with `scalpel-console--run-rounds'.")
+
 (defvar-local scalpel-console--root nil
   "Absolute directory this console session is anchored to.
 Set by `scalpel-console-open'; while non-nil, `default-directory'
@@ -390,18 +401,28 @@ HISTORY is the conversation recorded before INSTRUCTION.  A round
 that ran shell commands may be followed by another, up to
 `scalpel-console-max-rounds'.  Each round re-reads the conversation
 from the buffer, so shell output reaches the next round without
-anything being carried in a variable."
+anything being carried in a variable.  A continued round sends
+`scalpel-console--continuation-instruction' instead of INSTRUCTION:
+the original instruction is already inside the history, and
+re-sending it makes the planner run the same shell command again."
   (let ((scalpel-console--busy t)
         (round 0)
         (conversation history)
+        (next-instruction instruction)
         (more t))
     (while (and more (< round scalpel-console-max-rounds))
       (setq round (1+ round))
-      (let ((result (scalpel-console--run-round instruction conversation)))
+      (let ((result (scalpel-console--run-round next-instruction conversation)))
         (setq conversation (scalpel-console--history))
         (setq more (and result
                         (plist-get result :shells)
-                        (scalpel-console--continue-p result)))))))
+                        (scalpel-console--continue-p result)))
+        ;; A continued round must not re-send the user's original
+        ;; instruction: it is already in the history above, and
+        ;; repeating it makes the planner re-issue the same shell
+        ;; action in a loop.
+        (when more
+          (setq next-instruction scalpel-console--continuation-instruction))))))
 
 (defun scalpel-console-send-line ()
   "Send the pending instruction to the Scalpel agent and append the reply.

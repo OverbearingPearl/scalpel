@@ -428,6 +428,44 @@ it asked for, so \"run the tests\" could not lead to a fix."
               (should (string-match-p "Scalpel: done" (buffer-string))))))
       (scalpel-utils-test-kill-buffer (buffer-name buf)))))
 
+(ert-deftest scalpel-console-test-continuation-does-not-repeat-instruction ()
+  "A continued round asks the planner to act on output, not to repeat the request.
+Regression: every round re-sent the original instruction, so the
+planner re-issued the same shell action and the user had to confirm
+the same command over and over."
+  (let ((scalpel-agent--context-files nil)
+        (scalpel-agent--context-readonly-files nil)
+        (scalpel-agent-confirm-tools nil)
+        (scalpel-console-continue-after-shell 'always)
+        (scalpel-console-max-rounds 3)
+        (buf (scalpel-console-test--new-console-buffer))
+        (prompts nil))
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'scalpel-llm-request)
+                     (lambda (prompt &optional _system)
+                       (push prompt prompts)
+                       (if (= (length prompts) 1)
+                           "[{\"tool\":\"shell\",\"command\":\"echo hello\",\"reason\":\"check\"}]"
+                         "[{\"tool\":\"reply\",\"text\":\"done\"}]"))))
+            (with-current-buffer buf
+              (erase-buffer)
+              (insert "run the tests\n")
+              (goto-char (point-min))
+              (scalpel-console-send-line)))
+          (should (= (length prompts) 2))
+          (ert-info ((format "Second prompt:\n%S" (car prompts)))
+            ;; History still carries the first turn's shell report...
+            (should (string-match-p "Shell: echo hello" (car prompts)))
+            ;; ...but the trailing instruction is the continuation, not
+            ;; the user's original words.
+            (should (string-suffix-p
+                     scalpel-console--continuation-instruction
+                     (car prompts)))
+            (should-not (string-match-p "User instruction:\nrun the tests"
+                                        (car prompts)))))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
+
 (provide 'scalpel-console-test)
 
 ;;; scalpel-console-test.el ends here
