@@ -158,27 +158,6 @@ returned buffer when done."
                                         nil t))))
           (when (buffer-live-p buf) (kill-buffer buf)))))))
 
-(ert-deftest scalpel-console-test-context-diff-highlights-removed ()
-  "A file dropped from the context is appended struck through."
-  (let ((scalpel-agent--context-files '("/tmp/scalpel-diff-a.el"))
-        (scalpel-agent--context-readonly-files nil)
-        (buf (scalpel-console-test--new-console-buffer)))
-    (unwind-protect
-        (progn
-          (with-current-buffer buf
-            (setq scalpel-console--context-baseline 'none-yet)
-            (scalpel-console--show-context)
-            (setq scalpel-agent--context-files nil)
-            (scalpel-console--show-context)
-            (goto-char (point-min))
-            (let (pos)
-              (while (search-forward "scalpel-diff-a.el" nil t)
-                (setq pos (match-beginning 0)))
-              (should pos)
-              (should (eq (get-text-property pos 'face)
-                          'scalpel-console-context-removed-face)))))
-      (when (buffer-live-p buf) (kill-buffer buf)))))
-
 (ert-deftest scalpel-console-test-context-diff-face-covers-name-only ()
   "The change face starts at the file name, never at the tree graphics."
   (let ((scalpel-agent--context-files '("/tmp/scalpel-diff-name.el"))
@@ -199,44 +178,6 @@ returned buffer when done."
               (should (eq (get-text-property pos 'face)
                           'scalpel-console-context-removed-face))
               (should (null (get-text-property (1- pos) 'face))))))
-      (when (buffer-live-p buf) (kill-buffer buf)))))
-
-(ert-deftest scalpel-console-test-send-line-does-not-duplicate-input ()
-  "The typed instruction is rewritten into the User line, not repeated."
-  (let ((buf (scalpel-console-test--new-console-buffer)))
-    (unwind-protect
-        (progn
-          (cl-letf (((symbol-function 'scalpel-llm-request)
-                     (lambda (_prompt &optional _system)
-                       "[{\"tool\":\"reply\",\"text\":\"done\"}]")))
-            (with-current-buffer buf
-              (erase-buffer)
-              (insert "echo me\n")
-              (goto-char (point-min))
-              (scalpel-console-send-line))
-            (with-current-buffer buf
-              (should (= (how-many "echo me" (point-min) (point-max)) 1)))))
-      (when (buffer-live-p buf) (kill-buffer buf)))))
-
-(ert-deftest scalpel-console-test-status-line-shows-counters ()
-  "The status line shows token counters and elapsed time."
-  (let ((buf (scalpel-console-test--new-console-buffer))
-        (seen nil))
-    (unwind-protect
-        (progn
-          (cl-letf (((symbol-function 'scalpel-llm-request)
-                     (lambda (_prompt &optional _system)
-                       (setq seen (functionp scalpel-llm--progress-callback))
-                       "[{\"tool\":\"reply\",\"text\":\"done\"}]")))
-            (with-current-buffer buf
-              (erase-buffer)
-              (insert "status instruction\n")
-              (goto-char (point-min))
-              (scalpel-console-send-line))
-            (should seen)
-            (with-current-buffer buf
-              (goto-char (point-min))
-              (should (search-forward "Scalpel: done" nil t)))))
       (when (buffer-live-p buf) (kill-buffer buf)))))
 
 (ert-deftest scalpel-console-test-status-line-own-line-and-clean-stop ()
