@@ -286,6 +286,29 @@ directory."
     (ert-info ("Rootless console must refuse to send")
       (should-error (scalpel-console-send-line) :type 'user-error))))
 
+(ert-deftest scalpel-console-test-context-diff-unchanged-face ()
+  "Unchanged context entries are dimmed without strike-through."
+  (let ((scalpel-agent--context-files '("/tmp/scalpel-diff-keep.el"))
+        (scalpel-agent--context-readonly-files nil)
+        (buf (scalpel-console-test--new-console-buffer)))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (setq scalpel-console--context-baseline 'none-yet)
+            ;; First refresh establishes the baseline; second sees no delta.
+            (scalpel-console--show-context)
+            (scalpel-console--show-context)
+            (goto-char (point-min))
+            (let (pos)
+              (while (search-forward "scalpel-diff-keep.el" nil t)
+                (setq pos (match-beginning 0)))
+              (should pos)
+              (ert-info ((format "Face at %d: %S" pos
+                                 (get-text-property pos 'face)))
+                (should (eq (get-text-property pos 'face)
+                            'scalpel-console-context-unchanged-face))))))
+      (when (buffer-live-p buf) (kill-buffer buf)))))
+
 (provide 'scalpel-console-test)
 
 ;;; scalpel-console-test.el ends here

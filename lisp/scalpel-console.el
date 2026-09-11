@@ -42,6 +42,11 @@ console buffer yet, so nothing is highlighted as changed.")
   "Face for files removed from the Scalpel context."
   :group 'scalpel)
 
+(defface scalpel-console-context-unchanged-face
+  '((t :inherit shadow))
+  "Face for files unchanged in the Scalpel context."
+  :group 'scalpel)
+
 (defun scalpel-console--buffer-name (root)
   "Return the Scalpel console buffer name for ROOT.
 ROOT is expanded, normalized with `file-name-as-directory' and
@@ -165,6 +170,9 @@ highlighted."
          ('removed (concat graphics
                            (propertize name
                                        'face 'scalpel-console-context-removed-face)))
+         ('same (concat graphics
+                        (propertize name
+                                    'face 'scalpel-console-context-unchanged-face)))
          (_ text))))
    lines
    "\n"))
