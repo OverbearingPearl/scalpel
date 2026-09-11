@@ -745,13 +745,28 @@ Return human-readable report string."
         (format "Deleted %s in %s" symbol
                 (buffer-name (current-buffer)))))))
 
+(defun scalpel-agent--printable-output (text)
+  "Return TEXT with only tab, newline and printable characters.
+Command output can carry control bytes, such as the bell a batch
+child Emacs may write.  Newline and tab stay; every other control
+byte is display junk."
+  (mapconcat #'char-to-string
+             (cl-remove-if-not
+              (lambda (char)
+                (or (memq char '(?\n ?\t))
+                    (and (<= 32 char)
+                         (not (<= 127 char 159)))))
+              (string-to-list text))
+             ""))
+
 (defun scalpel-agent-shell (command reason)
   "Run COMMAND through a shell in the console root.
 COMMAND may use pipes, redirection and quoting.  The report names
 the command, always states the exit status, and wraps the output in
 explicit markers, so a reader (human or LLM) can tell which command
 produced what.  Output is truncated to
-`scalpel-agent-shell-max-bytes' bytes.  REASON is the planner's
+`scalpel-agent-shell-max-bytes' bytes, and control characters other
+than newline and tab are dropped from it.  REASON is the planner's
 stated intent, echoed in the report."
   (unless (and command reason)
     (user-error "Scalpel: malformed shell action"))
@@ -770,7 +785,7 @@ stated intent, echoed in the report."
                         (buffer-string))
                 (error (cons nil (error-message-string err)))))))
          (exit (car result))
-         (output (cdr result))
+         (output (scalpel-agent--printable-output (cdr result)))
          (truncated (> (length output) max-bytes))
          (body (if truncated
                    (concat (substring output 0 max-bytes)

@@ -511,6 +511,18 @@ told apart from one command whose output contained the same text."
         (should (string-match-p "\n--- output ---\n" report))
         (should (string-match-p "--- end output ---\\'" report))))))
 
+(ert-deftest scalpel-agent-test-shell-report-drops-control-characters ()
+  "Control characters in command output never reach the report.
+Regression: a BEL byte in the captured output showed up in the
+console and in the next prompt as ^G."
+  (let ((scalpel-console--root nil)
+        (default-directory (file-name-as-directory
+                            (expand-file-name temporary-file-directory))))
+    (let ((report (scalpel-agent-shell "printf 'a\\ab\\n'" "check controls")))
+      (ert-info ((format "Report:\n%S" report))
+        (should (string-match-p "\n--- output ---\nab\n" report))
+        (should-not (string-match-p "[\0-\10\13-\37\177-\237]" report))))))
+
 (ert-deftest scalpel-agent-test-prompt-includes-history ()
   "The prompt carries the conversation before the instruction.
 Regression: only the context and the newest instruction were sent,
