@@ -86,6 +86,40 @@ outlived their run."
                          (mapcar #'buffer-name (buffer-list))))
         (should-not (get-file-buffer resolved))))))
 
+(defun scalpel-utils-test--lisp-directory ()
+  "Return the directory holding the Scalpel test files.
+Derived from where this function itself was defined, so the answer
+holds whether this file arrived through `load-path' or was loaded
+by name; a `lisp' test file may not require the root test entry, so
+this file must work the directory out on its own."
+  (file-name-directory
+   (or (symbol-file 'scalpel-utils-test--lisp-directory 'defun)
+       (locate-library "scalpel-utils-test")
+       (error "Scalpel: cannot locate the Scalpel test directory"))))
+
+(defun scalpel-utils-test--test-files ()
+  "Return the `*-test.el' file names under the Scalpel Lisp directory."
+  (cl-remove-if-not (lambda (file) (string-match-p "-test\\.el\\'" file))
+                    (directory-files (scalpel-utils-test--lisp-directory)
+                                     nil "^[^.]+\\.el\\'")))
+
+(ert-deftest scalpel-utils-test-every-test-file-provides-its-feature ()
+  "Every test file provides the feature named after it.
+The runner decides whether a test file still has to be loaded by
+asking `featurep' on that name, because a sibling test file may
+have required it first; such a file is skipped, so one that never
+provides its feature is not skipped and the pass loads it a second
+time, which makes ERT refuse the tests it defines.  Every file in
+this directory is loaded by that pass, so all of them must provide."
+  (let ((files (scalpel-utils-test--test-files)))
+    ;; A directory derivation that silently returned nothing would make
+    ;; this test vacuous, which is worse than not having it at all.
+    (ert-info ((format "Test files: %S" files))
+      (should files))
+    (dolist (file files)
+      (ert-info ((format "Test file: %s" file))
+        (should (featurep (intern (file-name-base file))))))))
+
 (provide 'scalpel-utils-test)
 
 ;;; scalpel-utils-test.el ends here

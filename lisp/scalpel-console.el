@@ -24,6 +24,11 @@
 ;; record: a report's output body is spent once the following round has read it,
 ;; so only the newest report carries its body into the prompt, while the buffer
 ;; keeps every byte.
+;;
+;; A report's body is also folded in the display by default: a shell command may
+;; dump thousands of lines, and the header -- what ran, how it exited, how large
+;; the output was -- is what a reader needs at a glance.  The fold is display
+;; only, so the record and the projection above are both untouched.
 
 ;;; Code:
 
@@ -85,6 +90,20 @@ keeps its body; older ones keep their header lines and a
 placeholder.  Set it to nil to send every report whole: that costs
 the repeated growth, but never asks the planner to re-run a command
 for output it was already given."
+  :type 'boolean
+  :group 'scalpel)
+
+(defcustom scalpel-console-collapse-output t
+  "Whether a report's fenced output body is folded in the display.
+A shell or read report may hold thousands of lines that the user
+does not have to read: its output already goes back to the planner
+by itself, and the header -- what ran, how it exited, how large
+the output was -- is what a reader needs at a glance.  With this
+set, the body between a report's fences is hidden behind a one-line
+placeholder; the text stays in the buffer, so
+`scalpel-console--history' and `scalpel-console--trim-report' see
+it unchanged, and `scalpel-console-toggle-output' expands it again.
+Set it to nil to show every body."
   :type 'boolean
   :group 'scalpel)
 
@@ -199,6 +218,7 @@ caller can delete them without invalidating earlier ones."
     (define-key map (kbd "C-c C-d") #'scalpel-console-remove-file)
     (define-key map (kbd "C-c C-r") #'scalpel-console-reset-context)
     (define-key map (kbd "C-c C-f") #'scalpel-console-forget-history)
+    (define-key map (kbd "C-c C-o") #'scalpel-console-toggle-output)
     map)
   "Keymap used in Scalpel console buffers.")
 
@@ -272,9 +292,12 @@ text alone."
     ;; the text properties of the character before point.  Without
     ;; `rear-nonsticky', the very first character the user types after
     ;; a reply or a context tree would inherit these tags, and the
-    ;; pending-input scanner would then skip the whole instruction.
+    ;; pending-input scanner would then skip the whole instruction.  The
+    ;; fold properties are listed too: a `display' inherited from a
+    ;; folded body would replace the user's own first keystroke.
     (put-text-property beg (point) 'rear-nonsticky
-                       '(scalpel-console-role scalpel-console-output))))
+                       '(scalpel-console-role scalpel-console-output
+                         scalpel-console-collapsed display))))
 
 (defun scalpel-console--trim-report (text)
   "Replace the fenced body of a report in TEXT with a placeholder.
@@ -337,6 +360,38 @@ the console keeps the whole record."
                            (cdr turn)))
         "")))))
 
+(defun scalpel-console--collapse-report-bodies (beg end)
+  "Hide each fenced report body between BEG and END.
+The fold is display-only: the body keeps its text, so
+`buffer-substring-no-properties' and `scalpel-console--history'
+still return it whole, and `scalpel-console--trim-report' keeps
+working on it.  Each hidden body is tagged
+`scalpel-console-collapsed' with its placeholder, which
+`scalpel-console-toggle-output' re-installs.  A report is a
+\"--- output ---\"/\"--- end output ---\" pair, and one round's
+report may hold several, so this loops to END.  Does nothing when
+`scalpel-console-collapse-output' is nil."
+  (when scalpel-console-collapse-output
+    (let ((inhibit-read-only t))
+      (save-excursion
+        (goto-char beg)
+        (while (re-search-forward "\n--- output ---\n" end t)
+          (let ((body-start (point)))
+            (if (null (re-search-forward "\n--- end output ---" end t))
+                ;; Unterminated fence: the remainder cannot be trusted
+                ;; to pair up, so no later body is folded either.
+                (goto-char end)
+              (let ((body-end (match-beginning 0)))
+                (when (> body-end body-start)
+                  (let* ((lines (count-lines body-start body-end))
+                         (placeholder
+                          (format "[%d line%s of output; C-c C-o shows]"
+                                  lines (if (= lines 1) "" "s"))))
+                    (put-text-property body-start body-end
+                                       'scalpel-console-collapsed placeholder)
+                    (put-text-property body-start body-end
+                                       'display placeholder)))))))))))
+
 (defun scalpel-console--append (text &optional role)
   "Append TEXT to the end of the console buffer.
 ROLE, when non-nil, tags TEXT as part of the conversation
@@ -353,8 +408,52 @@ refresh or reply."
             (beg (point)))
         (scalpel-console--insert-tagged (format "%s\n\n" text) role)
         (unless role
-          (put-text-property beg (point) 'scalpel-console-output t)))
+          (put-text-property beg (point) 'scalpel-console-output t))
+        ;; Fold every fenced report body in what was just appended, so a
+        ;; large shell dump does not bury the conversation.  Display
+        ;; only: the record above and the projection `--history' builds
+        ;; are both unchanged.
+        (scalpel-console--collapse-report-bodies beg (point)))
       (goto-char (point-max)))))
+
+(defun scalpel-console-toggle-output ()
+  "Show or hide every fenced report body in the console.
+Hiding is display-only: the text stays in the buffer, so the
+conversation built by `scalpel-console--history' is unaffected.
+The state of the first folded body found decides for the whole
+buffer, so one call never leaves a half-expanded console."
+  (interactive)
+  (with-current-buffer (scalpel-console--target-buffer)
+    (let ((inhibit-read-only t)
+          (pos (point-min))
+          found
+          expand)
+      ;; One decision for the whole buffer: a mixed state would make the
+      ;; next toggle ambiguous.
+      (while (and (< pos (point-max)) (not found))
+        (let ((next (next-single-property-change
+                     pos 'scalpel-console-collapsed nil (point-max))))
+          (when (get-text-property pos 'scalpel-console-collapsed)
+            ;; A body still wearing its placeholder is folded, so this
+            ;; call expands; one without is already expanded, so this
+            ;; call folds.  `expand' names the action to take, not the
+            ;; state found.
+            (setq found t
+                  expand (not (null (get-text-property pos 'display)))))
+          (setq pos next)))
+      (when found
+        (setq pos (point-min))
+        (while (< pos (point-max))
+          (let ((next (next-single-property-change
+                       pos 'scalpel-console-collapsed nil (point-max))))
+            (when (get-text-property pos 'scalpel-console-collapsed)
+              (if expand
+                  (remove-text-properties pos next '(display nil))
+                (put-text-property
+                 pos next 'display
+                 (get-text-property pos 'scalpel-console-collapsed))))
+            (setq pos next)))
+        (message "Scalpel: report bodies %s" (if expand "shown" "hidden"))))))
 
 (defun scalpel-console--render-diff (lines)
   "Return LINES as text with per-name change highlighting.

@@ -8,6 +8,7 @@
 
 ;;; Code:
 
+(require 'cl-lib)
 (require 'package)
 (package-initialize)
 (require 'ert)
@@ -27,11 +28,31 @@
                     nil "^[^.]+\\.el$")
    #'string<))
 
+(defun scalpel-test--file-feature (file)
+  "Return the feature symbol FILE provides.
+FILE is a bare file name from the `lisp' directory, such as
+\"scalpel-utils-test.el\".  A module is named after the feature it
+provides, so the name alone identifies it."
+  (intern (file-name-base file)))
+
 (defun scalpel-test--module-features ()
   "Derive feature symbols of all Scalpel modules from lisp/ file names."
-  (mapcar (lambda (file)
-            (intern (file-name-base file)))
-          (scalpel-test--lisp-files)))
+  (mapcar #'scalpel-test--file-feature (scalpel-test--lisp-files)))
+
+(defun scalpel-test--test-files ()
+  "Return the `*-test.el' file names under `lisp'."
+  (cl-remove-if-not (lambda (file) (string-match-p "-test\\.el$" file))
+                    (scalpel-test--lisp-files)))
+
+(defun scalpel-test--skip-test-file-p (feature preloaded)
+  "Return non-nil when the test file providing FEATURE is loaded already.
+PRELOADED is the list of features provided before this run's load
+pass began.  A feature in that list may still hold code from the
+previous run -- an unload that did not take -- so its file is loaded
+again and the run sees what is on disk.  Any other provided feature
+was loaded by a sibling test file's `require' during this pass, and
+loading that file again would hand ERT the same test twice."
+  (and (featurep feature) (not (memq feature preloaded))))
 
 (defun scalpel-test--kill-temp-file-buffers ()
   "Kill all file buffers visiting files under the temp directory.
@@ -81,17 +102,34 @@ safety net for tests interrupted before their own cleanup ran."
                                                      scalpel-test--package-root)))))
   (message "Scalpel modules reloaded."))
 
+(defun scalpel-test--load-test-files ()
+  "Load every `*-test.el' under `lisp', each file once and from disk.
+A test file may `require' a sibling: `scalpel-agent-test' needs the
+`scalpel-utils-test-with-temp-file' macro at expansion time, so it
+cannot wait for this loop -- which visits files in name order -- to
+reach `scalpel-utils-test'.  ERT signals when it is handed a test it
+already knows, so that `require' counts as the file's load and the
+loop does not load it again.  Call this once per run, with the
+previous run's tests already deleted."
+  (let ((preloaded
+         (cl-remove-if-not
+          #'featurep
+          (mapcar #'scalpel-test--file-feature
+                  (scalpel-test--test-files)))))
+    (dolist (file (scalpel-test--test-files))
+      (let ((feature (scalpel-test--file-feature file)))
+        (unless (scalpel-test--skip-test-file-p feature preloaded)
+          (load-file (expand-file-name
+                      file (expand-file-name "lisp"
+                                             scalpel-test--package-root))))))))
+
 (defun scalpel-test-run ()
   "Reload Scalpel modules, then run every Scalpel ERT test."
   (interactive)
   (ert-delete-all-tests)
   (scalpel-test--kill-temp-file-buffers)
   (scalpel-test-reload-modules)
-  (dolist (file (scalpel-test--lisp-files))
-    (when (string-match-p "-test\\.el$" file)
-      (load-file (expand-file-name file
-                                   (expand-file-name "lisp"
-                                                     scalpel-test--package-root)))))
+  (scalpel-test--load-test-files)
   (scalpel-test--kill-temp-file-buffers)
   (if noninteractive
       (ert-run-tests-batch-and-exit "scalpel-")

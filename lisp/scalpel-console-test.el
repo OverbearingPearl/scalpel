@@ -10,6 +10,7 @@
 (require 'cl-lib)
 (require 'scalpel-console)
 (require 'scalpel-agent)
+(require 'scalpel-utils-test)
 
 (defun scalpel-console-test--new-console-buffer ()
   "Create a fresh console buffer anchored to the temp directory.
@@ -1057,6 +1058,147 @@ splitting the record and reordering `--history'."
                                "User: hi\nScalpel: done\n\n"))
               (should (string= (scalpel-console--history)
                                "User: hi\nScalpel: done")))))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
+
+(ert-deftest scalpel-console-test-collapse-folds-report-body-not-text ()
+  "A report body is folded in the display, never removed from the buffer.
+Regression: a shell command that dumped thousands of lines sat in
+the middle of the conversation, so the console was least readable
+exactly when its output was largest.  The fold is display-only, so
+`--history' and `--trim-report' see the same bytes as before."
+  (let ((buf (scalpel-console-test--new-console-buffer)))
+    (unwind-protect
+        (with-current-buffer buf
+          (erase-buffer)
+          (scalpel-console--append
+           (concat "Scalpel: Shell: ls\nReason: look\nExit: 0\n"
+                   "Output: 3 bytes\n"
+                   "--- output ---\na.el\n--- end output ---")
+           'assistant)
+          (goto-char (point-min))
+          (should (search-forward "\na.el\n" nil t))
+          (let ((body (1+ (match-beginning 0))))
+            (ert-info ((format "Buffer:\n%S" (buffer-string)))
+              (should (get-text-property body 'display))
+              (should (string-match-p
+                       "C-c C-o"
+                       (get-text-property body 'scalpel-console-collapsed)))
+              ;; The body text survives under the fold.
+              (should (string-match-p
+                       "--- output ---\na.el\n--- end output ---"
+                       (buffer-substring-no-properties
+                        (point-min) (point-max))))))
+          ;; The header line stays readable: only the body is folded.
+          (goto-char (point-min))
+          (should (search-forward "Shell: ls" nil t))
+          (should-not (get-text-property (match-beginning 0) 'display)))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
+
+(ert-deftest scalpel-console-test-collapse-keeps-history-whole ()
+  "Folding is display-only: the planner still receives the body.
+Regression: a fold implemented by deleting or replacing text would
+have silently dropped the output the continuation round must read."
+  (let ((buf (scalpel-console-test--new-console-buffer)))
+    (unwind-protect
+        (with-current-buffer buf
+          (erase-buffer)
+          (setq scalpel-console--context-baseline 'none-yet)
+          (scalpel-console--append
+           (concat "Scalpel: Shell: ls\nExit: 0\nOutput: 3 bytes\n"
+                   "--- output ---\na.el\n--- end output ---")
+           'assistant)
+          (let ((history (scalpel-console--history)))
+            (ert-info ((format "History:\n%S" history))
+              (should (string-match-p "a.el" history))
+              (should (string-match-p "--- end output ---" history)))))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
+
+(ert-deftest scalpel-console-test-toggle-output-round-trips ()
+  "Toggling expands the folded bodies, and toggling again folds them."
+  (let ((buf (scalpel-console-test--new-console-buffer)))
+    (unwind-protect
+        (with-current-buffer buf
+          (erase-buffer)
+          (scalpel-console--append
+           (concat "Scalpel: Shell: ls\nExit: 0\nOutput: 3 bytes\n"
+                   "--- output ---\na.el\n--- end output ---")
+           'assistant)
+          (goto-char (point-min))
+          (should (search-forward "\na.el\n" nil t))
+          (let ((body (1+ (match-beginning 0))))
+            (should (get-text-property body 'display))
+            (scalpel-console-toggle-output)
+            (should-not (get-text-property body 'display))
+            (scalpel-console-toggle-output)
+            (should (get-text-property body 'display))))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
+
+(ert-deftest scalpel-console-test-collapse-off-keeps-bodies-visible ()
+  "With folding disabled, no body is hidden."
+  (let ((scalpel-console-collapse-output nil)
+        (buf (scalpel-console-test--new-console-buffer)))
+    (unwind-protect
+        (with-current-buffer buf
+          (erase-buffer)
+          (scalpel-console--append
+           (concat "Scalpel: Shell: ls\nExit: 0\nOutput: 3 bytes\n"
+                   "--- output ---\na.el\n--- end output ---")
+           'assistant)
+          (goto-char (point-min))
+          (should (search-forward "\na.el\n" nil t))
+          (ert-info ((format "Buffer:\n%S" (buffer-string)))
+            (should-not (get-text-property (1+ (match-beginning 0)) 'display))
+            (should-not (get-text-property (1+ (match-beginning 0))
+                                           'scalpel-console-collapsed))))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
+
+(ert-deftest scalpel-console-test-collapse-folds-every-report-in-a-round ()
+  "A round holding several reports folds each of their bodies.
+One round's report is the actions' reports joined, so a read
+followed by a shell command arrives as a single insertion."
+  (let ((buf (scalpel-console-test--new-console-buffer)))
+    (unwind-protect
+        (with-current-buffer buf
+          (erase-buffer)
+          (scalpel-console--append
+           (concat "Scalpel: Read: foo in /tmp/foo.el\nOutput: 14 bytes\n"
+                   "--- output ---\n(defun foo ())\n--- end output ---\n"
+                   "Scalpel: Shell: ls\nExit: 0\nOutput: 7 bytes\n"
+                   "--- output ---\nout.txt\n--- end output ---")
+           'assistant)
+          (goto-char (point-min))
+          (should (search-forward "\n(defun foo ())\n" nil t))
+          (let ((read-body (1+ (match-beginning 0))))
+            (goto-char (point-min))
+            (should (search-forward "\nout.txt\n" nil t))
+            (let ((shell-body (1+ (match-beginning 0))))
+              (ert-info ((format "Buffer:\n%S" (buffer-string)))
+                (should (get-text-property read-body 'display))
+                (should (get-text-property shell-body 'display))))))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
+
+(ert-deftest scalpel-console-test-collapsed-body-does-not-leak-onto-input ()
+  "The fold never spreads onto the text the user types after it.
+Regression: `insert-and-inherit' copies the properties of the
+preceding character, so a `display' property left out of
+`rear-nonsticky' would replace the user's first keystroke with the
+fold placeholder."
+  (let ((buf (scalpel-console-test--new-console-buffer)))
+    (unwind-protect
+        (with-current-buffer buf
+          (erase-buffer)
+          (scalpel-console--append
+           (concat "Scalpel: Shell: ls\nExit: 0\nOutput: 3 bytes\n"
+                   "--- output ---\na.el\n--- end output ---")
+           'assistant)
+          (goto-char (point-max))
+          (let ((pos (point)))
+            (insert-and-inherit "hello")
+            (ert-info ((format "Buffer:\n%S" (buffer-string)))
+              (should (string= (buffer-substring-no-properties pos (point-max))
+                               "hello"))
+              (should-not (get-text-property pos 'display))
+              (should-not (get-text-property pos 'scalpel-console-role)))))
       (scalpel-utils-test-kill-buffer (buffer-name buf)))))
 
 (provide 'scalpel-console-test)
