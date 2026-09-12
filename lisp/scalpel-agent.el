@@ -680,6 +680,27 @@ by eye from one that did."
         (print-escape-multibyte t))
     (prin1-to-string raw)))
 
+(defun scalpel-agent--escape-raw-controls (payload)
+  "Return PAYLOAD with raw control characters inside JSON strings escaped.
+Models sometimes emit literal newlines or tabs inside JSON string
+values, which JSON forbids, so the whole plan fails to parse.  Only
+characters inside a string literal are touched: outside one, a
+newline is legal whitespace.  The scanner mirrors
+`scalpel-agent--json-payload': a backslash escapes the next
+character, and a quote toggles the string."
+  (let ((in-string nil)
+        (escaped nil))
+    (mapconcat
+     (lambda (char)
+       (cond
+        (escaped (setq escaped nil) (string char))
+        ((eq char ?\\) (setq escaped t) (string char))
+        ((eq char ?\") (setq in-string (not in-string)) (string char))
+        ((and in-string (memq char '(?\n ?\r ?\t)))
+         (format "\\u%04X" char))
+        (t (string char))))
+     payload "")))
+
 (defun scalpel-agent--parse-error (raw)
   "Signal the `user-error' describing why RAW failed to parse.
 Distinguishes a planner reply that used tool-call syntax from one
@@ -702,15 +723,25 @@ from whatever prose or markdown fences surround it.  Signal
       ;; `scalpel-agent--parse-error' signals, so a missing payload and
       ;; an unparsable one share a single explanation path.
       (scalpel-agent--parse-error raw))
-    (let ((parsed (condition-case nil
-                      (json-parse-string
-                       ;; Models emit \x2014-style escapes, which JSON forbids;
-                       ;; normalize them to \uXXXX before parsing.
-                       (replace-regexp-in-string
-                        "\\\\x\\([0-9a-fA-F]\\{4\\}\\)" "\\\\u\\1" payload)
-                       :object-type 'plist
-                       :array-type 'list)
-                    (error (scalpel-agent--parse-error raw)))))
+    (let ((parsed
+           (condition-case err
+               (json-parse-string
+                ;; Models emit \x2014-style escapes, which JSON forbids;
+                ;; normalize them to \uXXXX before parsing, then escape
+                ;; raw control characters inside string literals.
+                (scalpel-agent--escape-raw-controls
+                 (replace-regexp-in-string
+                  "\\\\x\\([0-9a-fA-F]\\{4\\}\\)" "\\\\u\\1" payload))
+                :object-type 'plist
+                :array-type 'list)
+             ;; The parser's own message names the offending construct;
+             ;; dropping it, as the previous `condition-case nil' did,
+             ;; made every parse failure indistinguishable.
+             (error
+              (user-error
+               "Scalpel: planner returned invalid JSON (%s): %s"
+               (error-message-string err)
+               (scalpel-agent--visible-raw raw))))))
       (when (and (plistp parsed) (plist-get parsed :tool))
         (setq parsed (list parsed)))
       (unless (and (listp parsed)
