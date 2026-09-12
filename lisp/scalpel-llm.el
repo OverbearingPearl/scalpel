@@ -109,8 +109,12 @@ a later request.
 :type is `idle' for the idle timer, `timeout' for the total
 deadline, `cancelled' for an explicit cancellation, `api' for a
 backend error surfaced by gptel, `api-key' for a missing or invalid
-API key, and `setup' for a failure raised synchronously by
-`gptel-request'."
+API key, `setup' for a failure raised synchronously by
+`gptel-request', and `callback' for a success or error callback that
+raised.  ON-ERROR is the request's terminal callback; a success
+callback which raises is re-delivered through ON-ERROR with :type
+`callback', and an error raised by ON-ERROR itself is only reported
+in the echo area rather than escaping into gptel's process filter."
   (let* ((cancelled nil)
          (accumulated "")
          (timer nil)
@@ -125,6 +129,18 @@ API key, and `setup' for a failure raised synchronously by
         ((clear-cancel-current ()
            (when (eq scalpel-llm--cancel-current cancel-fn)
              (setq scalpel-llm--cancel-current nil)))
+         (notify-error (payload)
+           ;; ON-ERROR runs after `abandon' has cancelled the idle timer
+           ;; and the total deadline, so an error raised inside it can no
+           ;; longer be rescued by either timer and would escape into
+           ;; gptel's process filter; this sink swallows it into the echo
+           ;; area instead.
+           (condition-case err
+               (funcall on-error payload)
+             (error
+              (message "Scalpel: error callback failed: %s (%S)"
+                       (error-message-string err)
+                       err))))
          (abandon ()
            (setq cancelled t)
            (when timer (cancel-timer timer) (setq timer nil))
@@ -138,11 +154,11 @@ API key, and `setup' for a failure raised synchronously by
                   (lambda ()
                     (unless cancelled
                       (abandon)
-                      (funcall on-error
-                               (list :type 'idle
-                                     :message
-                                     (format "Scalpel: LLM request idle for more than %s seconds"
-                                             scalpel-llm-timeout))))))))
+                      (notify-error
+                       (list :type 'idle
+                             :message
+                             (format "Scalpel: LLM request idle for more than %s seconds"
+                                     scalpel-llm-timeout))))))))
          (arm-deadline ()
            (when deadline-timer (cancel-timer deadline-timer))
            (setq deadline-timer
@@ -151,19 +167,26 @@ API key, and `setup' for a failure raised synchronously by
                   (lambda ()
                     (unless cancelled
                       (abandon)
-                      (funcall on-error
-                               (list :type 'timeout
-                                     :message "Scalpel: request exceeded its total time budget")))))))
+                      (notify-error
+                       (list :type 'timeout
+                             :message "Scalpel: request exceeded its total time budget")))))))
          (finish (kind payload)
            (unless cancelled
              (abandon)
-             (funcall (if (eq kind 'success) on-success on-error) payload)))
+             (if (eq kind 'success)
+                 (condition-case err
+                     (funcall on-success payload)
+                   (error
+                    (notify-error
+                     (list :type 'callback
+                           :message (error-message-string err)))))
+               (notify-error payload))))
          (cancel-request ()
            (unless cancelled
              (abandon)
-             (funcall on-error
-                      (list :type 'cancelled
-                            :message "Scalpel: request cancelled")))))
+             (notify-error
+              (list :type 'cancelled
+                    :message "Scalpel: request cancelled")))))
       (setq cancel-fn (lambda () (cancel-request)))
       (setq scalpel-llm--cancel-current cancel-fn)
       (condition-case err
@@ -223,16 +246,16 @@ API key, and `setup' for a failure raised synchronously by
               (arm-timeout)))
         (error
          (abandon)
-         (if (scalpel-llm--api-key-error-p (error-message-string err))
-             (funcall on-error
-                      (list :type 'api-key
-                            :message
-                            (concat "Scalpel: gptel has no valid API key.  "
-                                    "Run `M-x scalpel-set-backend' or press `C-c C-b' "
-                                    "in the *scalpel* buffer to choose a backend and enter credentials")))
-           (funcall on-error
-                    (list :type 'setup
-                          :message (error-message-string err)))))))))
+         (let ((payload
+                (if (scalpel-llm--api-key-error-p (error-message-string err))
+                    (list :type 'api-key
+                          :message
+                          (concat "Scalpel: gptel has no valid API key.  "
+                                  "Run `M-x scalpel-set-backend' or press `C-c C-b' "
+                                  "in the *scalpel* buffer to choose a backend and enter credentials"))
+                  (list :type 'setup
+                        :message (error-message-string err)))))
+           (notify-error payload)))))))
 
 ;;;###autoload
 (defun scalpel-llm-select-backend ()
