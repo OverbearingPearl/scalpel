@@ -174,7 +174,6 @@ caller can delete them without invalidating earlier ones."
     (define-key map (kbd "C-c C-c") #'scalpel-console-send-line)
     (define-key map (kbd "C-c C-b") #'scalpel-llm-select-backend)
     (define-key map (kbd "C-c C-a") #'scalpel-console-add-file)
-    (define-key map (kbd "C-c C-o") #'scalpel-console-add-readonly-file)
     (define-key map (kbd "C-c C-d") #'scalpel-console-remove-file)
     (define-key map (kbd "C-c C-r") #'scalpel-console-reset-context)
     (define-key map (kbd "C-c C-f") #'scalpel-console-forget-history)
@@ -323,8 +322,7 @@ lines are bolded.  The baseline is replaced afterwards, so each
 delta is highlighted exactly once."
   (with-current-buffer (scalpel-console--target-buffer)
     (let* ((ignored (scalpel-agent--git-ignored-files
-                     (append scalpel-agent--context-files
-                             scalpel-agent--context-readonly-files)))
+                     scalpel-agent--context-files))
            (result (scalpel-agent-context-update
                     scalpel-console--context-baseline ignored))
            (lines (car result)))
@@ -335,7 +333,7 @@ delta is highlighted exactly once."
          (concat "Context:\n" (scalpel-console--render-diff lines)))))))
 
 (defun scalpel-console-add-file (&optional ignore-gitignore)
-  "Prompt for a file or directory and add it as writable context.
+  "Prompt for a file or directory and add it to the context.
 With prefix argument IGNORE-GITIGNORE, do not filter directory
 expansion through gitignore rules."
   (interactive "P")
@@ -347,26 +345,13 @@ expansion through gitignore rules."
       (scalpel-agent-context-add path ignore-gitignore)
       (scalpel-console--show-context))))
 
-(defun scalpel-console-add-readonly-file (&optional ignore-gitignore)
-  "Prompt for a file or directory and add it as read-only reference.
-Read-only files are shown to the LLM with their full contents and
-cannot be edited.  With prefix argument IGNORE-GITIGNORE, do not
-filter directory expansion through gitignore rules."
-  (interactive "P")
-  ;; Buffer-local session context: see `scalpel-console-add-file'.
-  (with-current-buffer (scalpel-console--target-buffer)
-    (let ((path (read-file-name "Add read-only reference: ")))
-      (scalpel-agent-context-add-readonly path ignore-gitignore)
-      (scalpel-console--show-context))))
-
 (defun scalpel-console-remove-file ()
   "Prompt for a context file or directory and remove it."
   (interactive)
   ;; Read the list and remove from it in the console buffer, where the
   ;; buffer-local session context lives.
   (with-current-buffer (scalpel-console--target-buffer)
-    (let ((candidates (append scalpel-agent--context-files
-                              scalpel-agent--context-readonly-files)))
+    (let ((candidates scalpel-agent--context-files))
       (if (null candidates)
           (message "Scalpel: context is empty")
         (let ((path (completing-read "Remove from Scalpel context: "

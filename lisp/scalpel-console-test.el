@@ -40,7 +40,6 @@ rear-nonsticky, so the first character the user typed inherited the
 tag; `--pending-input-regions' then skipped the whole instruction and
 RET answered \"nothing to send\"."
   (let ((scalpel-agent--context-files nil)
-        (scalpel-agent--context-readonly-files nil)
         (buf (scalpel-console-test--new-console-buffer))
         (prompt-sent nil))
     (unwind-protect
@@ -219,7 +218,6 @@ branch."
             ;; Session variables are buffer-local to the console.
             (setq scalpel-agent--context-files
                   '("/tmp/scalpel-diff-name.el"))
-            (setq scalpel-agent--context-readonly-files nil)
             (scalpel-console--show-context)
             (setq scalpel-agent--context-files nil)
             (scalpel-console--show-context)
@@ -290,7 +288,6 @@ directory."
             ;; Session variables are buffer-local to the console.
             (setq scalpel-agent--context-files
                   '("/tmp/scalpel-diff-keep.el"))
-            (setq scalpel-agent--context-readonly-files nil)
             ;; First refresh establishes the baseline; second sees no delta.
             (scalpel-console--show-context)
             (scalpel-console--show-context)
@@ -317,7 +314,6 @@ newly inserted Context block."
           ;; Session variables are buffer-local to the console.
           (setq scalpel-agent--context-files
                 '("/tmp/scalpel-reset-cursor.el"))
-          (setq scalpel-agent--context-readonly-files nil)
           (scalpel-console-reset-context)
           (ert-info ((format "Point %d of %d; buffer:\n%S"
                              (point) (point-max) (buffer-string)))
@@ -327,7 +323,6 @@ newly inserted Context block."
 (ert-deftest scalpel-console-test-shift-return-inserts-newline ()
   "S-RET is bound to a newline insertion, not to sending."
   (let ((scalpel-agent--context-files nil)
-        (scalpel-agent--context-readonly-files nil)
         (buf (scalpel-console-test--new-console-buffer)))
     (unwind-protect
         (cl-letf (((symbol-function 'scalpel-llm-request-async)
@@ -349,7 +344,6 @@ newly inserted Context block."
 (ert-deftest scalpel-console-test-send-line-sends-multiline-block ()
   "RET sends every pending line, not only the line point is on."
   (let ((scalpel-agent--context-files nil)
-        (scalpel-agent--context-readonly-files nil)
         (buf (scalpel-console-test--new-console-buffer))
         prompt-sent)
     (unwind-protect
@@ -377,7 +371,6 @@ newly inserted Context block."
 (ert-deftest scalpel-console-test-send-line-ignores-previous-output ()
   "Text appended by earlier turns is never re-sent as the instruction."
   (let ((scalpel-agent--context-files nil)
-        (scalpel-agent--context-readonly-files nil)
         (buf (scalpel-console-test--new-console-buffer)))
     (unwind-protect
         (cl-letf (((symbol-function 'scalpel-llm-request-async)
@@ -410,7 +403,6 @@ the conversation, so dumping the buffer would send all of it."
           (setq scalpel-console--context-baseline 'none-yet)
           ;; Session variables are buffer-local to the console.
           (setq scalpel-agent--context-files '("/tmp/scalpel-history.el"))
-          (setq scalpel-agent--context-readonly-files nil)
           (insert "Scalpel console.\n\n")
           (scalpel-console--insert-tagged "User: hello\n" 'user)
           (scalpel-console--show-context)
@@ -421,7 +413,6 @@ the conversation, so dumping the buffer would send all of it."
 (ert-deftest scalpel-console-test-send-line-sends-recorded-conversation ()
   "Each round re-sends the replies recorded in the buffer."
   (let ((scalpel-agent--context-files nil)
-        (scalpel-agent--context-readonly-files nil)
         (buf (scalpel-console-test--new-console-buffer))
         (prompts nil))
     (unwind-protect
@@ -459,7 +450,6 @@ the conversation, so dumping the buffer would send all of it."
 Regression: the agent had no way to read the output of the command
 it asked for, so \"run the tests\" could not lead to a fix."
   (let ((scalpel-agent--context-files nil)
-        (scalpel-agent--context-readonly-files nil)
         (scalpel-agent-confirm-tools nil)
         (scalpel-console-continue-after-shell 'always)
         (scalpel-console-max-rounds 30)
@@ -472,7 +462,7 @@ it asked for, so \"run the tests\" could not lead to a fix."
                        (push prompt prompts)
                        (funcall on-success
                                 (if (= (length prompts) 1)
-                                    "[{\"tool\":\"shell\",\"command\":\"echo hello\",\"reason\":\"check the loop\",\"read-only\":true,\"long-running\":false}]"
+                                    "[{\"tool\":\"shell\",\"command\":\"echo hello\",\"reason\":\"check the loop\",\"long-running\":false}]"
                                   "[{\"tool\":\"reply\",\"text\":\"done\"}]"))))
                     ((symbol-function 'scalpel-sandbox-run)
                      (lambda (&rest _ignore) (cons 0 "hello\n"))))
@@ -496,7 +486,6 @@ Regression: every round re-sent the original instruction, so the
 planner re-issued the same shell action and the user had to confirm
 the same command over and over."
   (let ((scalpel-agent--context-files nil)
-        (scalpel-agent--context-readonly-files nil)
         (scalpel-agent-confirm-tools nil)
         (scalpel-console-continue-after-shell 'always)
         (scalpel-console-max-rounds 3)
@@ -509,7 +498,7 @@ the same command over and over."
                        (push prompt prompts)
                        (funcall on-success
                                 (if (= (length prompts) 1)
-                                    "[{\"tool\":\"shell\",\"command\":\"echo hello\",\"reason\":\"check\",\"read-only\":true,\"long-running\":false}]"
+                                    "[{\"tool\":\"shell\",\"command\":\"echo hello\",\"reason\":\"check\",\"long-running\":false}]"
                                   "[{\"tool\":\"reply\",\"text\":\"done\"}]"))))
                     ((symbol-function 'scalpel-sandbox-run)
                      (lambda (&rest _ignore) (cons 0 "hello\n"))))
@@ -542,7 +531,6 @@ reopen the console, which also discarded the context file list."
           (setq scalpel-console--context-baseline 'none-yet)
           ;; Session variables are buffer-local to the console.
           (setq scalpel-agent--context-files '("/tmp/scalpel-forget-ctx.el"))
-          (setq scalpel-agent--context-readonly-files nil)
           ;; Same shape as `scalpel-console-open' writes: the header is
           ;; display output, never pending input.
           (let ((beg (point)))
@@ -571,7 +559,6 @@ Regression: `forget-history' deleted the text, so nothing verified
 that a live console (text kept, tags dropped) really starts the
 next turn clean."
   (let ((scalpel-agent--context-files nil)
-        (scalpel-agent--context-readonly-files nil)
         (scalpel-console--context-baseline 'none-yet)
         (buf (scalpel-console-test--new-console-buffer))
         (prompts nil))
@@ -608,7 +595,6 @@ Regression: `scalpel-console--continue-p' was consulted on the last
 round too, so the user answered a question whose answer was thrown
 away, and the console then stopped without saying why."
   (let ((scalpel-agent--context-files nil)
-        (scalpel-agent--context-readonly-files nil)
         (scalpel-agent-confirm-tools nil)
         (scalpel-console-continue-after-shell 'ask)
         (scalpel-console-max-rounds 2)
@@ -622,7 +608,7 @@ away, and the console then stopped without saying why."
                      (lambda (_prompt on-success _on-error &optional _system)
                        (setq requests (1+ requests))
                        (funcall on-success
-                                "[{\"tool\":\"shell\",\"command\":\"echo hi\",\"reason\":\"check\",\"read-only\":true,\"long-running\":false}]")))
+                                "[{\"tool\":\"shell\",\"command\":\"echo hi\",\"reason\":\"check\",\"long-running\":false}]")))
                     ((symbol-function 'yes-or-no-p)
                      (lambda (&rest _) (setq asked (1+ asked)) t))
                     ((symbol-function 'message)
@@ -662,7 +648,6 @@ snapshot, so text typed above that snapshot was invisible to RET
 and the user got \"nothing to send\" (or a byte-shifted
 instruction) after the round-limit notice."
   (let ((scalpel-agent--context-files nil)
-        (scalpel-agent--context-readonly-files nil)
         (buf (scalpel-console-test--new-console-buffer))
         (prompt-sent nil))
     (unwind-protect
@@ -728,7 +713,6 @@ that dumped a large file could be approved unnoticed."
 The size gate decides only whether the user is asked; `always'
 means the question was waived, so the large output goes back."
   (let ((scalpel-agent--context-files nil)
-        (scalpel-agent--context-readonly-files nil)
         (scalpel-agent-confirm-tools nil)
         (scalpel-console-continue-after-shell 'always)
         (scalpel-console-max-rounds 5)
@@ -765,7 +749,6 @@ Regression: the continuation question was asked on every round that
 ran a shell command, so finishing a short inspection cost the user
 a keystroke and bought no information."
   (let ((scalpel-agent--context-files nil)
-        (scalpel-agent--context-readonly-files nil)
         (scalpel-agent-confirm-tools nil)
         (scalpel-console-continue-after-shell 'ask)
         (scalpel-console-max-rounds 3)
@@ -801,7 +784,6 @@ Regression: every round error was recorded as an assistant turn, so
 a message naming bubblewrap or sandbox-exec was re-sent in the next
 request -- leaking the boundary the prompt deliberately omits."
   (let ((scalpel-agent--context-files nil)
-        (scalpel-agent--context-readonly-files nil)
         (buf (scalpel-console-test--new-console-buffer))
         (prompts nil))
     (unwind-protect
@@ -811,7 +793,7 @@ request -- leaking the boundary the prompt deliberately omits."
                        (push prompt prompts)
                        (funcall on-success
                                 (concat "[{\"tool\":\"shell\",\"command\":\"ls\","
-                                        "\"reason\":\"look\",\"read-only\":true,"
+                                        "\"reason\":\"look\","
                                         "\"long-running\":false}]"))))
                     ((symbol-function 'scalpel-sandbox-run)
                      (lambda (&rest _ignore)

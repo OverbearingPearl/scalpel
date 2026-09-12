@@ -325,7 +325,6 @@ Inside the console:
 - `C-g` – cancel a running request
 - `C-c C-b` – switch the active gptel backend (model) for future requests
 - `C-c C-a` – add a file or directory as writable context
-- `C-c C-o` – add a file or directory as read-only reference
 - `C-c C-d` – remove a file or directory from the context
 - `C-c C-r` – reset the context to currently open located files
 - `C-c C-f` – forget the conversation; keeps the context files
@@ -342,9 +341,11 @@ Inside the console:
   current context files, rebuilt for every action.  On Linux that is
   `bubblewrap`; on macOS it is the deprecated `sandbox-exec`, treated as
   experimental.  A context file is exposed at its own absolute path, so
-  commands read and write the same names the user and the planner already use,
+  commands read the same names the user and the planner already use,
   and a file outside the context cannot be opened even when it sits beside one
-  in the same directory.  The planner is never told that a sandbox exists: it
+  in the same directory.  Context files are bound read-only, so no shell
+  command can change one: every file change goes through the edit
+  primitives.  The planner is never told that a sandbox exists: it
   sees an ordinary shell whose filesystem holds only the context files.
   Commands also get the temporary directory for scratch files.  When the
   sandbox is unavailable, or its probe fails, shell actions fail closed

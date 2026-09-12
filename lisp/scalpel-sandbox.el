@@ -10,8 +10,11 @@
 
 ;; Executes shell commands through an OS sandbox: `bubblewrap' on Linux, the
 ;; deprecated `sandbox-exec' on macOS (experimental).  The policy is rebuilt for
-;; every invocation from the current context file lists, and a command is
-;; refused rather than run outside the sandbox when no backend works.
+;; every invocation from the current context file list.  Every context file is
+;; bound read-only: file changes pass through the Scalpel edit primitives, never
+;; a shell command, so the sandbox grants the shell read access and nothing
+;; more.  A command is refused rather than run outside the sandbox when no
+;; backend works.
 
 ;;; Code:
 
@@ -35,6 +38,12 @@ experimental and keep it out of default trust decisions."
 Structural contract shared by `scalpel-sandbox--preflight' and the
 tests that fake a sandbox executable.")
 
+(defconst scalpel-sandbox--probe-file "scalpel-sandbox-probe"
+  "Scratch file name the preflight probe writes inside the sandbox.
+The name is relative, so the file lands in the sandbox's own working
+directory -- a directory both backends grant.  Context files are
+bound read-only, so the probe must not use one.")
+
 ;; Sandbox failures carry their own condition type so that callers can
 ;; keep the mechanism out of the conversation sent to the planner.
 ;; Every message below names bubblewrap or sandbox-exec, and the
@@ -50,26 +59,23 @@ tests that fake a sandbox executable.")
   "Signal `scalpel-sandbox-error', built from FORMAT and ARGS."
   (signal 'scalpel-sandbox-error (list (apply #'format format args))))
 
-(defun scalpel-sandbox--file-paths (writable-files readonly-files)
-  "Return normalized context files from WRITABLE-FILES and READONLY-FILES.
-Reject missing files, directories, symlinks, and overlapping permissions."
-  (let ((all (append writable-files readonly-files))
-        (writable (delete-dups (mapcar #'expand-file-name writable-files)))
-        (readonly (delete-dups (mapcar #'expand-file-name readonly-files))))
-    (when (null all)
+(defun scalpel-sandbox--file-paths (files)
+  "Return normalized context FILES.
+Reject missing files, directories, and symlinks.  Every returned
+path is bound read-only: shell commands may read context files but
+never write them, so file changes always pass through
+`scalpel-execute'."
+  (when (null files)
+    (scalpel-sandbox--fail
+     "Scalpel: shell sandbox requires at least one context file"))
+  (dolist (file files)
+    (unless (file-regular-p file)
       (scalpel-sandbox--fail
-       "Scalpel: shell sandbox requires at least one context file"))
-    (dolist (file all)
-      (unless (file-regular-p file)
-        (scalpel-sandbox--fail
-         "Scalpel: sandbox context is not a regular file: %s" file))
-      (when (file-symlink-p file)
-        (scalpel-sandbox--fail
-         "Scalpel: sandbox rejects symlink context file: %s" file)))
-    (when (cl-intersection writable readonly :test #'string=)
+       "Scalpel: sandbox context is not a regular file: %s" file))
+    (when (file-symlink-p file)
       (scalpel-sandbox--fail
-       "Scalpel: sandbox context has conflicting file permissions"))
-    (list writable readonly)))
+       "Scalpel: sandbox rejects symlink context file: %s" file)))
+  (delete-dups (mapcar #'expand-file-name files)))
 
 (defun scalpel-sandbox--runtime-bindings ()
   "Return existing system runtime directories as read-only bind arguments."
@@ -77,11 +83,10 @@ Reject missing files, directories, symlinks, and overlapping permissions."
            when (file-directory-p directory)
            append (list "--ro-bind" directory directory)))
 
-(defun scalpel-sandbox--bwrap-argv (command writable-files readonly-files)
-  "Build bubblewrap ARGV for COMMAND with context files.
-WRITABLE-FILES and READONLY-FILES are lists of context files."
-  (pcase-let ((`(,writable ,readonly)
-               (scalpel-sandbox--file-paths writable-files readonly-files)))
+(defun scalpel-sandbox--bwrap-argv (command files)
+  "Build bubblewrap ARGV for COMMAND with context FILES.
+Every context file is bound read-only."
+  (let ((files (scalpel-sandbox--file-paths files)))
     (append
      (list scalpel-sandbox-program
            "--die-with-parent"
@@ -91,10 +96,8 @@ WRITABLE-FILES and READONLY-FILES are lists of context files."
            "--unshare-net"
            "--tmpfs" "/tmp")
      (scalpel-sandbox--runtime-bindings)
-     (cl-loop for file in readonly
+     (cl-loop for file in files
               append (list "--ro-bind" file file))
-     (cl-loop for file in writable
-              append (list "--bind" file file))
      (list "--chdir" "/tmp"
            "--setenv" "HOME" "/nonexistent"
            "--setenv" "PATH" "/usr/bin:/bin"
@@ -149,12 +152,11 @@ files the user actually added."
       (setq dir (directory-file-name (file-name-directory dir))))
     (cons "/" out)))
 
-(defun scalpel-sandbox--macos-profile (writable-files readonly-files)
-  "Return a `sandbox-exec' profile for the context files.
-WRITABLE-FILES and READONLY-FILES are lists of context files."
-  (scalpel-sandbox--file-paths writable-files readonly-files)
-  (let ((readonly (mapcar #'expand-file-name readonly-files))
-        (writable (mapcar #'expand-file-name writable-files)))
+(defun scalpel-sandbox--macos-profile (files)
+  "Return a `sandbox-exec' profile for the context FILES.
+Every context file is granted read access only."
+  (scalpel-sandbox--file-paths files)
+  (let ((files (mapcar #'expand-file-name files)))
     (concat
      "(version 1)\n"
      "(deny default)\n"
@@ -206,7 +208,7 @@ WRITABLE-FILES and READONLY-FILES are lists of context files."
       (lambda (dir)
         (format "(allow file-read* (literal %S))" (file-truename dir)))
       (delete-dups
-       (cl-loop for f in (append readonly writable)
+       (cl-loop for f in files
                 append (scalpel-sandbox--ancestor-dirs f)))
       "\n")
      "\n"
@@ -246,34 +248,24 @@ WRITABLE-FILES and READONLY-FILES are lists of context files."
      ;; A directory-level read would expose every sibling file,
      ;; including ones the user never added to the context; the
      ;; Linux backend binds individual files for the same reason, so
-     ;; the two backends must agree on this boundary.
-     (if readonly
+     ;; the two backends must agree on this boundary.  Every context
+     ;; file is granted read access only: writes go through
+     ;; `scalpel-execute', never a shell command.
+     (if files
          (concat (mapconcat
                   (lambda (f) (scalpel-sandbox--literal-clauses
                               "allow file-read*" f))
-                  readonly "\n")
+                  files "\n")
                  "\n")
-       "")
-     (if writable
-         (concat
-          (mapconcat
-           (lambda (f)
-             (concat (scalpel-sandbox--literal-clauses
-                      "allow file-read*" f)
-                     "\n"
-                     (scalpel-sandbox--literal-clauses
-                      "allow file-write*" f)))
-           writable "\n")
-          "\n")
        "")
      "\n")))
 
-(defun scalpel-sandbox--macos-argv (command writable-files readonly-files)
+(defun scalpel-sandbox--macos-argv (command files)
   "Build `sandbox-exec' ARGV for COMMAND on macOS.
-WRITABLE-FILES and READONLY-FILES are lists of context files."
+FILES is the list of context files to expose, read-only."
   (list scalpel-sandbox-macos-program
         "-p"
-        (scalpel-sandbox--macos-profile writable-files readonly-files)
+        (scalpel-sandbox--macos-profile files)
         "/bin/sh" "-c" command))
 
 (defun scalpel-sandbox-supported-p ()
@@ -318,20 +310,18 @@ the unresolved name."
   (file-name-as-directory
    (file-truename (expand-file-name temporary-file-directory))))
 
-(defun scalpel-sandbox--invoke (command writable-files readonly-files)
+(defun scalpel-sandbox--invoke (command files)
   "Run COMMAND through this system's sandbox; return (EXIT . OUTPUT).
-WRITABLE-FILES and READONLY-FILES are the context files to expose.
+FILES is the list of context files to expose, read-only.
 Signal `user-error' when no backend exists, when the built ARGV is
 not a sandbox invocation, or when the sandbox runtime dies from a
 signal: a command whose sandbox failed must never be reported as if
 it had run."
   (let ((argv (cond
                ((eq system-type 'gnu/linux)
-                (scalpel-sandbox--bwrap-argv
-                 command writable-files readonly-files))
+                (scalpel-sandbox--bwrap-argv command files))
                ((eq system-type 'darwin)
-                (scalpel-sandbox--macos-argv
-                 command writable-files readonly-files))
+                (scalpel-sandbox--macos-argv command files))
                (t (scalpel-sandbox--fail
                    "Scalpel: no supported command sandbox for %s"
                    system-type)))))
@@ -351,34 +341,36 @@ it had run."
            status))
         (cons status (buffer-string))))))
 
-(defun scalpel-sandbox--preflight ()
+(defun scalpel-sandbox--preflight (files)
   "Prove the sandbox can run commands before any real command is sent.
-Runs a sentinel-printing command through the same backend and policy
-builder used for real commands.  Signal `user-error' when the probe
-does not come back with exit 0 and the sentinel, so a broken sandbox
-blocks shell actions instead of degrading them."
-  (let ((probe-file (file-truename (make-temp-file "scalpel-sandbox-probe-"))))
-    (unwind-protect
-        (let* ((result (scalpel-sandbox--invoke
-                        (format "printf %s > %s && cat %s"
-                                scalpel-sandbox--probe-sentinel
-                                (shell-quote-argument probe-file)
-                                (shell-quote-argument probe-file))
-                        (list probe-file)
-                        nil))
-               (output (string-trim (cdr result))))
-          (unless (and (= (car result) 0)
-                       (string= output scalpel-sandbox--probe-sentinel))
-            (scalpel-sandbox--fail
-             "Scalpel: sandbox probe failed (exit %s, output %S); refusing to run shell command"
-             (car result) output)))
-      (when (file-exists-p probe-file)
-        (delete-file probe-file)))))
+Runs a command through the same backend and policy builder used for
+real commands.  The command writes a scratch file, reads it back and
+removes it, so a policy that compiles but grants no file access at
+all cannot pass by printing a sentinel alone.  The scratch file lives
+in the sandbox's own working directory, which both backends grant;
+context files are bound read-only, so the probe must not use one.
+FILES is the context file list, which defines the rest of the policy.
+Signal `user-error' when the probe does not come back with exit 0 and
+the sentinel, so a broken sandbox blocks shell actions instead of
+degrading them."
+  (let* ((result (scalpel-sandbox--invoke
+                  (format "printf %s > %s && cat %s && rm -f %s"
+                          scalpel-sandbox--probe-sentinel
+                          scalpel-sandbox--probe-file
+                          scalpel-sandbox--probe-file
+                          scalpel-sandbox--probe-file)
+                  files))
+         (output (string-trim (cdr result))))
+    (unless (and (= (car result) 0)
+                 (string= output scalpel-sandbox--probe-sentinel))
+      (scalpel-sandbox--fail
+       "Scalpel: sandbox probe failed (exit %s, output %S); refusing to run shell command"
+       (car result) output))))
 
-(defun scalpel-sandbox-run (command _root writable-files readonly-files)
+(defun scalpel-sandbox-run (command _root files)
   "Run COMMAND in a platform sandbox.
 ROOT is intentionally ignored: access is defined only by the context files.
-WRITABLE-FILES and READONLY-FILES are lists of context files.
+FILES is the list of context files to expose, read-only.
 Return (EXIT . OUTPUT).  Signal `user-error' when no backend exists,
 when the sandbox probe fails, or when the sandbox runtime dies: a
 command that cannot be proven to run inside the sandbox is refused
@@ -386,8 +378,8 @@ rather than run outside it."
   (unless (scalpel-sandbox-supported-p)
     (scalpel-sandbox--fail
      "Scalpel: no supported command sandbox for %s" system-type))
-  (scalpel-sandbox--preflight)
-  (scalpel-sandbox--invoke command writable-files readonly-files))
+  (scalpel-sandbox--preflight files)
+  (scalpel-sandbox--invoke command files))
 
 (provide 'scalpel-sandbox)
 

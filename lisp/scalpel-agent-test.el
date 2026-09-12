@@ -52,7 +52,7 @@ as invalid JSON."
          (scalpel-agent--parse-json
           (concat "I'll start by gathering the definitions.\n\n"
                   "```json\n"
-                  "[{\"tool\":\"shell\",\"command\":\"ls\",\"reason\":\"look\",\"read-only\":true,\"long-running\":false}]\n"
+                  "[{\"tool\":\"shell\",\"command\":\"ls\",\"reason\":\"look\",\"long-running\":false}]\n"
                   "```\n"))))
     (ert-info ((format "Actions:\n%S" actions))
       (should (= (length actions) 1))
@@ -213,57 +213,14 @@ error reported a bare JSON failure without naming the cause."
         (should (string-match-p "tool-call syntax"
                                 (error-message-string err)))))))
 
-(ert-deftest scalpel-agent-test-context-add-readonly-single-file ()
-  "Adding a single file as read-only places it in the readonly list only."
-  (let ((scalpel-agent--context-files nil)
-        (scalpel-agent--context-readonly-files nil))
-    (scalpel-utils-test-with-temp-file ".el"
-      (with-temp-file this-file (insert "(defun foo ())"))
-      (scalpel-agent-context-add-readonly this-file)
-      (should (equal scalpel-agent--context-readonly-files
-                     (list (file-truename (expand-file-name this-file)))))
-      (should (null scalpel-agent--context-files)))))
-
-(ert-deftest scalpel-agent-test-context-renders-readonly-content ()
-  "Read-only files render with their full contents in the context."
-  (let ((scalpel-agent--context-files nil)
-        (scalpel-agent--context-readonly-files nil))
-    (scalpel-utils-test-with-temp-file ".el"
-      (with-temp-file this-file (insert "hello"))
-      (setq scalpel-agent--context-readonly-files
-            (list (expand-file-name this-file)))
-      (let ((ctx (scalpel-agent-context)))
-        (should (string-match-p "FILE (READONLY): " ctx))
-        (should (string-match-p "CONTENT:\nhello" ctx))))))
-
 (ert-deftest scalpel-agent-test-context-omits-symbols-without-provider ()
   "Files without a locator provider render without a SYMBOLS line."
-  (let ((scalpel-agent--context-files '("/tmp/notes.md"))
-        (scalpel-agent--context-readonly-files nil))
+  (let ((scalpel-agent--context-files '("/tmp/notes.md")))
     (should (string= (scalpel-agent-context) "FILE: /tmp/notes.md"))))
 
-(ert-deftest scalpel-agent-test-context-add-moves-between-lists ()
-  "Adding a file as writable removes it from the readonly list and vice versa."
-  (let ((scalpel-agent--context-files nil)
-        (scalpel-agent--context-readonly-files nil))
-    (scalpel-utils-test-with-temp-file ".el"
-      (with-temp-file this-file (insert "(defun foo ())"))
-      (scalpel-agent-context-add-readonly this-file)
-      (should (member (file-truename (expand-file-name this-file))
-                      scalpel-agent--context-readonly-files))
-      (scalpel-agent-context-add this-file)
-      (should (null scalpel-agent--context-readonly-files))
-      (should (member (file-truename (expand-file-name this-file))
-                      scalpel-agent--context-files))
-      (scalpel-agent-context-add-readonly this-file)
-      (should (null scalpel-agent--context-files))
-      (should (member (file-truename (expand-file-name this-file))
-                      scalpel-agent--context-readonly-files)))))
-
 (ert-deftest scalpel-agent-test-context-remove-by-directory-prefix ()
-  "Removing a directory removes all files beneath it from both lists."
+  "Removing a directory removes all files beneath it from the context."
   (let ((scalpel-agent--context-files nil)
-        (scalpel-agent--context-readonly-files nil)
         (dir (make-temp-file "scalpel-test-dir-" t)))
     (unwind-protect
         (let ((f1 (expand-file-name "a.el" dir))
@@ -271,31 +228,11 @@ error reported a bare JSON failure without naming the cause."
           (with-temp-file f1 (insert "(defun a ())"))
           (with-temp-file f2 (insert "(defun b ())"))
           (scalpel-agent-context-add f1)
-          (scalpel-agent-context-add-readonly f2)
-          (should (= (length scalpel-agent--context-files) 1))
-          (should (= (length scalpel-agent--context-readonly-files) 1))
+          (scalpel-agent-context-add f2)
+          (should (= (length scalpel-agent--context-files) 2))
           (scalpel-agent-context-remove dir)
-          (should (null scalpel-agent--context-files))
-          (should (null scalpel-agent--context-readonly-files)))
+          (should (null scalpel-agent--context-files)))
       (delete-directory dir t))))
-
-(ert-deftest scalpel-agent-test-edit-refuses-readonly ()
-  "Editing a read-only context file signals user-error."
-  (let ((scalpel-agent--context-files nil)
-        (scalpel-agent--context-readonly-files nil))
-    (scalpel-utils-test-with-temp-file ".el"
-      (with-temp-file this-file (insert "(defun foo (x)\n  (+ x 1))\n"))
-      (setq scalpel-agent--context-readonly-files
-            (list (file-truename (expand-file-name this-file))))
-      (cl-letf (((symbol-function 'scalpel-llm-request-async)
-                 (lambda (_prompt on-success _on-error &optional _system)
-                   (funcall on-success "(defun foo (x)\n  (+ x 2))"))))
-        (let (error)
-          (scalpel-agent-edit
-           this-file "foo" "increment x"
-           (lambda (_r) (ert-fail "read-only edit must not succeed"))
-           (lambda (e) (setq error e)))
-          (should (eq (plist-get error :type) 'readonly)))))))
 
 (ert-deftest scalpel-agent-test-context-add-remove ()
   "Add dedupes and normalizes; remove of absent file does not error."
@@ -345,24 +282,21 @@ error reported a bare JSON failure without naming the cause."
 
 (ert-deftest scalpel-agent-test-context-summary-compacts-single-child-chains ()
   "Single-child directory chains collapse into one node."
-  (let ((scalpel-agent--context-files '("/a/b/c.el"))
-        (scalpel-agent--context-readonly-files nil))
+  (let ((scalpel-agent--context-files '("/a/b/c.el")))
     (should (string= (scalpel-agent-context-summary)
                      "└── /a/b/\n    └── c.el"))))
 
 (ert-deftest scalpel-agent-test-context-summary-tree ()
   "Summary nests files, orders directories first, marks attributes."
   (let ((scalpel-agent--context-files
-         '("/repo/lisp/a.el" "/repo/lisp/c.el" "/repo/z.el"))
-        (scalpel-agent--context-readonly-files '("/repo/lisp/notes.txt")))
+         '("/repo/lisp/a.el" "/repo/lisp/c.el" "/repo/z.el")))
     (should (string=
              (scalpel-agent-context-summary "/repo" '("/repo/lisp/a.el"))
              (string-join
               '("└── /repo/"
                 "    ├── lisp/"
                 "    │   ├── a.el (gitignored)"
-                "    │   ├── c.el"
-                "    │   └── notes.txt (read-only)"
+                "    │   └── c.el"
                 "    └── z.el")
               "\n")))))
 
@@ -392,8 +326,7 @@ error reported a bare JSON failure without naming the cause."
 (ert-deftest scalpel-agent-test-context-summary-unifies-inside-and-outside ()
   "Files inside and outside ROOT render in one tree rooted at the filesystem root."
   (let ((scalpel-agent--context-files
-         '("/repo/lisp/a.el" "/other/b.el"))
-        (scalpel-agent--context-readonly-files nil))
+         '("/repo/lisp/a.el" "/other/b.el")))
     (should (string= (scalpel-agent-context-summary "/repo")
                      (string-join
                       '("└── /"
@@ -476,8 +409,7 @@ Guards against the git subprocess inheriting the caller's
 
 (ert-deftest scalpel-agent-test-context-update-first-render-marks-nothing ()
   "Without a baseline, no line is marked as changed."
-  (let ((scalpel-agent--context-files '("/a/one.el"))
-        (scalpel-agent--context-readonly-files nil))
+  (let ((scalpel-agent--context-files '("/a/one.el")))
     (let ((cells (car (scalpel-agent-context-update 'none-yet nil))))
       (should cells)
       (should (cl-every (lambda (cell)
@@ -487,7 +419,6 @@ Guards against the git subprocess inheriting the caller's
 (ert-deftest scalpel-agent-test-context-update-marks-changes ()
   "Sibling additions leave existing files unmarked; drops are removed."
   (let* ((scalpel-agent--context-files '("/a/one.el"))
-         (scalpel-agent--context-readonly-files nil)
          (baseline 'none-yet)
          cells
          (status-of (lambda (name)
@@ -516,8 +447,7 @@ Guards against the git subprocess inheriting the caller's
 
 (ert-deftest scalpel-agent-test-context-update-marks-new-directory ()
   "A directory holding only new files is itself marked added."
-  (let ((scalpel-agent--context-files '("/a/one.el"))
-        (scalpel-agent--context-readonly-files nil))
+  (let ((scalpel-agent--context-files '("/a/one.el")))
     (let ((baseline (cdr (scalpel-agent-context-update 'none-yet nil)))
           cells)
       (setq scalpel-agent--context-files '("/a/one.el" "/b/two.el"))
@@ -577,15 +507,13 @@ filesystem, not a sandboxed one."
   "Shell actions delegate execution to the sandbox and report its status."
   (let ((scalpel-console--root nil)
         (scalpel-agent--context-files nil)
-        (scalpel-agent--context-readonly-files nil)
         (default-directory (file-name-as-directory
                             (expand-file-name temporary-file-directory))))
     (cl-letf (((symbol-function 'scalpel-sandbox-run)
-               (lambda (command root writable readonly)
+               (lambda (command root files)
                  (should (string= command "echo hello | tr a-z A-Z"))
                  (should root)
-                 (should (null writable))
-                 (should (null readonly))
+                 (should (null files))
                  (cons 0 "HELLO\n"))))
       (let ((piped (scalpel-agent-shell "echo hello | tr a-z A-Z"
                                         "check shell semantics")))
@@ -665,7 +593,6 @@ requested from the planner."
   "Shell reports name the command, state the exit status, and end."
   (let ((scalpel-console--root nil)
         (scalpel-agent--context-files nil)
-        (scalpel-agent--context-readonly-files nil)
         (default-directory (file-name-as-directory
                             (expand-file-name temporary-file-directory))))
     (cl-letf (((symbol-function 'scalpel-sandbox-run)
@@ -681,7 +608,6 @@ requested from the planner."
   "Control characters in sandbox output never reach the report."
   (let ((scalpel-console--root nil)
         (scalpel-agent--context-files nil)
-        (scalpel-agent--context-readonly-files nil)
         (default-directory (file-name-as-directory
                             (expand-file-name temporary-file-directory))))
     (cl-letf (((symbol-function 'scalpel-sandbox-run)
@@ -695,8 +621,7 @@ requested from the planner."
   "The prompt carries the conversation before the instruction.
 Regression: only the context and the newest instruction were sent,
 so a follow-up such as \"the third point is wrong\" had no referent."
-  (let ((scalpel-agent--context-files nil)
-        (scalpel-agent--context-readonly-files nil))
+  (let ((scalpel-agent--context-files nil))
     (let ((prompt (scalpel-agent--prompt "second"
                                          "User: first\nScalpel: reply\n")))
       (ert-info ((format "Prompt:\n%S" prompt))
@@ -721,7 +646,6 @@ literally, so the offending character could not be seen."
   "The report always states the true output size."
   (let ((scalpel-console--root nil)
         (scalpel-agent--context-files nil)
-        (scalpel-agent--context-readonly-files nil)
         (default-directory (file-name-as-directory
                             (expand-file-name temporary-file-directory))))
     (cl-letf (((symbol-function 'scalpel-sandbox-run)
@@ -735,7 +659,6 @@ literally, so the offending character could not be seen."
   (skip-unless (not (memq system-type '(windows-nt ms-dos))))
   (let ((scalpel-console--root nil)
         (scalpel-agent--context-files nil)
-        (scalpel-agent--context-readonly-files nil)
         (default-directory (file-name-as-directory
                             (expand-file-name temporary-file-directory))))
     (cl-letf (((symbol-function 'scalpel-sandbox-run)
@@ -750,7 +673,6 @@ literally, so the offending character could not be seen."
   "A round reports the raw size of every shell command it ran.
 The report preserves the raw output size for continuation decisions."
   (let ((scalpel-agent--context-files nil)
-        (scalpel-agent--context-readonly-files nil)
         (scalpel-console--root nil)
         (default-directory (file-name-as-directory
                             (expand-file-name temporary-file-directory)))
@@ -763,7 +685,7 @@ The report preserves the raw output size for continuation decisions."
                 (lambda (_prompt on-success _on-error &optional _system)
                   (funcall on-success
                            (concat "[{\"tool\":\"shell\",\"command\":\"printf abc\","
-                                   "\"reason\":\"size\",\"read-only\":true,"
+                                   "\"reason\":\"size\","
                                    "\"long-running\":false}]"))))
           (fset 'scalpel-sandbox-run
                 (lambda (&rest _ignore) (cons 0 "abc")))

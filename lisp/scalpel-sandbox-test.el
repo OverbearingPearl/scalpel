@@ -14,7 +14,7 @@
 (ert-deftest scalpel-sandbox-test-rejects-empty-context ()
   "An empty context must not execute a command."
   (should-error
-   (scalpel-sandbox--bwrap-argv "true" nil nil)
+   (scalpel-sandbox--bwrap-argv "true" nil)
    :type 'user-error))
 
 (ert-deftest scalpel-sandbox-test-failures-use-the-sandbox-error-type ()
@@ -24,27 +24,19 @@ backend out of the conversation sent to the planner; the type must
 stay a `user-error', so existing handlers keep catching it."
   (should (memq 'user-error
                 (get 'scalpel-sandbox-error 'error-conditions)))
-  (should-error (scalpel-sandbox--bwrap-argv "true" nil nil)
+  (should-error (scalpel-sandbox--bwrap-argv "true" nil)
                 :type 'scalpel-sandbox-error))
 
-(ert-deftest scalpel-sandbox-test-generates-readonly-and-writable-binds ()
-  "Readonly files use ro-bind and writable files use bind."
+(ert-deftest scalpel-sandbox-test-binds-context-files-read-only ()
+  "Every context file is bound with --ro-bind and none with --bind.
+Shell commands must not be able to write a context file: all file
+changes go through `scalpel-execute'."
   (scalpel-utils-test-with-temp-file ".txt"
     (with-temp-file this-file (insert "data"))
-    (let* ((readonly-file (make-temp-file "scalpel-sandbox-readonly-"))
-           (argv (progn
-                   (with-temp-file readonly-file (insert "readonly"))
-                   (scalpel-sandbox--bwrap-argv
-                    "cat /context/0"
-                    (list this-file)
-                    (list readonly-file))))
-           (ro (cl-position "--ro-bind" argv :test #'string=))
-           (rw (cl-position "--bind" argv :test #'string=)))
-      (unwind-protect
-          (progn
-            (should ro)
-            (should rw))
-        (delete-file readonly-file)))))
+    (let ((argv (scalpel-sandbox--bwrap-argv "cat /context/0"
+                                             (list this-file))))
+      (should (cl-position "--ro-bind" argv :test #'string=))
+      (should-not (cl-position "--bind" argv :test #'string=)))))
 
 (ert-deftest scalpel-sandbox-test-dynamic-context-is-read-per-call ()
   "Policy construction reflects the current context arguments."
@@ -54,8 +46,8 @@ stay a `user-error', so existing handlers keep catching it."
         (progn
           (with-temp-file first (insert "a"))
           (with-temp-file second (insert "b"))
-          (let ((a (scalpel-sandbox--bwrap-argv "true" nil (list first)))
-                (b (scalpel-sandbox--bwrap-argv "true" nil (list second))))
+          (let ((a (scalpel-sandbox--bwrap-argv "true" (list first)))
+                (b (scalpel-sandbox--bwrap-argv "true" (list second))))
             (should (member first a))
             (should-not (member second a))
             (should (member second b))
@@ -74,7 +66,7 @@ stay a `user-error', so existing handlers keep catching it."
           (delete-file link)
           (make-symbolic-link target link)
           (should-error
-           (scalpel-sandbox--bwrap-argv "true" nil (list link))
+           (scalpel-sandbox--bwrap-argv "true" (list link))
            :type 'user-error))
       (when (file-exists-p target) (delete-file target))
       (when (file-exists-p link) (delete-file link)))))
@@ -107,7 +99,7 @@ stay a `user-error', so existing handlers keep catching it."
                 (progn
                   (with-temp-file file (insert "data"))
                   (let ((result (scalpel-sandbox-run
-                                 "true" temporary-file-directory nil (list file))))
+                                 "true" temporary-file-directory (list file))))
                     (should (= (car result) 0))
                     (should (string= (cdr result) "ok"))
                     (should (equal (car called) "bwrap"))
@@ -132,32 +124,25 @@ stay a `user-error', so existing handlers keep catching it."
       (should (scalpel-sandbox-supported-p)))))
 
 (ert-deftest scalpel-sandbox-test-macos-profile-context-paths ()
-  "Check that macOS profile grants write only to writable context files."
-  (let ((writable-file (make-temp-file "scalpel-sandbox-w-"))
-        (readonly-file (make-temp-file "scalpel-sandbox-ro-")))
+  "Check that the macOS profile grants context files read but never write."
+  (let ((first-file (make-temp-file "scalpel-sandbox-w-"))
+        (second-file (make-temp-file "scalpel-sandbox-ro-")))
     (unwind-protect
         (progn
-          (with-temp-file writable-file (insert "w"))
-          (with-temp-file readonly-file (insert "r"))
+          (with-temp-file first-file (insert "w"))
+          (with-temp-file second-file (insert "r"))
           (let ((profile (scalpel-sandbox--macos-profile
-                          (list writable-file)
-                          (list readonly-file))))
-            (let ((writepath (expand-file-name writable-file))
-                  (readpath (expand-file-name readonly-file)))
-              (should (string-match-p
-                       (regexp-quote (format "(allow file-read* (literal \"%s\"))" readpath))
-                       profile))
-              (should (string-match-p
-                       (regexp-quote (format "(allow file-read* (literal \"%s\"))" writepath))
-                       profile))
-              (should (string-match-p
-                       (regexp-quote (format "(allow file-write* (literal \"%s\"))" writepath))
-                       profile))
-              (should-not (string-match-p
-                           (regexp-quote (format "(allow file-write* (literal \"%s\"))" readpath))
-                           profile)))))
-      (delete-file writable-file)
-      (delete-file readonly-file))))
+                          (list first-file second-file))))
+            (dolist (file (list first-file second-file))
+              (let ((path (expand-file-name file)))
+                (should (string-match-p
+                         (regexp-quote (format "(allow file-read* (literal \"%s\"))" path))
+                         profile))
+                (should-not (string-match-p
+                             (regexp-quote (format "(allow file-write* (literal \"%s\"))" path))
+                             profile))))))
+      (delete-file first-file)
+      (delete-file second-file))))
 
 (ert-deftest scalpel-sandbox-test-invoke-refuses-signalled-runtime ()
   "A runtime killed by a signal is refused, not reported as output."
@@ -169,7 +154,7 @@ stay a `user-error', so existing handlers keep catching it."
         (progn
           (with-temp-file file (insert "x"))
           (fset 'call-process (lambda (&rest _ignore) "Abort trap: 6"))
-          (should-error (scalpel-sandbox--invoke "true" (list file) nil)
+          (should-error (scalpel-sandbox--invoke "true" (list file))
                         :type 'user-error))
       (fset 'call-process orig-call-process)
       (delete-file file))))
@@ -189,7 +174,7 @@ stay a `user-error', so existing handlers keep catching it."
                 (lambda (&rest _ignore)
                   (setq ran (1+ ran))
                   (cons 0 "not the sentinel")))
-          (should-error (scalpel-sandbox-run "true" nil (list file) nil)
+          (should-error (scalpel-sandbox-run "true" nil (list file))
                         :type 'user-error)
           (ert-info ((format "invoke calls: %d" ran))
             ;; Only the probe ran; the real command never did.
@@ -210,12 +195,12 @@ stay a `user-error', so existing handlers keep catching it."
           (with-temp-file file (insert "x"))
           (fset 'scalpel-sandbox-supported-p (lambda () t))
           (fset 'scalpel-sandbox--invoke
-                (lambda (command _writable _readonly)
+                (lambda (command _files)
                   (push command commands)
                   (if (string-match-p scalpel-sandbox--probe-sentinel command)
                       (cons 0 scalpel-sandbox--probe-sentinel)
                     (cons 0 "ok"))))
-          (let ((result (scalpel-sandbox-run "true" nil (list file) nil)))
+          (let ((result (scalpel-sandbox-run "true" nil (list file))))
             (should (= (car result) 0))
             (should (string= (cdr result) "ok"))
             (should (= (length commands) 2))
@@ -252,7 +237,7 @@ its own working directory."
           (let* ((file (expand-file-name "ctx.el" link))
                  (resolved (file-truename file)))
             (with-temp-file file (insert "(defun foo ())"))
-            (let ((profile (scalpel-sandbox--macos-profile (list file) nil)))
+            (let ((profile (scalpel-sandbox--macos-profile (list file))))
               (ert-info ((format "Profile:\n%s" profile))
                 (should (string-match-p
                          (regexp-quote
@@ -278,7 +263,7 @@ it, and the shell error leaked the sandbox to the user."
           (with-temp-file file (insert "x"))
           (let* ((resolved (file-truename file))
                  (profile (scalpel-sandbox--macos-profile
-                           (list resolved) nil)))
+                           (list resolved))))
             (ert-info ((format "Profile:\n%s" profile))
               (dolist (dir (scalpel-sandbox--ancestor-dirs resolved))
                 (should
@@ -301,7 +286,7 @@ The Linux backend binds individual files and has no such exposure."
           (with-temp-file file (insert "(defun foo ())"))
           (let* ((resolved (expand-file-name file))
                  (dir (file-name-directory resolved))
-                 (profile (scalpel-sandbox--macos-profile (list file) nil)))
+                 (profile (scalpel-sandbox--macos-profile (list file))))
             (ert-info ((format "Profile:\n%s" profile))
               (dolist (candidate (list dir (directory-file-name dir)))
                 (should-not
@@ -328,8 +313,8 @@ stderr -- stderr that `call-process' captures together with stdout."
                     (file-truename
                      (expand-file-name temporary-file-directory))))))
 
-(ert-deftest scalpel-sandbox-test-macos-executes-read-and-write-on-context-file ()
-  "The macOS profile must read and write a context file in the temp dir.
+(ert-deftest scalpel-sandbox-test-macos-reads-context-file ()
+  "The macOS profile must read but never write a context file.
 Regression: the profile named both spellings of the temp directory, but
 the sandbox matches the resolved path, so a command naming the
 unresolved `/var/folders/...' spelling was denied with EPERM."
@@ -338,10 +323,9 @@ unresolved `/var/folders/...' spelling was denied with EPERM."
   (scalpel-utils-test-with-temp-file ".txt"
     (with-temp-file this-file (insert "ORIGINAL"))
     (let ((result (scalpel-sandbox-run
-                   (format "printf MORE >> %s && cat %s"
-                           (shell-quote-argument (file-truename this-file))
+                   (format "cat %s"
                            (shell-quote-argument (file-truename this-file)))
-                   nil (list (file-truename this-file)) nil)))
+                   nil (list (file-truename this-file)))))
       (ert-info ((format "Result: %S" result))
         (should (= (car result) 0))
         (should (string-match-p "ORIGINAL" (cdr result)))))))
@@ -360,12 +344,12 @@ probe, because printing a sentinel needs no file access at all."
           (with-temp-file file (insert "x"))
           (fset 'scalpel-sandbox-supported-p (lambda () t))
           (fset 'scalpel-sandbox--invoke
-                (lambda (command _writable _readonly)
+                (lambda (command _files)
                   (push command commands)
                   (if (string-match-p scalpel-sandbox--probe-sentinel command)
                       (cons 0 scalpel-sandbox--probe-sentinel)
                     (cons 0 "ok"))))
-          (scalpel-sandbox-run "true" nil (list file) nil)
+          (scalpel-sandbox-run "true" nil (list file))
           (let ((probe (car (last commands))))
             (ert-info ((format "Probe command: %S" probe))
               (should (string-match-p ">" probe))
