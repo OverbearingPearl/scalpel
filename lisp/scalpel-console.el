@@ -29,6 +29,10 @@
 ;; dump thousands of lines, and the header -- what ran, how it exited, how large
 ;; the output was -- is what a reader needs at a glance.  The fold is display
 ;; only, so the record and the projection above are both untouched.
+;;
+;; The projection is visible too: a report whose body the planner no longer
+;; reads is marked on its header lines, in the display only, so the trimming is
+;; not silent.
 
 ;;; Code:
 
@@ -89,7 +93,9 @@ re-sends it on every turn.  With this set, only the newest report
 keeps its body; older ones keep their header lines and a
 placeholder.  Set it to nil to send every report whole: that costs
 the repeated growth, but never asks the planner to re-run a command
-for output it was already given."
+for output it was already given.  Whichever way it is set, the console
+marks every report whose body it drops, on the display only, so the
+trimming is never silent."
   :type 'boolean
   :group 'scalpel)
 
@@ -111,6 +117,16 @@ Set it to nil to show every body."
   "Placeholder left where a consumed report body was trimmed.
 Structural contract shared by `scalpel-console--trim-report' and
 `scalpel-console-trim-consumed-output'.")
+
+(defconst scalpel-console--consumed-body-note
+  "Output already read back to the planner; no longer re-sent.  C-c C-o shows the text."
+  "Tooltip for a report the planner no longer reads in full.
+Structural contract shared by `scalpel-console--history', which
+drops such a body from the conversation, and
+`scalpel-console--refresh-consumed-body-markers', which says so on
+screen.  The console carries it as display properties only, never as
+buffer text, so it can reach neither the conversation nor the
+pending-input scanner.")
 
 (defconst scalpel-console--continuation-instruction
   (concat "The shell command from the previous round already ran; its\n"
@@ -146,6 +162,14 @@ console buffer yet, so nothing is highlighted as changed.")
 (defface scalpel-console-context-unchanged-face
   '((t :inherit shadow))
   "Face for files unchanged in the Scalpel context."
+  :group 'scalpel)
+
+(defface scalpel-console-consumed-body-face
+  '((t :inherit shadow :slant italic))
+  "Face for the header lines of a report the planner no longer reads in full.
+`scalpel-console--refresh-consumed-body-markers' applies it on the
+display only: the text, the conversation and the pending-input
+scanner are all unchanged."
   :group 'scalpel)
 
 (defun scalpel-console--buffer-name (root)
@@ -317,6 +341,113 @@ no fence, or with an unterminated one, comes back unchanged."
                   scalpel-console--consumed-output-marker
                   (substring text end)))))))
 
+(defun scalpel-console--assistant-report-regions ()
+  "Return one (BEG . END) per assistant round, in buffer order.
+A round is a stretch of text under one `scalpel-console-role' value,
+which is what `scalpel-console--history' returns, so two rounds not
+separated by a user round come back as one region here too."
+  (let ((pos (point-min))
+        regions)
+    (while (< pos (point-max))
+      (let ((next (next-single-property-change
+                   pos 'scalpel-console-role nil (point-max))))
+        (when (eq (get-text-property pos 'scalpel-console-role) 'assistant)
+          (push (cons pos next) regions))
+        (setq pos next)))
+    (nreverse regions)))
+
+(defun scalpel-console--consumed-body-regions ()
+  "Return the assistant rounds whose output body the planner no longer processes.
+The newest round keeps its body, for the round that consumes it.  Of the
+older rounds, only those whose body `scalpel-console--trim-report'
+would replace are returned: that is the condition
+`scalpel-console--history' trims under, and the only one there is to
+report.  Return nil when `scalpel-console-trim-consumed-output' is
+nil, because then no body is dropped at all."
+  (when scalpel-console-trim-consumed-output
+    (cl-loop
+     for region in (butlast (scalpel-console--assistant-report-regions))
+     for text = (buffer-substring-no-properties (car region) (cdr region))
+     for trimmed = (scalpel-console--trim-report text)
+     unless (string= trimmed text)
+     collect region)))
+
+(defun scalpel-console--make-nonsticky (beg end props)
+  "Extend the `rear-nonsticky' list of BEG..END with PROPS.
+The list already there is preserved: a header line declares the
+console's own tags nonsticky, and replacing it would let keyboard
+input inherit them and stop reading as pending input."
+  (let ((existing (get-text-property beg 'rear-nonsticky)))
+    (put-text-property
+     beg end 'rear-nonsticky
+     (if (eq existing t)
+         t
+       (cl-union (and (listp existing) existing) props)))))
+
+(defun scalpel-console--mark-consumed-body (region)
+  "Mark one consumed report REGION on the display.
+REGION is (BEG . END) of an assistant round whose output body the
+planner no longer processes.  Nothing is inserted and no text is
+replaced: only properties are set, so the record and the
+conversation keep every byte.  The report's header lines carry the
+mark, not its body: the body may be folded out of sight, and the
+header is what stays readable.  The caller binds
+`inhibit-read-only'."
+  (let* ((beg (car region))
+         (end (min (cdr region)
+                   (save-excursion
+                     (goto-char beg)
+                     ;; The header runs to the body fence, so every
+                     ;; header line carries the mark; a report whose
+                     ;; fence is missing falls back to its first line.
+                     (if (re-search-forward "\n--- output ---\n"
+                                            (cdr region) t)
+                         (match-beginning 0)
+                       (line-end-position))))))
+    (when (< beg end)
+      (put-text-property beg end 'scalpel-console-consumed-body t)
+      (put-text-property beg end 'face
+                         'scalpel-console-consumed-body-face)
+      (put-text-property beg end 'help-echo
+                         scalpel-console--consumed-body-note)
+      ;; Keyboard input arrives through `insert-and-inherit', which
+      ;; copies the preceding character's properties unless they are
+      ;; declared `rear-nonsticky'.  A face left out of that list would
+      ;; make the user's own typing inside a header look spent.
+      (scalpel-console--make-nonsticky
+       beg end '(face help-echo scalpel-console-consumed-body)))))
+
+(defun scalpel-console--clear-consumed-body-markers ()
+  "Remove every consumed-body mark from the current buffer.
+The stickiness guard `scalpel-console--mark-consumed-body' adds is
+left in place: it only suppresses property inheritance, and the
+range carries no marker properties afterwards."
+  (let ((inhibit-read-only t)
+        (pos (point-min)))
+    (while (< pos (point-max))
+      (let ((next (next-single-property-change
+                   pos 'scalpel-console-consumed-body nil (point-max))))
+        (when (get-text-property pos 'scalpel-console-consumed-body)
+          (remove-text-properties
+           pos next '(scalpel-console-consumed-body nil face nil
+                       help-echo nil)))
+        (setq pos next)))))
+
+(defun scalpel-console--refresh-consumed-body-markers ()
+  "Mark every report whose output body the planner no longer processes.
+The mark is display-only, so `scalpel-console--history' returns the same
+bytes and `scalpel-console--pending-input-regions' sees no new region.
+Which reports are marked is derived from the buffer on every call,
+exactly as `scalpel-console--history' derives the trimming, so the
+marks and the conversation cannot disagree.  Clearing before marking
+keeps the result idempotent, and a call with
+`scalpel-console-trim-consumed-output' nil clears the marks left from
+before it was turned off."
+  (let ((inhibit-read-only t))
+    (scalpel-console--clear-consumed-body-markers)
+    (dolist (region (scalpel-console--consumed-body-regions))
+      (scalpel-console--mark-consumed-body region))))
+
 (defun scalpel-console--history ()
   "Return the conversation recorded in the current buffer, as text.
 Every region carrying a `scalpel-console-role' property is joined in
@@ -332,7 +463,10 @@ older report are replaced by
 `scalpel-console--consumed-output-marker'; their headers remain, so
 the planner still knows what ran and how much it produced.  The
 trim is a projection over the buffer text, never an edit of it, so
-the console keeps the whole record."
+the console keeps the whole record.  Which reports are trimmed is
+shown on screen by `scalpel-console--refresh-consumed-body-markers',
+which derives it from the same regions and the same
+`scalpel-console--trim-report'."
   (let ((pos (point-min))
         (turns nil))
     (while (< pos (point-max))
@@ -395,12 +529,14 @@ report may hold several, so this loops to END.  Does nothing when
 (defun scalpel-console--append (text &optional role)
   "Append TEXT to the end of the console buffer.
 ROLE, when non-nil, tags TEXT as part of the conversation
-\(`user' or `assistant'), so `scalpel-console--history' reads it
+\(`user' or `assistant'), so `scalpel-console--history' returns it
 back; output appended without a role is display-only, as context
 trees are, and is tagged so it can never be mistaken for an
 instruction the user still has to send.  Point moves to the new
 end, so the user always sees the latest output after a context
-refresh or reply."
+refresh or reply.  Appending an assistant round also refreshes the
+consumed-body marks: that round is the cycle that processes the previous
+report's output, so the previous body stops being sent."
   (let ((buf (scalpel-console--target-buffer)))
     (with-current-buffer buf
       (goto-char (point-max))
@@ -413,7 +549,13 @@ refresh or reply."
         ;; large shell dump does not bury the conversation.  Display
         ;; only: the record above and the projection `--history' builds
         ;; are both unchanged.
-        (scalpel-console--collapse-report-bodies beg (point)))
+        (scalpel-console--collapse-report-bodies beg (point))
+        ;; An assistant turn is the round that reads the previous
+        ;; report's output, so that earlier body stops being sent.  Only
+        ;; this role can change which report is newest, so only this
+        ;; role pays for the rescan.
+        (when (eq role 'assistant)
+          (scalpel-console--refresh-consumed-body-markers)))
       (goto-char (point-max)))))
 
 (defun scalpel-console-toggle-output ()
@@ -536,7 +678,9 @@ be reviewed.  The next instruction is sent as the first turn of a
 new session, so the request no longer grows with the length of the
 session.  The header, the context tree and the file list are kept:
 the context is input, not memory — to reset it use
-`scalpel-console-reset-context'."
+`scalpel-console-reset-context'.  The consumed-body marks go with
+the turns: a forgotten turn is not read at all, so a mark saying its
+body was dropped would describe the wrong thing."
   (interactive)
   (with-current-buffer (scalpel-console--target-buffer)
     (let ((inhibit-read-only t)
@@ -562,6 +706,9 @@ the context is input, not memory — to reset it use
         ;; still to send: tag it so it never reads back as input.
         (put-text-property (car range) (cdr range)
                            'scalpel-console-output t))
+      ;; Re-deriving the marks clears them: with the roles gone, no turn
+      ;; is an assistant turn any more.
+      (scalpel-console--refresh-consumed-body-markers)
       (goto-char (point-max))
       (message "Scalpel: conversation forgotten; the text stays on screen."))))
 
@@ -672,7 +819,12 @@ ON-COMPLETE, so it is never left pointing at a dead buffer."
                (let ((inhibit-read-only t))
                  (scalpel-console--insert-tagged
                   (format "Scalpel error: %s\n\n" (plist-get err :message))
-                  'assistant)))))
+                  'assistant))
+               ;; An error turn is a conversation turn too: it becomes the
+               ;; newest assistant turn, so the report before it has to be
+               ;; marked.  The insertion stays direct rather than going
+               ;; through `--append', to leave point placement as it was.
+               (scalpel-console--refresh-consumed-body-markers))))
          (funcall settle nil))))))
 
 (defun scalpel-console--shell-description (shell)
@@ -733,7 +885,7 @@ run can never block on a prompt."
   "Run agent rounds for INSTRUCTION until the loop ends.
 HISTORY is the conversation recorded before INSTRUCTION.  Return
 after dispatching the first round; each round's outcome is handled
-in its own callback, which re-reads the conversation from the
+in its own callback, which re-fetches the conversation from the
 buffer, so shell output reaches the next round without anything
 being carried in a variable.  A round that ran shell commands, or
 read a file, may be followed by another, up to
@@ -800,7 +952,7 @@ invoked in, it would answer for that buffer instead."
 The pending instruction is every line typed since the last appended
 output, so text composed with S-RET is sent as a single message.
 Every round re-sends the conversation recorded in this buffer, so
-the agent can read its own earlier replies and shell output."
+the agent can access its own earlier replies and shell output."
   (interactive)
   (if (scalpel-console--busy-p)
       (progn

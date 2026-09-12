@@ -1201,6 +1201,254 @@ fold placeholder."
               (should-not (get-text-property pos 'scalpel-console-role)))))
       (scalpel-utils-test-kill-buffer (buffer-name buf)))))
 
+(ert-deftest scalpel-console-test-marks-only-spent-report-bodies ()
+  "A report the planner no longer reads is marked; the newest is not.
+Regression: `scalpel-console--history' replaced old bodies with a
+placeholder silently, so the console showed a body the planner was
+never sent."
+  (let ((scalpel-console-trim-consumed-output t)
+        (buf (scalpel-console-test--new-console-buffer)))
+    (unwind-protect
+        (with-current-buffer buf
+          (erase-buffer)
+          ;; The reports are separated by a user turn: that is the shape
+          ;; the console really produces, since the refresh runs when the
+          ;; next instruction arrives.  Two adjacent assistant turns are
+          ;; a single turn to `scalpel-console--history', and so are
+          ;; trimmed -- and marked -- as one.
+          (scalpel-console--insert-tagged "User: first\n" 'user)
+          (scalpel-console--append
+           (concat "Scalpel: Shell: ls\nExit: 0\nOutput: 3 bytes\n"
+                   "--- output ---\na.el\n--- end output ---")
+           'assistant)
+          (scalpel-console--insert-tagged "User: second\n" 'user)
+          (scalpel-console--append
+           (concat "Scalpel: Shell: pwd\nExit: 0\nOutput: 5 bytes\n"
+                   "--- output ---\n/tmp\n--- end output ---")
+           'assistant)
+          (goto-char (point-min))
+          (should (search-forward "Shell: ls" nil t))
+          (let ((spent (match-beginning 0)))
+            (ert-info ((format "Buffer:\n%S" (buffer-string)))
+              (should (eq (get-text-property spent 'face)
+                          'scalpel-console-consumed-body-face))
+              (should (get-text-property spent
+                                         'scalpel-console-consumed-body))
+              (should (string-match-p
+                       (regexp-quote scalpel-console--consumed-body-note)
+                       (get-text-property spent 'help-echo)))))
+          (goto-char (point-min))
+          (should (search-forward "Shell: pwd" nil t))
+          (ert-info ((format "Buffer:\n%S" (buffer-string)))
+            (should-not (get-text-property (match-beginning 0) 'face))
+            (should-not (get-text-property (match-beginning 0)
+                                           'scalpel-console-consumed-body))))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
+
+(ert-deftest scalpel-console-test-consumed-mark-is-display-only ()
+  "The mark adds no text and no pending-input region.
+Regression: a mark inserted as text would join the record, and
+`scalpel-console--history' would send it to the planner as part of
+the header."
+  (let ((scalpel-console-trim-consumed-output t)
+        (buf (scalpel-console-test--new-console-buffer)))
+    (unwind-protect
+        (with-current-buffer buf
+          (erase-buffer)
+          ;; A user turn between the reports, as the console produces.
+          (scalpel-console--insert-tagged "User: first\n" 'user)
+          (scalpel-console--append
+           (concat "Scalpel: Shell: ls\nExit: 0\nOutput: 3 bytes\n"
+                   "--- output ---\na.el\n--- end output ---")
+           'assistant)
+          (scalpel-console--insert-tagged "User: second\n" 'user)
+          (scalpel-console--append
+           (concat "Scalpel: Shell: pwd\nExit: 0\nOutput: 5 bytes\n"
+                   "--- output ---\n/tmp\n--- end output ---")
+           'assistant)
+          (goto-char (point-min))
+          (should (search-forward "Shell: ls" nil t))
+          (ert-info ("the premise: the older report really is marked")
+            (should (eq (get-text-property (match-beginning 0) 'face)
+                        'scalpel-console-consumed-body-face)))
+          (let ((history (scalpel-console--history))
+                (text (buffer-string)))
+            (ert-info ((format "History:\n%S" history))
+              (should (string-match-p
+                       (regexp-quote scalpel-console--consumed-output-marker)
+                       history))
+              (should (string-match-p "Output: 3 bytes" history))
+              (should-not (string-match-p "a\\.el" history))
+              (should (string-match-p "/tmp" history))
+              (should-not (string-match-p
+                           (regexp-quote scalpel-console--consumed-body-note)
+                           history)))
+            (ert-info ((format "Buffer:\n%S" text))
+              (should-not (string-match-p
+                           (regexp-quote scalpel-console--consumed-body-note)
+                           text))))
+          (ert-info ((format "Buffer:\n%S" (buffer-string)))
+            (should (null (scalpel-console--pending-input-regions)))))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
+
+(ert-deftest scalpel-console-test-consumed-mark-does-not-leak-onto-input ()
+  "Typing inside a marked header does not inherit the mark's face.
+Regression: keyboard input arrives through `insert-and-inherit', which
+copies the preceding character's properties unless they are declared
+`rear-nonsticky', so a face left out of that list would make the
+user's own text look like spent output."
+  (let ((scalpel-console-trim-consumed-output t)
+        (buf (scalpel-console-test--new-console-buffer)))
+    (unwind-protect
+        (with-current-buffer buf
+          (erase-buffer)
+          ;; A user turn between the reports, as the console produces.
+          (scalpel-console--insert-tagged "User: first\n" 'user)
+          (scalpel-console--append
+           (concat "Scalpel: Shell: ls\nExit: 0\nOutput: 3 bytes\n"
+                   "--- output ---\na.el\n--- end output ---")
+           'assistant)
+          (scalpel-console--insert-tagged "User: second\n" 'user)
+          (scalpel-console--append
+           (concat "Scalpel: Shell: pwd\nExit: 0\nOutput: 5 bytes\n"
+                   "--- output ---\n/tmp\n--- end output ---")
+           'assistant)
+          (goto-char (point-min))
+          (should (search-forward "Output: 3 bytes" nil t))
+          ;; Insert at the end of the marked header, so only the
+          ;; preceding character can hand properties over.
+          (let ((pos (line-end-position)))
+            (goto-char pos)
+            (should (get-text-property (1- pos) 'face))
+            (insert-and-inherit "x")
+            (ert-info ((format "Buffer:\n%S" (buffer-string)))
+              (should (string= (buffer-substring-no-properties pos (1+ pos))
+                               "x"))
+              (should-not (get-text-property pos 'face))
+              (should-not (get-text-property pos 'help-echo))
+              (should-not (get-text-property
+                           pos 'scalpel-console-consumed-body)))))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
+
+(ert-deftest scalpel-console-test-consumed-marks-follow-the-trim-setting ()
+  "Turning the trim off clears the marks it made.
+Regression: a mark derived once and cached would leave the console
+claiming a body was dropped when it is now sent whole."
+  (let ((buf (scalpel-console-test--new-console-buffer)))
+    (unwind-protect
+        (with-current-buffer buf
+          (erase-buffer)
+          (setq-local scalpel-console-trim-consumed-output t)
+          ;; A user turn between the reports, as the console produces.
+          (scalpel-console--insert-tagged "User: first\n" 'user)
+          (scalpel-console--append
+           (concat "Scalpel: Shell: ls\nExit: 0\nOutput: 3 bytes\n"
+                   "--- output ---\na.el\n--- end output ---")
+           'assistant)
+          (scalpel-console--insert-tagged "User: second\n" 'user)
+          (scalpel-console--append
+           (concat "Scalpel: Shell: pwd\nExit: 0\nOutput: 5 bytes\n"
+                   "--- output ---\n/tmp\n--- end output ---")
+           'assistant)
+          (goto-char (point-min))
+          (should (search-forward "Shell: ls" nil t))
+          (let ((spent (match-beginning 0)))
+            (should (eq (get-text-property spent 'face)
+                        'scalpel-console-consumed-body-face))
+            (setq-local scalpel-console-trim-consumed-output nil)
+            (scalpel-console--append
+             (concat "Scalpel: Shell: whoami\nExit: 0\nOutput: 2 bytes\n"
+                     "--- output ---\nme\n--- end output ---")
+             'assistant)
+            (ert-info ((format "Buffer:\n%S" (buffer-string)))
+              (should-not (get-text-property spent 'face))
+              (should-not (get-text-property
+                           spent 'scalpel-console-consumed-body)))))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
+
+(ert-deftest scalpel-console-test-forget-history-clears-consumed-marks ()
+  "A forgotten report is not read at all, so its mark goes with it."
+  (let ((scalpel-console-trim-consumed-output t)
+        (buf (scalpel-console-test--new-console-buffer)))
+    (unwind-protect
+        (with-current-buffer buf
+          (erase-buffer)
+          ;; A user turn between the reports, as the console produces.
+          (scalpel-console--insert-tagged "User: first\n" 'user)
+          (scalpel-console--append
+           (concat "Scalpel: Shell: ls\nExit: 0\nOutput: 3 bytes\n"
+                   "--- output ---\na.el\n--- end output ---")
+           'assistant)
+          (scalpel-console--insert-tagged "User: second\n" 'user)
+          (scalpel-console--append
+           (concat "Scalpel: Shell: pwd\nExit: 0\nOutput: 5 bytes\n"
+                   "--- output ---\n/tmp\n--- end output ---")
+           'assistant)
+          (goto-char (point-min))
+          (should (search-forward "Shell: ls" nil t))
+          (let ((spent (match-beginning 0)))
+            (should (eq (get-text-property spent 'face)
+                        'scalpel-console-consumed-body-face))
+            (scalpel-console-forget-history)
+            (ert-info ((format "Buffer:\n%S" (buffer-string)))
+              ;; The text stays on screen...
+              (goto-char (point-min))
+              (should (search-forward "Shell: ls" nil t))
+              ;; ...but no turn is a conversation turn any more.
+              (should-not (get-text-property spent 'face))
+              (should-not (get-text-property
+                           spent 'scalpel-console-consumed-body))
+              (should (null (scalpel-console--pending-input-regions)))
+              (should (string= (scalpel-console--history) "")))))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
+
+(ert-deftest scalpel-console-test-error-turn-marks-previous-report ()
+  "An error turn is a conversation turn, so the report before it is marked.
+Regression: only `--append' refreshed the marks, so a round that
+failed with a non-sandbox error left the previous body looking live
+while the planner already saw the error as the newest turn."
+  (let ((scalpel-agent--context-files nil)
+        (scalpel-agent-confirm-tools nil)
+        (scalpel-console-continue-after-shell 'always)
+        (scalpel-console-max-rounds 5)
+        (scalpel-console-trim-consumed-output t)
+        (buf (scalpel-console-test--new-console-buffer))
+        (requests 0))
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'scalpel-llm-request-async)
+                     (lambda (_prompt on-success on-error &optional _system)
+                       (setq requests (1+ requests))
+                       (if (= requests 1)
+                           (funcall on-success
+                                    (concat "[{\"tool\":\"shell\","
+                                            "\"command\":\"ls\","
+                                            "\"reason\":\"look\","
+                                            "\"long-running\":false}]"))
+                         (funcall on-error
+                                  (list :type 'parse
+                                        :message "Bad JSON")))))
+                    ((symbol-function 'scalpel-sandbox-run)
+                     (lambda (&rest _ignore) (cons 0 "a.el\n"))))
+            (with-current-buffer buf
+              (erase-buffer)
+              (insert "list it\n")
+              (goto-char (point-min))
+              (scalpel-console-send-line)))
+          (with-current-buffer buf
+            (ert-info ((format "Buffer:\n%S" (buffer-string)))
+              (should (= requests 2))
+              (goto-char (point-min))
+              (should (search-forward "Shell: ls" nil t))
+              (should (eq (get-text-property (match-beginning 0) 'face)
+                          'scalpel-console-consumed-body-face))
+              (goto-char (point-min))
+              (should (search-forward "Scalpel error: Bad JSON" nil t))
+              ;; The error turn holds no fenced body, so nothing is
+              ;; dropped from it and it stays unmarked.
+              (should-not (get-text-property (match-beginning 0) 'face)))))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
+
 (provide 'scalpel-console-test)
 
 ;;; scalpel-console-test.el ends here
