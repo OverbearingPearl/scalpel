@@ -188,7 +188,7 @@ JavaScript, Go, Python, C / C++, and data formats (JSON / YAML / TOML).
 Scalpel is a **conversational editor**, not a one-shot command.
 
 1. Open any code files you need as context.
-2. Run `M-x scalpel-console` to open the agent console.
+2. Run `M-x scalpel-open` to open the agent console.
 3. Type an instruction in natural language, e.g.:
 
    ```
@@ -289,9 +289,11 @@ Then install Scalpel itself:
 
 After evaluating the above, run `M-x scalpel-open`.
 
-If `gptel` is missing, Scalpel still loads, so the test suite can run without
-it; the first agent request then fails with a clear message explaining how to
-install it, instead of an opaque "Cannot open load file" error.
+`gptel` is a hard dependency, not an optional integration: loading Scalpel
+without it fails with a `file-missing' error, so install and configure `gptel`
+first, as above.  A missing API key is a separate, non-fatal case: the first
+agent request then fails with a clear message pointing at
+`M-x scalpel-set-backend`.
 
 If you prefer not to use `use-package`, you can manually add both packages to
 `load-path` and require them in order:
@@ -324,9 +326,9 @@ Inside the console:
 - `C-c C-c` – also send the pending instruction
 - `C-g` – cancel a running request
 - `C-c C-b` – switch the active gptel backend (model) for future requests
-- `C-c C-a` – add a file or directory as writable context
+- `C-c C-a` – add a file or directory to the context (read-only)
 - `C-c C-d` – remove a file or directory from the context
-- `C-c C-r` – reset the context to currently open located files
+- `C-c C-r` – clear the context
 - `C-c C-f` – forget the conversation; keeps the context files
 - `M-x scalpel-history` – show previous Scalpel sessions
 - `M-x scalpel-revert-session` – revert one session completely
@@ -350,6 +352,10 @@ Inside the console:
   Commands also get the temporary directory for scratch files.  When the
   sandbox is unavailable, or its probe fails, shell actions fail closed
   instead of falling back to an unsandboxed shell.
+- The context is bounded by `scalpel-agent-context-max-files': an add that
+  would cross the cap is refused whole, leaving the context exactly as it
+  was, so neither the sandbox's reach nor the planner prompt grows past it
+  by accident.
 - For local models (Ollama, llama.cpp), no source leaves your machine.
 - Every change is reviewable before it is recoverable: each modification is
   reported in the console as it lands and stays in the buffer, and a session can

@@ -399,9 +399,10 @@ the context is input, not memory — to reset it use
       (message "Scalpel: conversation forgotten; the text stays on screen."))))
 
 (defun scalpel-console-reset-context ()
-  "Reset the agent context to currently open located files.
+  "Clear the agent context.
 The context is the set of files in scope; it is not the
-conversation.  To clear the conversation instead, use
+conversation, and no file is added back from the open buffers.  To
+clear the conversation instead, use
 `scalpel-console-forget-history', which leaves this list alone."
   (interactive)
   ;; Reset the console's own context, not the caller buffer's.

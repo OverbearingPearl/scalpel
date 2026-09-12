@@ -118,6 +118,19 @@ Larger outputs are truncated with an explicit marker."
   :type 'integer
   :group 'scalpel)
 
+(defcustom scalpel-agent-context-max-files 200
+  "Maximum number of files the session context may hold.
+Each context file costs a line in the planner prompt, a read-only
+bind in the Linux sandbox policy, and read grants in the macOS
+profile, so adding a directory costs whatever lies under it.  An add
+that would cross this limit is refused whole, with the context left
+exactly as it was, rather than accepted in part: a partially
+applied file list would make the sandbox's reach differ from what
+the user asked for, and nothing downstream could tell that it had.
+Raise it deliberately, or add a subdirectory instead."
+  :type 'integer
+  :group 'scalpel)
+
 (defcustom scalpel-agent-confirm-tools '("shell")
   "Tools that require user confirmation before execution.
 Each entry is a tool name string.  When the planner emits an action
@@ -237,13 +250,30 @@ gitignore unless IGNORE-GITIGNORE is non-nil."
 
 (defun scalpel-agent-context-add (path &optional ignore-gitignore)
   "Add PATH (a file or directory) to the session context.
-A directory expands to files matching a registered locator, with
-gitignored files excluded unless IGNORE-GITIGNORE is non-nil."
+A directory expands to every regular file under it, whether or not
+a locator handles it, so a log or a config that is only meant to be
+read can be added alongside code.  Gitignored files are excluded
+unless IGNORE-GITIGNORE is non-nil.  Signal `user-error' when PATH
+expands to no file, or when the result would hold more than
+`scalpel-agent-context-max-files' files; the refusal is whole, so
+the context is left exactly as it was.  Return the files PATH
+expanded to."
   (let ((files (scalpel-agent--expanded-files path ignore-gitignore)))
     (unless files
       (user-error "Scalpel: no addable files under %s (try C-u to include gitignored)" path))
-    (setq scalpel-agent--context-files
-          (cl-union files scalpel-agent--context-files :test #'string=))
+    ;; The limit is checked on the merged list, not on FILES: several
+    ;; adds that each fit must not be able to walk the context past it.
+    (let ((merged (cl-union files scalpel-agent--context-files
+                            :test #'string=)))
+      (when (> (length merged) scalpel-agent-context-max-files)
+        (user-error
+         (concat "Scalpel: adding %s would put %d files in the context, "
+                 "over the limit of %d; add a subdirectory, or raise "
+                 "`scalpel-agent-context-max-files'")
+         path (length merged) scalpel-agent-context-max-files))
+      ;; Only after the check: a refused add must leave the context
+      ;; untouched, not partially applied.
+      (setq scalpel-agent--context-files merged))
     files))
 
 (defun scalpel-agent-context-remove (path)

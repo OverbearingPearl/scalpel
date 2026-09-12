@@ -271,6 +271,36 @@ error reported a bare JSON failure without naming the cause."
       (delete-directory dir t)
       (scalpel-utils-test-delete-file other))))
 
+(ert-deftest scalpel-agent-test-context-add-rejects-over-limit-whole ()
+  "An add that would exceed the file limit is refused as a whole.
+Regression: the context had no size bound, so adding a directory put
+every file under it into the planner prompt and the sandbox policy,
+with no point at which the growth became visible.  The limit is
+checked against the merged list, so successive adds cannot walk past
+it, and a refusal leaves the context exactly as it was rather than
+partially applied."
+  (let ((scalpel-agent--context-files nil)
+        (scalpel-agent-context-max-files 1)
+        (first (make-temp-file "scalpel-test-" nil ".el"))
+        (second (make-temp-file "scalpel-test-" nil ".el")))
+    (unwind-protect
+        (progn
+          (with-temp-file first (insert "(defun first ())"))
+          (with-temp-file second (insert "(defun second ())"))
+          (scalpel-agent-context-add first)
+          (should (= (length scalpel-agent--context-files) 1))
+          (should-error (scalpel-agent-context-add second) :type 'user-error)
+          (ert-info ((format "Context: %S" scalpel-agent--context-files))
+            ;; The refusal must not have kept the file that fit.
+            (should (equal scalpel-agent--context-files
+                           (list (file-truename (expand-file-name first)))))
+            (should-not (member (file-truename (expand-file-name second))
+                                scalpel-agent--context-files))))
+      (scalpel-utils-test-kill-file-buffer first)
+      (scalpel-utils-test-delete-file first)
+      (scalpel-utils-test-kill-file-buffer second)
+      (scalpel-utils-test-delete-file second))))
+
 (ert-deftest scalpel-agent-test-context-summary-and-empty ()
   "Summary renders a tree; empty context reports 'none'."
   (let ((scalpel-agent--context-files nil))
