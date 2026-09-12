@@ -174,6 +174,7 @@ Components live in focused modules:
 - `scalpel-execute` – boundary-locked edit application and deletion,
   written to disk as applied
 - `scalpel-sandbox` – command sandbox for shell actions (`bubblewrap` on Linux, `sandbox-exec` on macOS)
+- `scalpel-token` – per-round token accounting buffer (`M-x scalpel-token-open`, estimates, not API usage)
 - `scalpel-lineage` – session diff, tracking, and Git-backed rollback
 
 Every additional language arrives as a `scalpel-locate-<lang>.el` provider
@@ -330,6 +331,8 @@ Inside the console:
 - `C-c C-d` – remove a file or directory from the context
 - `C-c C-r` – clear the context
 - `C-c C-f` – forget the conversation; keeps the context files
+- `M-x scalpel-token-open` – show per-round token accounting (round, per-console and grand totals)
+- `M-x scalpel-token-reset` – clear the token accounting
 - `M-x scalpel-history` – show previous Scalpel sessions
 - `M-x scalpel-revert-session` – revert one session completely
 
