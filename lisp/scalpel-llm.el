@@ -8,12 +8,13 @@
 
 ;;; Commentary:
 
-;; Asynchronous bridge to gptel.  A request streams through a callback that
-;; accumulates content, collects reasoning chunks, and feeds token counters to
-;; the console status line; it settles exactly once, through ON-SUCCESS or
-;; ON-ERROR.  A request with no callback activity for `scalpel-llm-timeout'
-;; seconds is abandoned by its idle timer, and its callbacks are dropped, so a
-;; late response cannot corrupt a later request.
+;; Asynchronous bridge to gptel.
+;; A request streams through a callback that accumulates content, collects
+;; reasoning chunks, and feeds token counters to the console status line; it
+;; settles exactly once, through ON-SUCCESS or ON-ERROR.  A request with no
+;; callback activity for `scalpel-llm-timeout' seconds is abandoned by its
+;; idle timer, and its callbacks are dropped, so a late response cannot
+;; corrupt a later request.
 
 ;;; Code:
 
@@ -28,6 +29,22 @@ callback -- content chunk, reasoning chunk, or completion -- resets the
 clock, so a slow but active stream is never killed.  Time spent queued
 inside gptel counts as idle, because no callback arrives during it.
 Raise this for backends that think before emitting their first chunk.")
+
+(defcustom scalpel-llm-deadline 300
+  "Seconds from the moment a request is sent until it is abandoned.
+It is independent of `scalpel-llm-timeout'.  Unlike the idle
+budget, this deadline is never reset by callbacks, so a backend
+that keeps streaming heartbeats/reasoning chunks without ever
+emitting a terminal callback still ends within this budget.  It
+must be larger than `scalpel-llm-timeout' to be useful."
+  :type 'integer
+  :group 'scalpel-llm)
+
+(defvar scalpel-llm--cancel-current nil
+  "Closure that cancels the request currently in flight, or nil when none.
+Set by `scalpel-llm-request-async' when a request starts and cleared
+at every terminal point, so user-level commands can abort a round
+without reaching into a request's private state.")
 
 (defvar scalpel-llm--progress-callback nil
   "Optional zero-arg function called on every streaming callback.
@@ -79,30 +96,40 @@ status display."
 Return immediately.  ON-SUCCESS is called with the accumulated
 response string once the stream ends.  ON-ERROR is called with a
 plist (:type SYMBOL :message STRING) when the request fails, stays
-idle for `scalpel-llm-timeout' seconds without any callback, or
+idle for `scalpel-llm-timeout' seconds without any callback,
+exceeds `scalpel-llm-deadline' seconds total, is cancelled, or
 cannot be set up.  SYSTEM overrides the default system message.
 
-The request holds no global cancellation state: it is abandoned
-either by its own idle timer or when the stream ends, and either
-path sets the request's `cancelled' flag.  A callback that arrives
+The request is abandoned by its idle timer, its total deadline,
+an explicit cancellation, or when the stream ends, and each path
+sets the request's `cancelled' flag.  A callback that arrives
 after the flag is set is dropped, so a late response cannot corrupt
 a later request.
 
-:type is `idle' for the idle timer, `api' for a backend error
-surfaced by gptel, `api-key' for a missing or invalid API key, and
-`setup' for a failure raised synchronously by `gptel-request'."
+:type is `idle' for the idle timer, `timeout' for the total
+deadline, `cancelled' for an explicit cancellation, `api' for a
+backend error surfaced by gptel, `api-key' for a missing or invalid
+API key, and `setup' for a failure raised synchronously by
+`gptel-request'."
   (let* ((cancelled nil)
          (accumulated "")
-         (timer nil))
+         (timer nil)
+         (deadline-timer nil)
+         (cancel-fn nil))
     (setq scalpel-llm--tokens-uploaded (scalpel-llm--count-tokens prompt))
     (setq scalpel-llm--tokens-received 0)
     (setq scalpel-llm--total-uploaded
           (+ scalpel-llm--total-uploaded scalpel-llm--tokens-uploaded))
     (scalpel-llm--reset-reasoning-buffer)
     (cl-labels
-        ((abandon ()
+        ((clear-cancel-current ()
+           (when (eq scalpel-llm--cancel-current cancel-fn)
+             (setq scalpel-llm--cancel-current nil)))
+         (abandon ()
            (setq cancelled t)
-           (when timer (cancel-timer timer) (setq timer nil)))
+           (when timer (cancel-timer timer) (setq timer nil))
+           (when deadline-timer (cancel-timer deadline-timer) (setq deadline-timer nil))
+           (clear-cancel-current))
          (arm-timeout ()
            (when timer (cancel-timer timer))
            (setq timer
@@ -116,12 +143,32 @@ surfaced by gptel, `api-key' for a missing or invalid API key, and
                                      :message
                                      (format "Scalpel: LLM request idle for more than %s seconds"
                                              scalpel-llm-timeout))))))))
+         (arm-deadline ()
+           (when deadline-timer (cancel-timer deadline-timer))
+           (setq deadline-timer
+                 (run-with-timer
+                  scalpel-llm-deadline nil
+                  (lambda ()
+                    (unless cancelled
+                      (abandon)
+                      (funcall on-error
+                               (list :type 'timeout
+                                     :message "Scalpel: request exceeded its total time budget")))))))
          (finish (kind payload)
            (unless cancelled
              (abandon)
-             (funcall (if (eq kind 'success) on-success on-error) payload))))
+             (funcall (if (eq kind 'success) on-success on-error) payload)))
+         (cancel-request ()
+           (unless cancelled
+             (abandon)
+             (funcall on-error
+                      (list :type 'cancelled
+                            :message "Scalpel: request cancelled")))))
+      (setq cancel-fn (lambda () (cancel-request)))
+      (setq scalpel-llm--cancel-current cancel-fn)
       (condition-case err
           (progn
+            (arm-deadline)
             (gptel-request prompt
               :system system
               :stream t
@@ -137,12 +184,17 @@ surfaced by gptel, `api-key' for a missing or invalid API key, and
                              ;; RESPONSE; the human-readable cause is in
                              ;; INFO's :status.
                              ((null resp)
-                              (finish 'error
-                                      (list :type 'api
-                                            :message
-                                            (format "Scalpel: LLM returned error: %S"
-                                                    (or (plist-get info :status)
-                                                        "unknown")))))
+                              (let ((status (plist-get info :status)))
+                                (if (and status (not (string-match-p "200" (format "%s" status))))
+                                    (finish 'error
+                                            (list :type 'api
+                                                  :message
+                                                  (format "Scalpel: LLM returned error: %S"
+                                                          (or status "unknown"))))
+                                  ;; Some gptel versions/backends call back with
+                                  ;; nil RESPONSE and a 200 status as a normal
+                                  ;; end-of-stream signal. Treat this as success.
+                                  (finish 'success accumulated))))
                              ;; Content chunk.
                              ((stringp resp)
                               (setq accumulated (concat accumulated resp))
@@ -167,7 +219,8 @@ surfaced by gptel, `api-key' for a missing or invalid API key, and
                                          (scalpel-llm--count-tokens (cdr resp))))
                                 (when scalpel-llm--progress-callback
                                   (funcall scalpel-llm--progress-callback))))))))
-            (arm-timeout))
+            (unless cancelled
+              (arm-timeout)))
         (error
          (abandon)
          (if (scalpel-llm--api-key-error-p (error-message-string err))

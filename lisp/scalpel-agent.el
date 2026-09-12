@@ -703,9 +703,13 @@ from whatever prose or markdown fences surround it.  Signal
       ;; an unparsable one share a single explanation path.
       (scalpel-agent--parse-error raw))
     (let ((parsed (condition-case nil
-                      (json-parse-string payload
-                                         :object-type 'plist
-                                         :array-type 'list)
+                      (json-parse-string
+                       ;; Models emit \x2014-style escapes, which JSON forbids;
+                       ;; normalize them to \uXXXX before parsing.
+                       (replace-regexp-in-string
+                        "\\\\x\\([0-9a-fA-F]\\{4\\}\\)" "\\\\u\\1" payload)
+                       :object-type 'plist
+                       :array-type 'list)
                     (error (scalpel-agent--parse-error raw)))))
       (when (and (plistp parsed) (plist-get parsed :tool))
         (setq parsed (list parsed)))
@@ -1275,6 +1279,7 @@ busy flag still gets a chance to release it."
                             (funcall on-error err))))))))
                (step actions)))))
        (lambda (err)
+         (message "Scalpel-agent: forwarding error: %s" (plist-get err :message))
          (in-session
           (funcall on-error err)))))))
 

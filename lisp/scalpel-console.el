@@ -238,6 +238,8 @@ caller can delete them without invalidating earlier ones."
     ;; S-RET inserts a literal newline; RET sends the whole composed block.
     (define-key map (kbd "S-<return>") #'newline)
     (define-key map (kbd "C-c C-c") #'scalpel-console-send-line)
+    ;; Aborts the in-flight round.
+    (define-key map (kbd "C-c C-k") #'scalpel-console-abort)
     (define-key map (kbd "C-c C-b") #'scalpel-llm-select-backend)
     (define-key map (kbd "C-c C-a") #'scalpel-console-add-file)
     (define-key map (kbd "C-c C-d") #'scalpel-console-remove-file)
@@ -792,22 +794,26 @@ ON-COMPLETE, so it is never left pointing at a dead buffer."
                    (unless settled
                      (setq settled t)
                      (setq scalpel-llm--progress-callback nil)
-                     (scalpel-token-record
-                      (buffer-name target)
-                      (- scalpel-llm--total-uploaded up0)
-                      (- scalpel-llm--total-received down0)
-                      breakdown)
-                     (when (buffer-live-p target)
-                       (with-current-buffer target
-                         (funcall stop)))
-                     (if (buffer-live-p target)
-                         (funcall on-complete result)
-                       ;; The round callback re-selects the console
-                       ;; buffer, so with the console gone it cannot
-                       ;; run at all.  Nothing needs releasing here:
-                       ;; the busy guard is buffer-local and died with
-                       ;; the buffer.
-                       nil)))))
+                     (condition-case err
+                         (progn
+                           (scalpel-token-record
+                            (buffer-name target)
+                            (- scalpel-llm--total-uploaded up0)
+                            (- scalpel-llm--total-received down0)
+                            breakdown)
+                           (when (buffer-live-p target)
+                             (with-current-buffer target
+                               (funcall stop)))
+                           (if (buffer-live-p target)
+                               (funcall on-complete result)
+                             ;; The round callback re-selects the console
+                             ;; buffer, so with the console gone it cannot
+                             ;; run at all.  Nothing needs releasing here:
+                             ;; the busy guard is buffer-local and died with
+                             ;; the buffer.
+                             nil))
+                       (error
+                        (message "Scalpel: settle failed: %S" err)))))))
     (setq scalpel-llm--progress-callback refresh)
     (with-current-buffer target
       (scalpel-agent-run
@@ -824,27 +830,31 @@ ON-COMPLETE, so it is never left pointing at a dead buffer."
               'assistant)))
          (funcall settle result))
        (lambda (err)
-         (when (buffer-live-p target)
-           (with-current-buffer target
-             (if (eq (plist-get err :type) 'sandbox)
-                 ;; A sandbox failure is infrastructure, not
-                 ;; conversation.  Its message names the backend, so it
-                 ;; is shown to the user but never recorded as an
-                 ;; assistant turn: sending it back would hand the
-                 ;; planner the very boundary the prompt omits.  Only a
-                 ;; round failure that says something about the planner
-                 ;; -- malformed JSON, for one -- stays in the history.
-                 (scalpel-console--append
-                  (format "Scalpel error: %s" (plist-get err :message)))
-               (let ((inhibit-read-only t))
-                 (scalpel-console--insert-tagged
-                  (format "Scalpel error: %s\n\n" (plist-get err :message))
-                  'assistant))
-               ;; An error turn is a conversation turn too: it becomes the
-               ;; newest assistant turn, so the report before it has to be
-               ;; marked.  The insertion stays direct rather than going
-               ;; through `--append', to leave point placement as it was.
-               (scalpel-console--refresh-consumed-body-markers))))
+         (condition-case handler-err
+             (when (buffer-live-p target)
+               (with-current-buffer target
+                 (goto-char (point-max))
+                 (if (eq (plist-get err :type) 'sandbox)
+                     ;; A sandbox failure is infrastructure, not
+                     ;; conversation.  Its message names the backend, so it
+                     ;; is shown to the user but never recorded as an
+                     ;; assistant turn: sending it back would hand the
+                     ;; planner the very boundary the prompt omits.  Only a
+                     ;; round failure that says something about the planner
+                     ;; -- malformed JSON, for one -- stays in the history.
+                     (scalpel-console--append
+                      (format "Scalpel error: %s" (plist-get err :message)))
+                   (let ((inhibit-read-only t))
+                     (scalpel-console--insert-tagged
+                      (format "Scalpel error: %s\n\n" (plist-get err :message))
+                      'assistant))
+                   ;; An error turn is a conversation turn too: it becomes the
+                   ;; newest assistant turn, so the report before it has to be
+                   ;; marked.  The insertion stays direct rather than going
+                   ;; through `--append', to leave point placement as it was.
+                   (scalpel-console--refresh-consumed-body-markers))))
+           (error
+            (message "Scalpel: error handler failed: %S" handler-err)))
          (funcall settle nil))))))
 
 (defun scalpel-console--shell-description (shell)
@@ -1005,6 +1015,13 @@ the agent can access its own earlier replies and shell output."
             (scalpel-console--run-rounds instr history)
             (goto-char (point-max))
             (message "Scalpel: instruction sent.")))))))
+(defun scalpel-console-abort ()
+  "Cancel the request currently in flight for this console, if any."
+  (interactive)
+  (if scalpel-llm--cancel-current
+      (funcall scalpel-llm--cancel-current)
+    (ding)
+    (message "Scalpel: no request in flight to cancel.")))
 
 (provide 'scalpel-console)
 
