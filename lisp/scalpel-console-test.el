@@ -262,6 +262,102 @@ so non-zero counters made STOP delete a character inside
             (should (string= (buffer-string) "User: hi\n"))))
       (when (buffer-live-p buf) (kill-buffer buf)))))
 
+(ert-deftest scalpel-console-test-history-trims-consumed-reports ()
+  "Only the newest report keeps its body; older bodies become a placeholder.
+Regression: every report's full output stayed in the history, so a
+long session re-sent the same bytes on every prompt."
+  (let ((scalpel-console--context-baseline 'none-yet)
+        (buf (scalpel-console-test--new-console-buffer)))
+    (unwind-protect
+        (with-current-buffer buf
+          (erase-buffer)
+          (scalpel-console--insert-tagged "User: first\n" 'user)
+          (scalpel-console--insert-tagged
+           (concat "Scalpel: Shell: ls\nExit: 0\nOutput: 3 bytes\n"
+                   "--- output ---\na.el\n--- end output ---\n\n")
+           'assistant)
+          (scalpel-console--insert-tagged "User: second\n" 'user)
+          (scalpel-console--insert-tagged
+           (concat "Scalpel: Shell: pwd\nExit: 0\nOutput: 5 bytes\n"
+                   "--- output ---\n/tmp\n--- end output ---\n\n")
+           'assistant)
+          (let ((history (scalpel-console--history)))
+            (ert-info ((format "History:\n%S" history))
+              ;; The newest body survives: the next round still reads it.
+              (should (string-match-p "/tmp" history))
+              ;; The older one is spent and is replaced.
+              (should-not (string-match-p "a.el" history))
+              (should (string-match-p
+                       (regexp-quote scalpel-console--consumed-output-marker)
+                       history))
+              ;; Its header survives, so the planner still knows what ran.
+              (should (string-match-p "Shell: ls" history)))))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
+
+(ert-deftest scalpel-console-test-history-keeps-bodies-when-trim-is-off ()
+  "With the trim disabled, every report body reaches the planner."
+  (let ((scalpel-console--context-baseline 'none-yet)
+        (scalpel-console-trim-consumed-output nil)
+        (buf (scalpel-console-test--new-console-buffer)))
+    (unwind-protect
+        (with-current-buffer buf
+          (erase-buffer)
+          (scalpel-console--insert-tagged
+           (concat "Scalpel: Shell: ls\nExit: 0\nOutput: 3 bytes\n"
+                   "--- output ---\na.el\n--- end output ---\n\n")
+           'assistant)
+          (scalpel-console--insert-tagged
+           (concat "Scalpel: Shell: pwd\nExit: 0\nOutput: 5 bytes\n"
+                   "--- output ---\n/tmp\n--- end output ---\n\n")
+           'assistant)
+          (let ((history (scalpel-console--history)))
+            (ert-info ((format "History:\n%S" history))
+              (should (string-match-p "a.el" history))
+              (should (string-match-p "/tmp" history))
+              (should-not (string-match-p
+                           (regexp-quote
+                            scalpel-console--consumed-output-marker)
+                           history)))))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
+
+(ert-deftest scalpel-console-test-read-round-continues ()
+  "A round that only read a file is followed by another round.
+Regression: the continuation judge tested :shells alone, so a read
+produced output the planner could never be given."
+  (let ((scalpel-agent--context-files nil)
+        (scalpel-agent-confirm-tools nil)
+        (scalpel-console-continue-after-shell 'always)
+        (scalpel-console-max-rounds 5)
+        (buf (scalpel-console-test--new-console-buffer))
+        (prompts nil))
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'scalpel-llm-request-async)
+                     (lambda (prompt on-success _on-error &optional _system)
+                       (push prompt prompts)
+                       (funcall on-success
+                                (if (= (length prompts) 1)
+                                    "[{\"tool\":\"read\",\"file\":\"/tmp/a.el\",\"symbol\":\"foo\"}]"
+                                  "[{\"tool\":\"reply\",\"text\":\"done\"}]"))))
+                    ((symbol-function 'scalpel-agent-read)
+                     (lambda (file symbol)
+                       (format (concat "Read: %s in %s\nOutput: 14 bytes\n"
+                                       "--- output ---\n(defun foo ())\n"
+                                       "--- end output ---")
+                               symbol file))))
+            (with-current-buffer buf
+              (erase-buffer)
+              (insert "read foo\n")
+              (goto-char (point-min))
+              (scalpel-console-send-line)))
+          (should (= (length prompts) 2))
+          (ert-info ((format "Second prompt:\n%S" (car prompts)))
+            (should (string-match-p "(defun foo ())" (car prompts))))
+          (with-current-buffer buf
+            (ert-info ((format "Buffer:\n%S" (buffer-string)))
+              (should (string-match-p "Scalpel: done" (buffer-string))))))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
+
 (ert-deftest scalpel-console-test-open-is-not-a-command ()
   "Only `scalpel-open' is the user entry; `scalpel-console-open' is internal."
   (should-not (commandp 'scalpel-console-open)))

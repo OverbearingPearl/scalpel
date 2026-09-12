@@ -20,7 +20,10 @@
 ;;
 ;; Because nothing is approved beforehand, the buffer is also the record: every
 ;; edit report and shell report stays in it, so a session can be read back, and
-;; later diffed, after the fact.
+;; later diffed, after the fact.  What the agent is sent is a projection of that
+;; record: a report's output body is spent once the following round has read it,
+;; so only the newest report carries its body into the prompt, while the buffer
+;; keeps every byte.
 
 ;;; Code:
 
@@ -70,6 +73,25 @@ for a question under `scalpel-console-continue-after-shell' set to
 more output flow back unquestioned."
   :type 'integer
   :group 'scalpel)
+
+(defcustom scalpel-console-trim-consumed-output t
+  "Whether spent report bodies are dropped from what the agent reads.
+The console buffer always keeps every report in full; this controls
+only the text `scalpel-console--history' returns.  A round's output
+is read back once, by the round that follows it, so every later
+prompt would carry the same body for nothing, and a long session
+re-sends it on every turn.  With this set, only the newest report
+keeps its body; older ones keep their header lines and a
+placeholder.  Set it to nil to send every report whole: that costs
+the repeated growth, but never asks the planner to re-run a command
+for output it was already given."
+  :type 'boolean
+  :group 'scalpel)
+
+(defconst scalpel-console--consumed-output-marker "[output consumed]"
+  "Placeholder left where a consumed report body was trimmed.
+Structural contract shared by `scalpel-console--trim-report' and
+`scalpel-console-trim-consumed-output'.")
 
 (defconst scalpel-console--continuation-instruction
   (concat "The shell command from the previous round already ran; its\n"
@@ -252,22 +274,66 @@ text alone."
     (put-text-property beg (point) 'rear-nonsticky
                        '(scalpel-console-role scalpel-console-output))))
 
+(defun scalpel-console--trim-report (text)
+  "Replace the fenced body of a report in TEXT with a placeholder.
+TEXT is one assistant turn as recorded in the console buffer.  Only
+the text between \"--- output ---\" and \"--- end output ---\" is
+replaced; the report's header lines stay, so the reader still knows
+what ran, how it exited, and how large the output was.  TEXT with
+no fence, or with an unterminated one, comes back unchanged."
+  (let ((body-start (string-match "\n--- output ---\n" text)))
+    (if (null body-start)
+        text
+      (let* ((start (+ body-start (length "\n--- output ---\n")))
+             (end (string-match "\n--- end output ---" text start)))
+        (if (null end)
+            text
+          (concat (substring text 0 start)
+                  scalpel-console--consumed-output-marker
+                  (substring text end)))))))
+
 (defun scalpel-console--history ()
   "Return the conversation recorded in the current buffer, as text.
 Every region carrying a `scalpel-console-role' property is joined in
 buffer order; regions without one — the header, context trees,
 status lines — are dropped.  The buffer is the only record: nothing
 is kept in a variable, so what the user sees is what the agent
-gets."
+gets.
+
+Only the newest assistant report keeps its output body.  A report
+is read back exactly once, by the round that follows it, so with
+`scalpel-console-trim-consumed-output' set the bodies of every
+older report are replaced by
+`scalpel-console--consumed-output-marker'; their headers remain, so
+the planner still knows what ran and how much it produced.  The
+trim is a projection over the buffer text, never an edit of it, so
+the console keeps the whole record."
   (let ((pos (point-min))
-        (parts nil))
+        (turns nil))
     (while (< pos (point-max))
       (let ((next (next-single-property-change
                    pos 'scalpel-console-role nil (point-max))))
-        (when (get-text-property pos 'scalpel-console-role)
-          (push (buffer-substring-no-properties pos next) parts))
+        (let ((role (get-text-property pos 'scalpel-console-role)))
+          (when role
+            (push (cons role (buffer-substring-no-properties pos next))
+                  turns)))
         (setq pos next)))
-    (string-trim (string-join (nreverse parts) ""))))
+    (let ((turns (nreverse turns))
+          (newest-assistant nil))
+      (cl-loop for turn in turns
+               for i from 0
+               when (eq (car turn) 'assistant)
+               do (setq newest-assistant i))
+      (string-trim
+       (string-join
+        (cl-loop for turn in turns
+                 for i from 0
+                 collect (if (and scalpel-console-trim-consumed-output
+                                  (eq (car turn) 'assistant)
+                                  (not (eql i newest-assistant)))
+                             (scalpel-console--trim-report (cdr turn))
+                           (cdr turn)))
+        "")))))
 
 (defun scalpel-console--append (text &optional role)
   "Append TEXT to the end of the console buffer.
@@ -534,7 +600,9 @@ data, or when the commands together produced more than
 (defun scalpel-console--continue-p (result)
   "Return non-nil when another round should follow RESULT.
 RESULT is a `scalpel-agent-run' result whose round ran shell
-commands.  Small output continues without a question; only a
+commands or read files.  A read is always continued: the planner
+asked for it, so there is nothing to question.  Small shell output
+continues without a question too; only a
 round `scalpel-console--noisy-round-p' rejects is put to the
 user, because its output may cost more in tokens than it is
 worth.  The question names every command together with its output
@@ -563,8 +631,9 @@ HISTORY is the conversation recorded before INSTRUCTION.  Return
 after dispatching the first round; each round's outcome is handled
 in its own callback, which re-reads the conversation from the
 buffer, so shell output reaches the next round without anything
-being carried in a variable.  A round that ran shell commands may
-be followed by another, up to `scalpel-console-max-rounds'.
+being carried in a variable.  A round that ran shell commands, or
+read a file, may be followed by another, up to
+`scalpel-console-max-rounds'.
 Whether a round actually continues is decided by
 `scalpel-console--continue-p', which questions the user only when
 the round's output is noisy.  A continued round sends
@@ -587,7 +656,8 @@ point, so a second RET during a round is refused."
               (with-current-buffer target
                 (setq conversation (scalpel-console--history))
                 (cond
-                 ((not (and result (plist-get result :shells)))
+                 ((not (and result (or (plist-get result :shells)
+                                       (plist-get result :reads))))
                   (setq scalpel-console--busy nil))
                  ((>= round scalpel-console-max-rounds)
                   ;; No round is left, so asking would throw the answer

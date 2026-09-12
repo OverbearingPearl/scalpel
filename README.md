@@ -352,6 +352,13 @@ Inside the console:
   Commands also get the temporary directory for scratch files.  When the
   sandbox is unavailable, or its probe fails, shell actions fail closed
   instead of falling back to an unsandboxed shell.
+- Reading code back does not go through the sandbox: the `read` action serves
+  one definition, or a whole file, straight from the context list, and refuses
+  any path outside it.  A report's body reaches the planner once -- on the
+  round that follows the command or read that produced it -- and later prompts
+  carry only the report's header, so a long session does not re-send output
+  the planner has already read.  The console buffer keeps every byte;
+  `scalpel-console-trim-consumed-output` turns the trimming off.
 - The context is bounded by `scalpel-agent-context-max-files': an add that
   would cross the cap is refused whole, leaving the context exactly as it
   was, so neither the sandbox's reach nor the planner prompt grows past it
@@ -374,9 +381,10 @@ Scalpel is in active, deliberately small MVP stages.
   (`scalpel-locate` and `scalpel-locate-elisp`)
 - The console and the multi-round agent loop: context management, shell-output
   continuation, and conversation replay
-- Structured action planning and parsing (`edit`, `create`, `delete`, `shell`,
-  `reply`, `confirm`), each action returning a human-readable report that stays
-  in the console buffer, so a session's changes are readable after the fact
+- Structured action planning and parsing (`edit`, `create`, `delete`, `read`,
+  `shell`, `reply`, `confirm`), each action returning a human-readable report
+  that stays in the console buffer, so a session's changes are readable after
+  the fact
 - Execution boundary lock: a replacement lands only on the range the locator
   resolved, and an unbalanced replacement is refused; an applied change reaches
   its file as it lands, so the shell commands the next round runs already see

@@ -213,6 +213,172 @@ error reported a bare JSON failure without naming the cause."
         (should (string-match-p "tool-call syntax"
                                 (error-message-string err)))))))
 
+(ert-deftest scalpel-agent-test-read-whole-file ()
+  "A read without a symbol returns the file inside the output fence."
+  (scalpel-utils-test-with-temp-file ".el"
+    (with-temp-file this-file (insert "(defun foo ())\n"))
+    (let ((scalpel-agent--context-files
+           (list (file-truename (expand-file-name this-file)))))
+      (let ((report (scalpel-agent-read this-file nil)))
+        (ert-info ((format "Report:\n%S" report))
+          (should (string-match-p "\\`Read: " report))
+          (should (string-match-p "\n--- output ---\n" report))
+          (should (string-match-p "(defun foo ())" report))
+          (should (string-match-p "--- end output ---\\'" report)))))))
+
+(ert-deftest scalpel-agent-test-read-symbol ()
+  "A read with a symbol returns that definition, not the whole file."
+  (scalpel-utils-test-with-temp-file ".el"
+    (with-temp-file this-file
+      (insert "(defun foo ())\n(defun bar ())\n"))
+    (let ((scalpel-agent--context-files
+           (list (file-truename (expand-file-name this-file)))))
+      (let ((report (scalpel-agent-read this-file "foo")))
+        (ert-info ((format "Report:\n%S" report))
+          (should (string-match-p "Read: foo in " report))
+          (should (string-match-p "(defun foo ())" report))
+          (should-not (string-match-p "bar" report)))))))
+
+(ert-deftest scalpel-agent-test-read-refuses-file-outside-context ()
+  "A read through Emacs is bounded by the context list, not the sandbox.
+Regression: the sandbox bounds shell commands, but a read runs in
+Emacs itself, so without this check the planner could reach any file
+the user can read."
+  (scalpel-utils-test-with-temp-file ".el"
+    (with-temp-file this-file (insert "(defun foo ())\n"))
+    (let ((scalpel-agent--context-files nil))
+      (should-error (scalpel-agent-read this-file nil) :type 'user-error)
+      (should-error (scalpel-agent-read this-file "foo")
+                    :type 'user-error))))
+
+(ert-deftest scalpel-agent-test-read-refuses-oversized-definition ()
+  "An oversized definition is refused, never truncated.
+A partial definition can still parse as a complete form, so a
+replacement built from one would be applied silently; refusing
+keeps the failure loud."
+  (scalpel-utils-test-with-temp-file ".el"
+    (with-temp-file this-file
+      (insert (format "(defun foo ()\n  (message \"%s\"))\n"
+                      (make-string 200 ?x))))
+    (let ((scalpel-agent--context-files
+           (list (file-truename (expand-file-name this-file))))
+          (scalpel-agent-read-max-bytes 10))
+      (let ((err (condition-case e
+                     (progn (scalpel-agent-read this-file "foo") nil)
+                   (user-error e))))
+        (ert-info ((format "Error: %S" err))
+          (should err)
+          (should (string-match-p "over the read limit"
+                                  (error-message-string err))))))))
+
+(ert-deftest scalpel-agent-test-read-truncates-whole-file-with-marker ()
+  "A whole-file read is a partial view and says so.
+The marker states the true size, so the planner can tell it is not
+holding the whole file."
+  (scalpel-utils-test-with-temp-file ".el"
+    (with-temp-file this-file
+      (insert (format "(defvar x \"%s\")\n" (make-string 200 ?y))))
+    (let* ((scalpel-agent--context-files
+            (list (file-truename (expand-file-name this-file))))
+           (scalpel-agent-read-max-bytes 20)
+           (size (with-temp-buffer
+                   (insert-file-contents this-file)
+                   (string-bytes (buffer-string))))
+           (report (scalpel-agent-read this-file nil)))
+      (ert-info ((format "Report:\n%S" report))
+        (should (string-match-p
+                 (regexp-quote (format "Output: %d bytes" size)) report))
+        (should (string-match-p "\\[truncated: showing first " report))
+        (should (string-match-p "--- end output ---\\'" report))))))
+
+(ert-deftest scalpel-agent-test-byte-prefix-keeps-characters-whole ()
+  "The byte prefix never cuts a character in half."
+  (let ((text "中中中"))
+    (dotimes (n 10)
+      (let ((prefix (scalpel-agent--byte-prefix text n)))
+        (ert-info ((format "n=%d prefix=%S" n prefix))
+          (should (<= (string-bytes prefix) n))
+          (should (string-prefix-p prefix text)))))))
+
+(ert-deftest scalpel-agent-test-read-runs-without-confirmation ()
+  "A read has no side effects, so it is never put to the user."
+  (should-not (scalpel-agent--confirm-needed-p
+               (list :tool "read" :file "/tmp/a.el" :symbol "foo"))))
+
+(ert-deftest scalpel-agent-test-execute-action-read ()
+  "A read action settles synchronously through ON-SUCCESS."
+  (scalpel-utils-test-with-temp-file ".el"
+    (with-temp-file this-file (insert "(defun foo ())\n"))
+    (let ((scalpel-agent--context-files
+           (list (file-truename (expand-file-name this-file))))
+          report)
+      (scalpel-agent-execute-action
+       (list :tool "read" :file this-file :symbol nil)
+       (lambda (r) (setq report r))
+       (lambda (err) (ert-fail (plist-get err :message))))
+      (ert-info ((format "Report:\n%S" report))
+        (should (string-match-p "(defun foo ())" report))))))
+
+(ert-deftest scalpel-agent-test-read-symbol-is-optional ()
+  "A read action may omit :symbol, and :symbol survives projection.
+Regression: `scalpel-agent--project-actions' kept only declared
+fields and `scalpel-agent--validate-action' required every declared
+one, so an optional field could be neither declared nor dropped."
+  (let ((parsed (scalpel-agent--parse-json
+                 (concat "[{\"tool\":\"read\",\"file\":\"/tmp/a.el\"},"
+                         "{\"tool\":\"read\",\"file\":\"/tmp/a.el\","
+                         "\"symbol\":\"foo\"}]"))))
+    (should (= (length parsed) 2))
+    (should-not (plist-get (car parsed) :symbol))
+    (should (equal (plist-get (cadr parsed) :symbol) "foo")))
+  (let ((projected (scalpel-agent--project-actions
+                    (list (list :tool "read" :file "/tmp/a.el")
+                          (list :tool "read" :file "/tmp/a.el" :symbol "foo")))))
+    (should-not (plist-get (car projected) :symbol))
+    (should (equal (plist-get (cadr projected) :symbol) "foo"))))
+
+(ert-deftest scalpel-agent-test-read-requires-file ()
+  "A read action without :file is rejected at validation."
+  (should-error
+   (scalpel-agent--parse-json "[{\"tool\":\"read\",\"symbol\":\"foo\"}]")
+   :type 'user-error))
+
+(ert-deftest scalpel-agent-test-run-records-reads ()
+  "A round reports which definitions it read.
+Regression: the round result carried only :shells, so a read
+produced output that nothing downstream could see, and the console
+never ran the round that would have read it back."
+  (let ((scalpel-agent--context-files nil)
+        (scalpel-console--root nil)
+        (default-directory (file-name-as-directory
+                            (expand-file-name temporary-file-directory)))
+        (orig-llm-request-async (symbol-function 'scalpel-llm-request-async)))
+    (unwind-protect
+        (progn
+          (fset 'scalpel-llm-request-async
+                (lambda (_prompt on-success _on-error &optional _system)
+                  (funcall on-success
+                           (concat "[{\"tool\":\"read\",\"file\":\"/tmp/a.el\","
+                                   "\"symbol\":\"foo\"}]"))))
+          (let (result)
+            (cl-letf (((symbol-function 'scalpel-agent-read)
+                       (lambda (file symbol)
+                         (format (concat "Read: %s in %s\nOutput: 8 bytes\n"
+                                         "--- output ---\n(defun foo ())\n"
+                                         "--- end output ---")
+                                 symbol file))))
+              (scalpel-agent-run
+               "read foo" nil
+               (lambda (r) (setq result r))
+               (lambda (err) (ert-fail (plist-get err :message)))))
+            (let ((read (car (plist-get result :reads))))
+              (ert-info ((format "Result:\n%S" result))
+                (should (equal (plist-get read :file) "/tmp/a.el"))
+                (should (equal (plist-get read :symbol) "foo"))
+                (should (string-match-p "(defun foo ())"
+                                        (plist-get result :report)))))))
+      (fset 'scalpel-llm-request-async orig-llm-request-async))))
+
 (ert-deftest scalpel-agent-test-context-omits-symbols-without-provider ()
   "Files without a locator provider render without a SYMBOLS line."
   (let ((scalpel-agent--context-files '("/tmp/notes.md")))
