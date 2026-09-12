@@ -8,16 +8,27 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'ert)
 
 (defun scalpel-utils-test-kill-file-buffer (file)
   "Kill the buffer visiting FILE, if any, without prompting.
-FILE is a file name string.  The buffer's modified flag is cleared
-first so that killing never asks for confirmation.  Does nothing
-when no live buffer visits FILE."
-  (when (get-file-buffer file)
-    (with-current-buffer (get-file-buffer file)
-      (set-buffer-modified-p nil))
-    (kill-buffer (get-file-buffer file))))
+FILE is a file name string.  The buffer is looked up under both the
+name as given and its truename: the code under test resolves
+temporary paths with `file-truename' before visiting them, and the
+variable `temporary-file-directory' is, on macOS, a \"/var\" path
+that symlinks to \"/private/var\", so `get-file-buffer' on the name
+`make-temp-file' returned never matches a buffer visited under the
+resolved name and that buffer would outlive the run.  The buffer's
+modified flag is
+cleared first so that killing never asks for confirmation.  Does
+nothing when no live buffer visits FILE."
+  (let* ((resolved (unless (file-remote-p file) (file-truename file)))
+         (buf (or (get-file-buffer file)
+                  (and resolved (get-file-buffer resolved)))))
+    (when buf
+      (with-current-buffer buf
+        (set-buffer-modified-p nil))
+      (kill-buffer buf))))
 
 (defun scalpel-utils-test-kill-buffer (buffer-name)
   "Kill the buffer named BUFFER-NAME, if any, without prompting.
@@ -53,6 +64,27 @@ the file."
            (progn ,@body)
          (scalpel-utils-test-kill-file-buffer ,file-var)
          (scalpel-utils-test-delete-file ,file-var)))))
+
+(ert-deftest scalpel-utils-test-kill-file-buffer-kills-truename-buffer ()
+  "A buffer visited under the resolved name is killed as well.
+Regression: cleanup looked the buffer up with `get-file-buffer' on
+the name `make-temp-file' returned, but the code under test resolves
+temporary paths with `file-truename'; where that name differs --
+macOS reports \"/private/var/...\" for a \"/var/...\" temp directory
+-- the lookup missed and every buffer the read tests visited
+outlived their run."
+  (scalpel-utils-test-with-temp-file ".el"
+    (with-temp-file this-file (insert "(defun foo ())\n"))
+    (let ((resolved (file-truename this-file)))
+      ;; Visit through the resolved name, the way `scalpel-agent-read'
+      ;; does, so the two spellings really differ on this platform.
+      (find-file-noselect resolved)
+      (ert-info ((format "Resolved name: %S" resolved))
+        (should (get-file-buffer resolved)))
+      (scalpel-utils-test-kill-file-buffer this-file)
+      (ert-info ((format "Survivors: %S"
+                         (mapcar #'buffer-name (buffer-list))))
+        (should-not (get-file-buffer resolved))))))
 
 (provide 'scalpel-utils-test)
 

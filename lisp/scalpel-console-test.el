@@ -1025,6 +1025,40 @@ and the console context stayed empty."
                               scalpel-agent--context-files)))))
       (scalpel-utils-test-kill-buffer (buffer-name buf)))))
 
+(ert-deftest scalpel-console-test-round-appends-at-end-not-at-point ()
+  "A round's report lands at buffer end, not at the user's cursor.
+Regression: the round callbacks inserted at point, relying on the
+status refresh to keep point pinned at point-max.  Once the refresh
+was wrapped in `save-excursion', point belongs to the user, and a
+bare insert drops the reply wherever the cursor happens to sit --
+splitting the record and reordering `--history'."
+  (let ((scalpel-llm--progress-callback nil)
+        (scalpel-llm--tokens-uploaded 0)
+        (scalpel-llm--tokens-received 0)
+        (buf (scalpel-console-test--new-console-buffer)))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (erase-buffer)
+            (scalpel-console--insert-tagged "User: hi\n" 'user))
+          (cl-letf (((symbol-function 'scalpel-agent-run)
+                     (lambda (_instruction _history on-done _on-error)
+                       ;; Simulate the user reviewing the record while
+                       ;; the request is in flight: point is mid-buffer
+                       ;; when the report arrives.
+                       (goto-char (point-min))
+                       (funcall on-done
+                                '(:report "done" :shells nil :reads nil)))))
+            (with-current-buffer buf
+              (scalpel-console--run-round "hi" "User: hi\n" #'ignore)))
+          (with-current-buffer buf
+            (ert-info ((format "Buffer:\n%S" (buffer-string)))
+              (should (string= (buffer-string)
+                               "User: hi\nScalpel: done\n\n"))
+              (should (string= (scalpel-console--history)
+                               "User: hi\nScalpel: done")))))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
+
 (provide 'scalpel-console-test)
 
 ;;; scalpel-console-test.el ends here

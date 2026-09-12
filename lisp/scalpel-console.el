@@ -225,21 +225,23 @@ newline, so the cursor returns to the line the status occupied."
            (lambda ()
              (when (marker-buffer beg)
                (with-current-buffer (marker-buffer beg)
-                 (let ((inhibit-read-only t))
-                   (goto-char beg)
-                   (delete-region (point) (1+ (line-end-position)))
-                   (insert (format "Scalpel: %d up, %d down, %ds\n"
-                                   scalpel-llm--tokens-uploaded
-                                   scalpel-llm--tokens-received
-                                   (round (- (float-time) start)))))))))
+                 (save-excursion
+                   (let ((inhibit-read-only t))
+                     (goto-char beg)
+                     (delete-region (point) (1+ (line-end-position)))
+                     (insert (format "Scalpel: %d up, %d down, %ds\n"
+                                     scalpel-llm--tokens-uploaded
+                                     scalpel-llm--tokens-received
+                                     (round (- (float-time) start))))))))))
           (stop
            (lambda ()
              (when (marker-buffer beg)
                (with-current-buffer (marker-buffer beg)
-                 (let ((inhibit-read-only t))
-                   (goto-char beg)
-                   (delete-region (point) (1+ (line-end-position)))))
-               (set-marker beg nil)))))
+                 (save-excursion
+                   (let ((inhibit-read-only t))
+                     (goto-char beg)
+                     (delete-region (point) (1+ (line-end-position)))))
+                 (set-marker beg nil))))))
       (cons refresh stop))))
 
 (define-derived-mode scalpel-console-mode text-mode "Scalpel Console"
@@ -547,10 +549,13 @@ ON-COMPLETE, so it is never left pointing at a dead buffer."
        (lambda (result)
          (when (buffer-live-p target)
            (with-current-buffer target
-             (let ((inhibit-read-only t))
-               (scalpel-console--insert-tagged
-                (format "Scalpel: %s\n\n" (plist-get result :report))
-                'assistant))))
+             ;; Point belongs to the user now that the status refresh is
+             ;; wrapped in `save-excursion'; a bare insert would land at
+             ;; the cursor.  `--append' goes to point-max and is the same
+             ;; conversation-tagged writer the rest of the console uses.
+             (scalpel-console--append
+              (format "Scalpel: %s" (plist-get result :report))
+              'assistant)))
          (funcall settle result))
        (lambda (err)
          (when (buffer-live-p target)
