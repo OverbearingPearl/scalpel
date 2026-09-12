@@ -693,7 +693,15 @@ character, and a quote toggles the string."
     (mapconcat
      (lambda (char)
        (cond
-        (escaped (setq escaped nil) (string char))
+        ;; A backslash followed by a character JSON does not define as
+        ;; an escape (models emit things like "\ docstring") is doubled,
+        ;; so the pair parses as a literal backslash instead of failing
+        ;; the whole payload.  Valid escapes pass through untouched.
+        (escaped
+         (setq escaped nil)
+         (if (memq char '(?\" ?\\ ?/ ?b ?f ?n ?r ?t ?u))
+             (string char)
+           (concat "\\\\" (string char))))
         ((eq char ?\\) (setq escaped t) (string char))
         ((eq char ?\") (setq in-string (not in-string)) (string char))
         ((and in-string (memq char '(?\n ?\r ?\t)))
