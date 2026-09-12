@@ -40,6 +40,16 @@ round; it is nil when no request is in flight.")
 (defvar scalpel-llm--tokens-received 0
   "Approximate number of tokens received in the current request.")
 
+(defvar scalpel-llm--total-uploaded 0
+  "Cumulative estimated upload tokens across all requests.
+Never reset per request, so a caller can take a snapshot before a
+round and diff it afterwards to price the whole round, however many
+LLM requests it contained.")
+
+(defvar scalpel-llm--total-received 0
+  "Cumulative estimated download tokens across all requests.
+Companion to `scalpel-llm--total-uploaded'.")
+
 (defconst scalpel-llm-reasoning-buffer-name "*scalpel-thinking*"
   "Buffer name for collecting streaming reasoning chunks.")
 
@@ -86,6 +96,8 @@ surfaced by gptel, `api-key' for a missing or invalid API key, and
          (timer nil))
     (setq scalpel-llm--tokens-uploaded (scalpel-llm--count-tokens prompt))
     (setq scalpel-llm--tokens-received 0)
+    (setq scalpel-llm--total-uploaded
+          (+ scalpel-llm--total-uploaded scalpel-llm--tokens-uploaded))
     (scalpel-llm--reset-reasoning-buffer)
     (cl-labels
         ((abandon ()
@@ -137,6 +149,9 @@ surfaced by gptel, `api-key' for a missing or invalid API key, and
                               (setq scalpel-llm--tokens-received
                                     (+ scalpel-llm--tokens-received
                                        (scalpel-llm--count-tokens resp)))
+                              (setq scalpel-llm--total-received
+                                    (+ scalpel-llm--total-received
+                                       (scalpel-llm--count-tokens resp)))
                               (when scalpel-llm--progress-callback
                                 (funcall scalpel-llm--progress-callback)))
                              ;; Reasoning chunk: delivered as the RESPONSE
@@ -146,6 +161,9 @@ surfaced by gptel, `api-key' for a missing or invalid API key, and
                                 (scalpel-llm--append-reasoning (cdr resp))
                                 (setq scalpel-llm--tokens-received
                                       (+ scalpel-llm--tokens-received
+                                         (scalpel-llm--count-tokens (cdr resp))))
+                                (setq scalpel-llm--total-received
+                                      (+ scalpel-llm--total-received
                                          (scalpel-llm--count-tokens (cdr resp))))
                                 (when scalpel-llm--progress-callback
                                   (funcall scalpel-llm--progress-callback))))))))

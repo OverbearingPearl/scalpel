@@ -26,6 +26,15 @@ buffer behind."
   (should (scalpel-llm--api-key-error-p "‘gptel-api-key’ is not valid"))
   (should-not (scalpel-llm--api-key-error-p "Scalpel: LLM request idle for more than 30 seconds")))
 
+(ert-deftest scalpel-llm-test-token-counters-are-defined ()
+  "The cumulative token counters must be defined at load time.
+Regression: `scalpel-llm-request-async' updates
+`scalpel-llm--total-uploaded' and `scalpel-llm--total-received`;
+when their `defvar' forms are missing, every async test fails with
+an indirect void-variable error instead of naming the cause."
+  (should (boundp 'scalpel-llm--total-uploaded))
+  (should (boundp 'scalpel-llm--total-received)))
+
 (ert-deftest scalpel-llm-test-fails-loudly-without-gptel ()
   "Requiring `scalpel-llm' must fail loudly when gptel is absent.
 gptel is a hard dependency, so loading must signal `file-missing'

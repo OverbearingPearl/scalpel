@@ -38,6 +38,7 @@
 
 (require 'cl-lib)
 (require 'scalpel-agent)
+(require 'scalpel-token)
 
 (defcustom scalpel-console-buffer-name-format "*scalpel: %s*"
   "Format string for the Scalpel console buffer name.
@@ -772,11 +773,30 @@ ON-COMPLETE, so it is never left pointing at a dead buffer."
                    (scalpel-console--status-start)))
          (refresh (car status))
          (stop (cdr status))
+         ;; Snapshot the cumulative counters before the round: a round
+         ;; may issue several LLM requests (plan, then edit/create), so
+         ;; the round's cost is the diff of the never-reset totals.
+         (up0 scalpel-llm--total-uploaded)
+         (down0 scalpel-llm--total-received)
+         (breakdown
+          (with-current-buffer target
+            (list :system (scalpel-llm--count-tokens
+                           scalpel-agent-system-prompt)
+                  :context (scalpel-llm--count-tokens
+                            (scalpel-agent-context))
+                  :history (scalpel-llm--count-tokens (or history ""))
+                  :instruction (scalpel-llm--count-tokens
+                                (or instruction "")))))
          (settled nil)
          (settle (lambda (result)
                    (unless settled
                      (setq settled t)
                      (setq scalpel-llm--progress-callback nil)
+                     (scalpel-token-record
+                      (buffer-name target)
+                      (- scalpel-llm--total-uploaded up0)
+                      (- scalpel-llm--total-received down0)
+                      breakdown)
                      (when (buffer-live-p target)
                        (with-current-buffer target
                          (funcall stop)))
