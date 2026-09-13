@@ -53,14 +53,23 @@ Current buffer is the Emacs Lisp file referenced by FILE."
   (scalpel-locate-elisp--top-definition-range symbol))
 
 (defun scalpel-locate-elisp--single-definition-p (text)
-  "Return non-nil when TEXT is exactly one top-level defining form."
+  "Return non-nil when TEXT is one or more complete defining forms.
+Each top-level form must parse cleanly to the end of TEXT and be one
+of `scalpel-locate-elisp--defining-forms'; no trailing garbage is
+allowed after the last form."
   (condition-case nil
-      (let* ((parsed (read-from-string text))
-             (form (car parsed))
-             (end (cdr parsed)))
-        (and (listp form)
-             (memq (car form) scalpel-locate-elisp--defining-forms)
-             (= end (length text))))
+      (let ((pos 0)
+            (count 0))
+        (while (< pos (length text))
+          (let* ((parsed (read-from-string text pos))
+                 (form (car parsed))
+                 (end (cdr parsed)))
+            (unless (and (listp form)
+                         (memq (car form) scalpel-locate-elisp--defining-forms))
+              (error "not a defining form"))
+            (setq pos end
+                  count (1+ count))))
+        (> count 0))
     (error nil)))
 
 (defun scalpel-locate-elisp-list-symbols (_file)

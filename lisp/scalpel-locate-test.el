@@ -56,13 +56,17 @@
       (should (equal syms '("foo" "bar"))))))
 
 (ert-deftest scalpel-locate-test-elisp-single-definition-p ()
-  "Only one complete top-level defining form is accepted."
+  "One or more complete top-level defining forms are accepted."
   (should (scalpel-locate-elisp--single-definition-p
            "(defun foo (x) (+ x 1))"))
-  (should-not (scalpel-locate-elisp--single-definition-p
-               "(defun foo (x) (+ x 1))\n(defun bar ())"))
+  (should (scalpel-locate-elisp--single-definition-p
+           "(defvar scalpel-execute-providers nil\n  \"Providers.\")\n(defun bar ())"))
   (should-not (scalpel-locate-elisp--single-definition-p
                "(message \"hello\")"))
+  (should-not (scalpel-locate-elisp--single-definition-p
+               "(defun foo (x) (+ x 1))\n(message \"hello\")"))
+  (should-not (scalpel-locate-elisp--single-definition-p
+               "(defun foo (x) (+ x 1"))
   (should-not (scalpel-locate-elisp--single-definition-p
                "There is nothing to change here.")))
 
