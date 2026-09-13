@@ -14,6 +14,8 @@
 (require 'cl-lib)
 (require 'scalpel-locate-elisp)
 (require 'scalpel-locate-markdown)
+(require 'scalpel-locate-yaml)
+(require 'scalpel-locate-gitignore)
 
 (defvar scalpel-locate-providers nil
   "Alist of (REGEXP . PROVIDER-PLIST) for registered locator providers.

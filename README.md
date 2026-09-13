@@ -172,6 +172,8 @@ Components live in focused modules:
 - `scalpel-locate` – locator dispatch; resolves actions to byte ranges via per-language providers
 - `scalpel-locate-elisp` – built-in structural locator provider for Emacs Lisp
 - `scalpel-locate-markdown` – built-in structural locator provider for Markdown (heading sections)
+- `scalpel-locate-yaml` – built-in structural locator provider for YAML (top-level key blocks)
+- `scalpel-locate-gitignore` – built-in structural locator provider for .gitignore (pattern lines)
 - `scalpel-execute` – boundary-locked edit application and deletion,
   written to disk as applied
 - `scalpel-sandbox` – command sandbox for shell actions (`bubblewrap` on Linux, `sandbox-exec` on macOS)
@@ -228,6 +230,8 @@ the Emacs point to that block; point is the strongest coordinate Scalpel knows.
 | --- | --- | --- | --- |
 | Emacs Lisp | built-in `syntax-ppss` + `beginning-of-defun` | none | function/macro/defvar blocks |
 | Markdown | built-in structural scan (ATX headings) | none | heading sections |
+| YAML | built-in structural scan (top-level keys) | none | top-level key blocks |
+| .gitignore | built-in structural scan (pattern lines) | none | pattern lines |
 | Rust | rust-analyzer (LSP) | tree-sitter | functions, methods, impl items |
 | TypeScript / JS | tsserver (LSP) | tree-sitter | function/class/module blocks |
 | Go | gopls (LSP) | tree-sitter | funcs, types |
@@ -382,8 +386,10 @@ Inside the console:
 Scalpel is in active, deliberately small MVP stages.
 
 **Currently implemented**
-- Emacs Lisp and Markdown structural location, plus the provider dispatch API
-  (`scalpel-locate`, `scalpel-locate-elisp`, and `scalpel-locate-markdown`)
+- Emacs Lisp, Markdown, YAML, and .gitignore structural location, plus the
+  provider dispatch API (`scalpel-locate`, `scalpel-locate-elisp`,
+  `scalpel-locate-markdown`, `scalpel-locate-yaml`, and
+  `scalpel-locate-gitignore`)
 - The console and the multi-round agent loop: context management, shell-output
   continuation, and conversation replay
 - Structured action planning and parsing (`edit`, `create`, `delete`, `read`,
