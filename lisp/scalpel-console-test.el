@@ -1453,6 +1453,59 @@ while the planner already saw the error as the newest turn."
               (should-not (get-text-property (match-beginning 0) 'face)))))
       (scalpel-utils-test-kill-buffer (buffer-name buf)))))
 
+(ert-deftest scalpel-console-test-abort-cancels-in-flight-request ()
+  "\\[scalpel-console-abort] cancels the request currently in flight."
+  (let ((cancelled 0))
+    (let ((scalpel-llm--cancel-current (lambda () (setq cancelled (1+ cancelled)))))
+      (scalpel-console-abort)
+      (should (= cancelled 1)))))
+
+(ert-deftest scalpel-console-test-abort-without-request-dings ()
+  "With no request in flight, abort says so instead of failing."
+  (let ((scalpel-llm--cancel-current nil)
+        (notices nil))
+    (cl-letf (((symbol-function 'message)
+               (lambda (fmt &rest args)
+                 (push (apply #'format fmt args) notices))))
+      (scalpel-console-abort)
+      (should (cl-some (lambda (m) (string-match-p "no request" m)) notices)))))
+
+(ert-deftest scalpel-console-test-remove-file-removes-from-context ()
+  "Removing a context file updates the context and the tree display."
+  (let ((buf (scalpel-console-test--new-console-buffer))
+        ;; `scalpel-agent-context-remove' compares truenames, so the
+        ;; entries must be stored the way `context-add' stores them.
+        (a (file-truename "/tmp/scalpel-rm-a.el"))
+        (b (file-truename "/tmp/scalpel-rm-b.el")))
+    (unwind-protect
+        (with-current-buffer buf
+          (setq scalpel-console--context-baseline 'none-yet)
+          (setq scalpel-agent--context-files (list a b))
+          (cl-letf (((symbol-function 'completing-read)
+                     (lambda (&rest _) a)))
+            (scalpel-console-remove-file))
+          (ert-info ((format "Context: %S" scalpel-agent--context-files))
+            (should (equal scalpel-agent--context-files
+                           (list b))))
+          (goto-char (point-min))
+          (should (search-forward "scalpel-rm-b.el" nil t)))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
+
+(ert-deftest scalpel-console-test-remove-file-reports-empty-context ()
+  "Removing from an empty context reports it and changes nothing."
+  (let ((buf (scalpel-console-test--new-console-buffer))
+        (notices nil))
+    (unwind-protect
+        (with-current-buffer buf
+          (setq scalpel-agent--context-files nil)
+          (cl-letf (((symbol-function 'message)
+                     (lambda (fmt &rest args)
+                       (push (apply #'format fmt args) notices))))
+            (scalpel-console-remove-file))
+          (should (cl-some (lambda (m) (string-match-p "context is empty" m))
+                           notices)))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
+
 (provide 'scalpel-console-test)
 
 ;;; scalpel-console-test.el ends here

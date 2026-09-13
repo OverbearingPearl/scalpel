@@ -136,6 +136,30 @@ previous run's tests already deleted."
     (ert "scalpel-")
     (scalpel-test--kill-temp-file-buffers)))
 
+(ert-deftest scalpel-test-open-prompts-and-anchors-console ()
+  "`scalpel-open' prompts for a directory and anchors the console there.
+The console open is mocked out: this test covers the entry point's
+own behavior -- the prompt with the current directory as default and
+the `default-directory' binding -- not the console itself."
+  (let ((seen-root nil)
+        (asked nil))
+    (cl-letf (((symbol-function 'read-directory-name)
+               (lambda (prompt _dir &optional _default _mustmatch)
+                 (setq asked prompt)
+                 (expand-file-name "sub" temporary-file-directory)))
+              ((symbol-function 'scalpel-console-open)
+               (lambda ()
+                 (setq seen-root default-directory))))
+      (let ((default-directory (file-name-as-directory
+                                (expand-file-name temporary-file-directory))))
+        (call-interactively #'scalpel-open))
+      (ert-info ((format "asked=%S seen-root=%S" asked seen-root))
+        (should (string-match-p "Scalpel console root" asked))
+        (should (string=
+                 seen-root
+                 (file-name-as-directory
+                  (expand-file-name "sub" temporary-file-directory))))))))
+
 (provide 'scalpel-test)
 
 ;;; scalpel-test.el ends here

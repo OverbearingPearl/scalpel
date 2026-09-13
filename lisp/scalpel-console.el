@@ -120,7 +120,7 @@ Structural contract shared by `scalpel-console--trim-report' and
 `scalpel-console-trim-consumed-output'.")
 
 (defconst scalpel-console--consumed-body-note
-  "Output already read back to the planner; no longer re-sent.  C-c C-o shows the text."
+  "Output already read back to the planner; no longer re-sent.  \\[scalpel-console-toggle-output] shows the text."
   "Tooltip for a report the planner no longer reads in full.
 Structural contract shared by `scalpel-console--history', which
 drops such a body from the conversation, and

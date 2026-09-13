@@ -847,6 +847,122 @@ The report preserves the raw output size for continuation decisions."
       (fset 'scalpel-sandbox-run orig-sandbox-run)
       (fset 'scalpel-agent-shell orig-agent-shell))))
 
+(ert-deftest scalpel-agent-test-confirm-returns-text ()
+  "A confirm action hands its text back as the confirmation request."
+  (should (string= (scalpel-agent-confirm "proceed?") "proceed?")))
+
+(ert-deftest scalpel-agent-test-confirm-malformed ()
+  "A confirm action without text signals `user-error'."
+  (should-error (scalpel-agent-confirm nil) :type 'user-error))
+
+(ert-deftest scalpel-agent-test-rename-moves-file-and-buffer ()
+  "A rename moves the file and the visiting buffer follows."
+  (scalpel-utils-test-with-temp-file ".el"
+    (with-temp-file this-file (insert "(defun foo ())\n"))
+    (let* ((to (concat this-file "-renamed.el"))
+           (buf (find-file-noselect this-file)))
+      (unwind-protect
+          (progn
+            (with-current-buffer buf (insert "x") (set-buffer-modified-p nil))
+            (let ((report (scalpel-agent-rename this-file to)))
+              (ert-info ((format "Report: %S" report))
+                (should (string-match-p "Renamed" report))))
+            (should (file-exists-p to))
+            (should-not (file-exists-p this-file))
+            (should (string= (buffer-file-name buf) to)))
+        (scalpel-utils-test-kill-file-buffer to)
+        (scalpel-utils-test-delete-file to)))))
+
+(ert-deftest scalpel-agent-test-rename-refuses-bad-input ()
+  "A rename of a missing source or onto an existing target signals."
+  (scalpel-utils-test-with-temp-file ".el"
+    (with-temp-file this-file (insert "x"))
+    (should-error (scalpel-agent-rename "/nonexistent/x.el" "/tmp/y.el")
+                  :type 'user-error)
+    (should-error (scalpel-agent-rename this-file this-file)
+                  :type 'user-error)
+    (should-error (scalpel-agent-rename nil nil) :type 'user-error)))
+
+(ert-deftest scalpel-agent-test-delete-file-removes-from-disk ()
+  "A `delete-file' removes the file and kills its unmodified buffer."
+  (scalpel-utils-test-with-temp-file ".el"
+    (with-temp-file this-file (insert "(defun foo ())"))
+    (find-file-noselect this-file)
+    (let ((report (scalpel-agent-delete-file this-file)))
+      (ert-info ((format "Report: %S" report))
+        (should (string-match-p "Deleted file" report)))
+      (should-not (file-exists-p this-file))
+      (should-not (get-file-buffer this-file)))))
+
+(ert-deftest scalpel-agent-test-delete-file-refuses-unsaved-changes ()
+  "A `delete-file' of a file with unsaved changes is refused."
+  (scalpel-utils-test-with-temp-file ".el"
+    (with-temp-file this-file (insert "(defun foo ())"))
+    (let ((buf (find-file-noselect this-file)))
+      (with-current-buffer buf (insert "unsaved"))
+      (should-error (scalpel-agent-delete-file this-file)
+                    :type 'user-error)
+      (should (file-exists-p this-file))
+      (with-current-buffer buf (set-buffer-modified-p nil)))))
+
+(ert-deftest scalpel-agent-test-delete-file-refuses-missing ()
+  "A `delete-file' of an absent file signals; so does a malformed action."
+  (should-error (scalpel-agent-delete-file "/nonexistent/x.el")
+                :type 'user-error)
+  (should-error (scalpel-agent-delete-file nil) :type 'user-error))
+
+(ert-deftest scalpel-agent-test-execute-action-rename-and-delete-file ()
+  "Rename and `delete-file' actions settle synchronously through reports."
+  (scalpel-utils-test-with-temp-file ".el"
+    (with-temp-file this-file (insert "x"))
+    (let ((scalpel-agent-confirm-tools nil)
+          report)
+      (scalpel-agent-execute-action
+       (list :tool "rename" :file this-file
+             :to (concat this-file "-moved.el"))
+       (lambda (r) (setq report r))
+       (lambda (err) (ert-fail (plist-get err :message))))
+      (should (string-match-p "Renamed" report))
+      (scalpel-agent-execute-action
+       (list :tool "delete-file" :file (concat this-file "-moved.el"))
+       (lambda (r) (setq report r))
+       (lambda (err) (ert-fail (plist-get err :message))))
+      (should (string-match-p "Deleted file" report)))))
+
+(ert-deftest scalpel-agent-test-execute-action-confirm ()
+  "A confirm action delivers its text through ON-SUCCESS."
+  (let ((report nil))
+    (scalpel-agent-execute-action
+     (list :tool "confirm" :text "shall I?")
+     (lambda (r) (setq report r))
+     (lambda (err) (ert-fail (plist-get err :message))))
+    (should (string= report "shall I?"))))
+
+(ert-deftest scalpel-agent-test-validate-action-unknown-tool ()
+  "An action whose tool has no field contract signals `user-error'."
+  (should-error (scalpel-agent--validate-action '(:tool "nope"))
+                :type 'user-error))
+
+(ert-deftest scalpel-agent-test-action-summary-falls-back-to-file-and-reason ()
+  "The summary falls back through file, then reason, then a placeholder."
+  (should (string= (scalpel-agent--action-summary
+                    '(:tool "delete-file" :file "/tmp/a.el"))
+                   "/tmp/a.el"))
+  (should (string= (scalpel-agent--action-summary
+                    '(:tool "shell" :reason "look around"))
+                   "look around"))
+  (should (string= (scalpel-agent--action-summary '(:tool "shell"))
+                   "no reason")))
+
+(ert-deftest scalpel-agent-test-path-components-relative-and-absolute ()
+  "Absolute paths keep a root component; relative ones do not."
+  (should (equal (scalpel-agent--path-components "/a/b.el")
+                 '("/" "a" "b.el")))
+  (should (equal (scalpel-agent--path-components "~/x/a.el")
+                 '("~" "x" "a.el")))
+  (should (equal (scalpel-agent--path-components "a/b.el")
+                 '("a" "b.el"))))
+
 (provide 'scalpel-agent-test)
 
 ;;; scalpel-agent-test.el ends here

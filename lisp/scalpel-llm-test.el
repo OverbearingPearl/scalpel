@@ -317,6 +317,50 @@ report an idle error for a request that finished long ago."
       (ert-info ((format "Error after settling: %S" error))
         (should-not error)))))
 
+(ert-deftest scalpel-llm-test-select-backend-delegates-to-gptel-menu ()
+  "Backend selection delegates to `gptel-menu'."
+  (let ((called 0)
+        (orig (symbol-function 'gptel-menu)))
+    ;; `scalpel-llm-select-backend' dispatches through
+    ;; `call-interactively', which requires a command: the stub carries
+    ;; an `(interactive)' form so `commandp' accepts it.
+    (unwind-protect
+        (progn
+          (fset 'gptel-menu
+                (lambda (&rest _)
+                  (setq called (1+ called))
+                  t))
+          (put 'gptel-menu 'commandp t)
+          (put 'gptel-menu 'interactive-form '(interactive))
+          (scalpel-llm-select-backend)
+          (should (= called 1)))
+      (fset 'gptel-menu orig)
+      (put 'gptel-menu 'commandp nil)
+      (put 'gptel-menu 'interactive-form nil))))
+
+(ert-deftest scalpel-llm-test-async-explicit-cancel-reports-cancelled ()
+  "Cancelling a request in flight reports :type `cancelled' once.
+Regression: the cancel closure existed but nothing exercised it, so
+a broken cancellation path would only surface in interactive use."
+  (scalpel-llm-test-with-clean-reasoning-buffer
+    (let ((scalpel-llm-timeout 5)
+          error
+          delivered)
+      (cl-letf (((symbol-function 'gptel-request)
+                 (lambda (_prompt &rest _args)
+                   'fake-fsm)))
+        (scalpel-llm-request-async
+         "test prompt"
+         (lambda (response) (setq delivered response))
+         (lambda (err) (setq error err)))
+        (should scalpel-llm--cancel-current)
+        (funcall scalpel-llm--cancel-current)
+        (ert-info ((format "Error: %S" error))
+          (should (eq (plist-get error :type) 'cancelled)))
+        ;; A late callback after the cancel is dropped.
+        (should-not delivered)
+        (should (null scalpel-llm--cancel-current))))))
+
 (provide 'scalpel-llm-test)
 
 ;;; scalpel-llm-test.el ends here

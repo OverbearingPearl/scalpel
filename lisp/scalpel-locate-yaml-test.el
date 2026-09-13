@@ -50,6 +50,15 @@
   (should-not (scalpel-locate-yaml--single-definition-p
                "  indented: 1\n")))
 
+(ert-deftest scalpel-locate-yaml-test-range-dispatched ()
+  "The provider's public range entry resolves a top-level key block."
+  (with-temp-buffer
+    (insert "alpha:\n  a: 1\nbeta:\n")
+    (let ((range (scalpel-locate-yaml-range "unused" "alpha")))
+      (should (string=
+               (buffer-substring-no-properties (car range) (cdr range))
+               "alpha:\n  a: 1")))))
+
 (provide 'scalpel-locate-yaml-test)
 
 ;;; scalpel-locate-yaml-test.el ends here

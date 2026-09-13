@@ -42,6 +42,15 @@
   (should-not (scalpel-locate-gitignore--single-definition-p
                "# comment\n")))
 
+(ert-deftest scalpel-locate-gitignore-test-range-dispatched ()
+  "The provider's public range entry resolves a pattern line."
+  (with-temp-buffer
+    (insert "*.log\nbuild/\n")
+    (let ((range (scalpel-locate-gitignore-range "unused" "*.log")))
+      (should (string=
+               (buffer-substring-no-properties (car range) (cdr range))
+               "*.log\n")))))
+
 (provide 'scalpel-locate-gitignore-test)
 
 ;;; scalpel-locate-gitignore-test.el ends here
