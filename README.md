@@ -216,13 +216,11 @@ Scalpel is a **conversational editor**, not a one-shot command.
 
 6. If a change is wrong, the session is there to inspect and undo: review the
    recorded edits as a diff, then `M-x scalpel-revert-session` takes the session
-   back as one unit. `C-g` stops a request in flight. This is the reason step 5
+   back as one unit. `C-c C-k` stops a request in flight. This is the reason step 5
    can move without asking.
 
 Anonymous targets such as "the second if branch" are handled by first moving
 the Emacs point to that block; point is the strongest coordinate Scalpel knows.
-
----
 
 ## Deterministic Location By Language
 
@@ -331,19 +329,18 @@ Inside the console:
 - `RET` – send everything typed since the last reply
 - `S-RET` – insert a newline, so an instruction may span several lines
 - `C-c C-c` – also send the pending instruction
-- `C-g` – cancel a running request
+- `C-c C-k` – cancel the in-flight request
 - `C-c C-b` – switch the active gptel backend (model) for future requests
 - `C-c C-a` – add a file or directory to the context (read-only)
 - `C-c C-d` – remove a file or directory from the context
 - `C-c C-r` – clear the context
 - `C-c C-f` – forget the conversation; keeps the context files
 - `C-c C-e` – repeat the previous instruction verbatim (after a planner-output failure)
+- `C-c C-o` – toggle verbatim output of consumed bodies
 - `M-x scalpel-token-open` – show per-round token accounting (round, per-console and grand totals)
 - `M-x scalpel-token-reset` – clear the token accounting
 - `M-x scalpel-history` – show previous Scalpel sessions
 - `M-x scalpel-revert-session` – revert one session completely
-
----
 
 ## Privacy & Safety
 
