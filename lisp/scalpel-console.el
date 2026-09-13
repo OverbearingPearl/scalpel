@@ -254,20 +254,31 @@ caller can delete them without invalidating earlier ones."
 Buffer-local: a busy console must not refuse instructions in
 another console.")
 
-(defun scalpel-console--status-start ()
+(defun scalpel-console--status-start (breakdown)
   "Insert a one-line status display at point-max.
+BREAKDOWN is a plist with keys :system, :context, :history and
+:instruction, each an integer token estimate for the round.  The
+display shows the four segment counts from BREAKDOWN, their sum as
+the uploaded total, the received total from
+`scalpel-llm--tokens-received', and whole elapsed seconds.
 Return a cons (REFRESH . STOP) of zero-arg functions.  REFRESH
-rewrites the line with the current token counters and whole
+rewrites the line with the current received total and whole
 elapsed seconds; STOP removes the line together with its trailing
 newline, so the cursor returns to the line the status occupied."
-  (let ((inhibit-read-only t)
-        (start (float-time))
-        beg)
+  (let* ((inhibit-read-only t)
+         (start (float-time))
+         (sys (plist-get breakdown :system))
+         (ctx (plist-get breakdown :context))
+         (hist (plist-get breakdown :history))
+         (instr (plist-get breakdown :instruction))
+         (up (+ sys ctx hist instr))
+         (line (lambda (down seconds)
+                 (format "Scalpel: up %d = sys %d + ctx %d + hist %d + instr %d, down %d, %ds\n"
+                         up sys ctx hist instr down seconds)))
+         beg)
     (goto-char (point-max))
     (setq beg (point-marker))
-    (insert (format "Scalpel: %d up, %d down, 0s\n"
-                    scalpel-llm--tokens-uploaded
-                    scalpel-llm--tokens-received))
+    (insert (funcall line scalpel-llm--tokens-received 0))
     (let ((refresh
            (lambda ()
              (when (marker-buffer beg)
@@ -276,10 +287,8 @@ newline, so the cursor returns to the line the status occupied."
                    (let ((inhibit-read-only t))
                      (goto-char beg)
                      (delete-region (point) (1+ (line-end-position)))
-                     (insert (format "Scalpel: %d up, %d down, %ds\n"
-                                     scalpel-llm--tokens-uploaded
-                                     scalpel-llm--tokens-received
-                                     (round (- (float-time) start))))))))))
+                     (insert (funcall line scalpel-llm--tokens-received
+                                      (round (- (float-time) start))))))))))
           (stop
            (lambda ()
              (when (marker-buffer beg)
@@ -781,15 +790,6 @@ flight, writes are skipped but the round still settles.  The
 progress callback is installed for the duration and cleared before
 ON-COMPLETE, so it is never left pointing at a dead buffer."
   (let* ((target (scalpel-console--target-buffer))
-         (status (with-current-buffer target
-                   (scalpel-console--status-start)))
-         (refresh (car status))
-         (stop (cdr status))
-         ;; Snapshot the cumulative counters before the round: a round
-         ;; may issue several LLM requests (plan, then edit/create), so
-         ;; the round's cost is the diff of the never-reset totals.
-         (up0 scalpel-llm--total-uploaded)
-         (down0 scalpel-llm--total-received)
          (breakdown
           (with-current-buffer target
             (list :system (scalpel-llm--count-tokens
@@ -799,6 +799,15 @@ ON-COMPLETE, so it is never left pointing at a dead buffer."
                   :history (scalpel-llm--count-tokens (or history ""))
                   :instruction (scalpel-llm--count-tokens
                                 (or instruction "")))))
+         (status (with-current-buffer target
+                   (scalpel-console--status-start breakdown)))
+         (refresh (car status))
+         (stop (cdr status))
+         ;; Snapshot the cumulative counters before the round: a round
+         ;; may issue several LLM requests (plan, then edit/create), so
+         ;; the round's cost is the diff of the never-reset totals.
+         (up0 scalpel-llm--total-uploaded)
+         (down0 scalpel-llm--total-received)
          (settled nil)
          (settle (lambda (result)
                    (unless settled

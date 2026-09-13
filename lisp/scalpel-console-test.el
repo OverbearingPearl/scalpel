@@ -245,7 +245,9 @@ so non-zero counters made STOP delete a character inside
           (erase-buffer)
           (insert "User: hi\n")
           (goto-char (point-max))
-          (let* ((status (scalpel-console--status-start))
+          (let* ((status (scalpel-console--status-start
+                          (list :system 12 :context 0 :history 0
+                                :instruction 0)))
                  (refresh (car status))
                  (stop (cdr status)))
             (should (= (point) (point-max)))
