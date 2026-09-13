@@ -63,15 +63,55 @@ therefore be omitted by the planner and still survive projection.")
 Structural contract shared by the replacement prompt in
 `scalpel-agent-edit' and its no-op check.")
 
+(defconst scalpel-agent--prompt-example
+  "[{\"tool\":\"reply\",\"text\":\"hello\"}]"
+  "Correct-response example embedded in `scalpel-agent-system-prompt'.
+Structural contract shared by the prompt, which shows it, and the
+test that parses it: an example the parser rejects would teach the
+planner a shape that fails, and the prompt would then be describing
+a system other than this one.")
+
+(defconst scalpel-agent--reply-brevity-rule
+  (concat
+   "Keep a reply action's \"text\" short: at most a few sentences "
+   "stating the conclusion the user asked for.  Analysis, file "
+   "summaries and restatements of the code belong nowhere in it, "
+   "because the user already sees every report you do.  A long "
+   "reply is also a broken one: a response that runs past the "
+   "backend's output budget is cut off mid-JSON, and every action "
+   "in it -- including the ones already complete -- is thrown away.")
+  "Constraint bounding how long a reply may be.
+Structural contract shared by `scalpel-agent-system-prompt', which
+appends it, and the test that guards it.  Nothing in the code can
+bound what the model writes, so the bound has to be stated to the
+model.  The failure it prevents is a reply cut off mid-JSON by the
+backend's output limit, which loses the whole round, and the suite
+cannot see it because every reply there is mocked.")
+
 (defcustom scalpel-agent-system-prompt
-  "You are a precise code transformation planner. The user gives you
-context, the conversation so far, and an instruction. Return ONLY
-a JSON array of actions.
-Every action you take is encoded as one JSON object in that array.
-There is no other calling convention: nothing you write is executed
-directly, and only this array is parsed. Do not narrate before or
-after it.
-The top-level response must be a JSON array, never a single object.
+  (concat
+   "You are a precise code transformation planner.
+
+Every action you take is one JSON object inside one JSON array, and
+that array is the only thing parsed and the only thing executed.
+A response holding no array runs nothing: the user is shown an
+error naming what you wrote instead, and the work does not happen.
+
+Correct response:
+"
+   scalpel-agent--prompt-example
+   "
+
+Text outside the array is discarded unread, so a greeting, a
+narration, or an announcement of the plan costs tokens and changes
+nothing.  Put the array first.
+
+You have no tools and no function to call: nothing you emit is
+dispatched as a tool call, and markup written in a tool-calling
+format is not parsed, not translated and not executed.  The
+vocabulary below is ordinary JSON that you write, and only the
+array is acted on.  To look at a file, emit the read action below.
+
 Each action is one of:
 {\"tool\":\"edit\",\"file\":\"/abs/path.el\",\"symbol\":\"name\",\"instruction\":\"...\"}
 {\"tool\":\"reply\",\"text\":\"...\"}
@@ -108,6 +148,13 @@ between rounds unless you changed it.
 Never invent commands the user did not ask for, and never use shell
 to change files: all file changes go through edit, create, delete,
 rename and delete-file.
+An edit replaces something that already exists, so its \"symbol\"
+must name a definition really present in that file: the definition
+is re-located before the replacement lands, and a name the file
+does not hold fails the action.  A create adds something new, so
+its \"after\" names an existing definition in the same file to
+insert the new one behind; the \"symbol\" of a create is the name
+being created and is expected to be new.
 The rename action only moves the file itself: it does not touch the
 definitions inside it and does not update any other file's require,
 import or path references, so those remain the user's responsibility.
@@ -145,7 +192,9 @@ applied as a whole-block rewrite by tooling that owns location and
 application, so only the final text matters.  Reading the current
 code to understand it is expected; simulating an edit against it is
 wasted effort.
-Never emit code or diff text in this response."
+Never emit code or diff text in this response.
+"
+   scalpel-agent--reply-brevity-rule)
   "System prompt for the Scalpel agent planner.
 This controls only the wording sent to the LLM; the action schema
 is fixed by `scalpel-agent--tool-fields' and
@@ -154,9 +203,21 @@ is fixed by `scalpel-agent--tool-fields' and
   :group 'scalpel)
 
 (defcustom scalpel-agent-cod-prompt
-  "Think step by step, but only keep a minimum draft for each thinking step, with 5 words at most. Return the answer at the end of the response after a separator ####."
+  (concat
+   "You may write a short private draft of your reasoning before
+the JSON array, at most five words per step.  The draft is
+discarded unread: only the array is parsed and executed, so it
+must still be complete, and nothing may follow it.")
   "Optional Chain-of-Draft reasoning prompt.
-Appended to the system prompt only when `scalpel-agent-cod-enabled' is non-nil."
+Appended to the system prompt only when `scalpel-agent-cod-enabled'
+is non-nil.  The draft is scoped to precede the array, because the
+array is the only thing parsed: a draft before it costs tokens and
+changes nothing.  The previous wording asked for \"the answer at
+the end of the response after a separator ####\", which put the
+array second and left a marker in front of it, contradicting the
+output contract inside the same system message.  A backend that
+streams a reasoning channel needs no such prompt: its reasoning
+arrives through `scalpel-llm-reasoning-buffer-name'."
   :type 'string
   :group 'scalpel)
 
@@ -782,8 +843,9 @@ the edit."
                              beg (line-end-position))))
                (prompt (concat "Signature: %s\n\nCurrent block:\n%s\n\n"
                                "Instruction: %s\n\n"
-                               "Return only the full replacement definition, as plain "
-                               "Emacs Lisp text. Do not include markdown fences or "
+                               "Return only the full replacement block, written in "
+                               "the same language as the block above, as plain "
+                               "text. Do not include markdown fences or "
                                "explanations. If the requested change is impossible or "
                                "unnecessary for this block, return exactly: NO_CHANGE")))
           (scalpel-llm-request-async
@@ -832,9 +894,11 @@ ON-SUCCESS receives the report string.  ON-ERROR receives a plist
                (prompt (concat "Anchor signature: %s\n\n"
                                "Instruction: %s\n\n"
                                "Return only the full new definition to insert "
-                               "immediately after the anchor, as plain Emacs "
-                               "Lisp text. Do not include markdown fences or "
-                               "explanations.")))
+                               "immediately after the anchor, written in the "
+                               "same language as the anchor, as plain text. Do "
+                               "not include markdown fences or explanations. "
+                               "If nothing should be created, return exactly: "
+                               "NO_CHANGE")))
           (scalpel-llm-request-async
            (format prompt
                    (save-excursion

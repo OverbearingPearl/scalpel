@@ -120,13 +120,33 @@ next character."
              (setq i (1+ i)))
            (> depth 0)))))
 
+(defconst scalpel-llm-dialect--tool-call-tags
+  '("invoke" "tool_call" "tool_calls" "function_call" "function_calls"
+    "arg_key" "arg_value")
+  "Tag names a reply carries when it writes a tool call as plain text.
+Backends disagree on the dialect: some leak the harness's own
+markup (`<invoke>'), others the model's internal one (`<tool_call>'
+with `<arg_key>' and `<arg_value>' children).  Both mean the same
+thing -- the planner answered in a calling convention nothing
+parses -- so both are named, and detection and the test that pins
+it read this list instead of each carrying its own copy.")
+
+(defconst scalpel-llm-dialect--tool-call-regexp
+  (concat "<" (regexp-opt scalpel-llm-dialect--tool-call-tags)
+          "[ \t\n/>]")
+  "Regexp matching a leaked tool-call tag in a planner reply.
+Rendered as a non-capturing group, so callers may embed it.  A
+delimiter must follow the name, so `<tool_call>' matches while
+`tool_call' does not match the prefix of `<tool_calls>': each
+spelling needs its own entry.")
+
 (defun scalpel-llm-dialect--parse-error (raw)
   "Signal the `user-error' describing why RAW failed to parse.
 Distinguishes a planner reply that used tool-call syntax, one that
 was cut off before its JSON array closed, and one that was simply
 not valid JSON.  RAW is the reply as received."
   (cond
-   ((string-match-p "<\\(?:invoke\\|tool_calls\\|function_calls\\)\\b" raw)
+   ((string-match-p scalpel-llm-dialect--tool-call-regexp raw)
     (user-error
      (concat "Scalpel: planner used tool-call syntax instead of the JSON "
              "action array; nothing was executed.  Reply was: %s")

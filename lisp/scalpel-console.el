@@ -130,14 +130,17 @@ buffer text, so it can reach neither the conversation nor the
 pending-input scanner.")
 
 (defconst scalpel-console--continuation-instruction
-  (concat "The shell command from the previous round already ran; its\n"
-          "output is in the conversation above.  Read that output and\n"
-          "decide now: if it already answers the user's request, reply\n"
-          "with the conclusion; otherwise issue at most one concrete\n"
-          "next action.  Do not run the same shell command again.")
-  "Instruction sent on a continued round after a shell command ran.
+  (concat "The action from the previous round already ran; its output\n"
+          "is in the conversation above.  Read that output and decide\n"
+          "now: if it already answers the user's request, reply with\n"
+          "the conclusion; otherwise issue at most one concrete next\n"
+          "action.  Do not repeat that action.")
+  "Instruction sent on a continued round after a report was produced.
 The user's original instruction is already in the conversation, so
-re-sending it makes the planner re-issue the same shell action.
+re-sending it makes the planner re-issue the same action.  The
+wording names no action kind on purpose: a round that only read a
+definition is continued the same way, and
+`scalpel-console--run-rounds' tests `:reads' alongside `:shells'.
 Structural contract shared with `scalpel-console--run-rounds'.")
 
 (defvar-local scalpel-console--root nil

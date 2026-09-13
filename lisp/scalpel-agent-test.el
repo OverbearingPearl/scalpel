@@ -650,6 +650,111 @@ filesystem, not a sandboxed one."
       (should-not (string-match-p (regexp-quote word)
                                   (downcase scalpel-agent-system-prompt))))))
 
+(ert-deftest scalpel-agent-test-system-prompt-bounds-reply-text ()
+  "The prompt must bound how long a reply may be.
+Nothing in the code can bound what the model writes, so the bound
+has to be stated to the model; the failure it prevents, a reply cut
+off mid-JSON by the backend's output limit, cannot be reproduced
+here because every reply in this suite is mocked.  This guards only
+that the live prompt still carries the rule, so a rewrite that drops
+it fails here instead of in a session."
+  (ert-info ((format "Rule:\n%S" scalpel-agent--reply-brevity-rule))
+    (should (string-match-p
+             (regexp-quote scalpel-agent--reply-brevity-rule)
+             scalpel-agent-system-prompt))))
+
+(ert-deftest scalpel-agent-test-prompt-example-parses ()
+  "The example the system prompt shows is one the parser accepts.
+Regression: the prompt presented prose before the array as an
+outright failure, while `scalpel-llm-dialect--default-parse' digs
+the array out of surrounding prose and a test asserts it does, so
+the prompt described a system other than this one."
+  (let ((parsed (scalpel-llm-dialect--default-parse
+                 scalpel-agent--prompt-example)))
+    (ert-info ((format "Example: %S" scalpel-agent--prompt-example))
+      (should (equal (plist-get (car parsed) :tool) "reply")))))
+
+(ert-deftest scalpel-agent-test-system-prompt-denies-tool-calling ()
+  "The prompt must deny that the planner has tools to call.
+Regression: the observed planner failure -- twice, on two models --
+is a reply written as a tool call instead of an action array, and
+the prompt said nothing about a tool-calling prior while spending
+its emphasis on greetings.  This check is a proxy: it accepts any
+wording that denies the capability, because the property guarded
+is the denial, not a phrase."
+  (let ((prompt (downcase scalpel-agent-system-prompt)))
+    (ert-info ((format "Prompt:\n%S" prompt))
+      (should (cl-some (lambda (marker) (string-match-p marker prompt))
+                       '("no tools" "no function to call"
+                         "not dispatched as a tool call"))))))
+
+(ert-deftest scalpel-agent-test-edit-prompt-asks-in-the-file-language ()
+  "The edit prompt names no language of its own.
+Regression: it asked for \"plain Emacs Lisp text\" while the
+locator layer serves Markdown, YAML and .gitignore too, so an edit
+aimed at a heading section was told to answer in a language the
+file is not written in; the replacement is validated per language
+by `scalpel-locate-single-definition-p'."
+  (scalpel-utils-test-with-temp-file ".md"
+    (with-temp-file this-file (insert "# Alpha\nbody\n\n# Beta\n"))
+    (let ((prompt nil))
+      (cl-letf (((symbol-function 'scalpel-llm-request-async)
+                 (lambda (p _on-success on-error &optional _system)
+                   (setq prompt p)
+                   (funcall on-error (list :type 'test :message "stop")))))
+        (scalpel-agent-edit this-file "Alpha" "tighten the wording"
+                            (lambda (_report) nil)
+                            (lambda (_err) nil)))
+      (ert-info ((format "Prompt:\n%S" prompt))
+        (should prompt)
+        (should-not (string-match-p "Emacs Lisp" prompt))))))
+
+(ert-deftest scalpel-agent-test-create-prompt-requests-no-change-sentinel ()
+  "The create prompt asks for the sentinel the code compares against.
+Regression: `scalpel-agent-create' tested the reply against
+`scalpel-agent--no-change-sentinel', but its prompt never asked for
+it, so \"nothing should be created\" had no way to be said and the
+model could only answer with a definition that should not exist."
+  (scalpel-utils-test-with-temp-file ".el"
+    (with-temp-file this-file (insert "(defun foo ())\n"))
+    (let ((prompt nil))
+      (cl-letf (((symbol-function 'scalpel-llm-request-async)
+                 (lambda (p _on-success on-error &optional _system)
+                   (setq prompt p)
+                   (funcall on-error (list :type 'test :message "stop")))))
+        (scalpel-agent-create this-file "bar" "add bar" "foo"
+                              (lambda (_report) nil)
+                              (lambda (_err) nil)))
+      (ert-info ((format "Prompt:\n%S" prompt))
+        (should prompt)
+        (should (string-match-p
+                 (regexp-quote scalpel-agent--no-change-sentinel)
+                 prompt))))))
+
+(ert-deftest scalpel-agent-test-cod-prompt-keeps-the-output-contract ()
+  "Enabling the CoD draft leaves the whole output contract in place.
+The draft is scoped to precede the array, so the appended text must
+not displace the schema, the example or the brevity rule; a draft
+that replaced any of them would move the array out of first place
+inside the same system message."
+  (let ((scalpel-agent-cod-enabled t)
+        (system nil))
+    (cl-letf (((symbol-function 'scalpel-llm-request-async)
+               (lambda (_prompt _on-success _on-error &optional sys)
+                 (setq system sys))))
+      (scalpel-agent-plan "hi" nil
+                          (lambda (_actions) nil)
+                          (lambda (_err) nil)))
+    (ert-info ((format "System prompt:\n%S" system))
+      (should system)
+      (should (string-match-p (regexp-quote scalpel-agent-cod-prompt)
+                              system))
+      (should (string-match-p (regexp-quote scalpel-agent--prompt-example)
+                              system))
+      (should (string-match-p
+               (regexp-quote scalpel-agent--reply-brevity-rule)
+               system)))))
+
 (ert-deftest scalpel-agent-test-shell-runs-command-through-a-shell ()
   "Shell actions delegate execution to the sandbox and report its status."
   (let ((scalpel-console--root nil)

@@ -132,6 +132,51 @@ Moved from `scalpel-agent-test-parse-json-rejects-tool-call-syntax'."
         (should (string-match-p "tool-call syntax"
                                 (error-message-string err)))))))
 
+(ert-deftest scalpel-llm-dialect-test-parse-error-names-tool-call-tag-syntax ()
+  "A reply in the `<tool_call>` dialect is reported as tool-call syntax.
+Regression: laguna and GLM leak `<tool_call>` with `<arg_key>` and
+`<arg_value>` children, while the detector knew only `<invoke>', so
+the reply fell through to the generic invalid-JSON error and sent
+the user hunting for a JSON syntax error that did not exist."
+  (let ((raw (concat "I'll investigate the full scope of gptel usage "
+                     "before giving advice. Let me read the key files."
+                     "<tool_call>read<arg_key>file</arg_key>"
+                     "<arg_value>/tmp/a.el</arg_value></tool_call>")))
+    (let ((err (condition-case e
+                   (progn (scalpel-llm-dialect--default-parse raw) nil)
+                 (user-error e))))
+      (ert-info ((format "Raw:\n%S" raw))
+        (should err)
+        (should (string-match-p "tool-call syntax"
+                                (error-message-string err)))
+        (should-not (string-match-p "invalid JSON"
+                                    (error-message-string err)))))))
+
+(ert-deftest scalpel-llm-dialect-test-tool-call-detection-covers-every-tag ()
+  "Every registered tool-call tag makes the reply fail as tool-call syntax.
+The list is the contract: a dialect added to it is detected with no
+further change, so detection cannot silently cover only the
+dialects some test happened to spell out."
+  (dolist (tag scalpel-llm-dialect--tool-call-tags)
+    (let ((raw (format "thinking...<%s>x</%s>" tag tag)))
+      (ert-info ((format "Tag: %S" tag))
+        (let ((err (condition-case e
+                       (progn (scalpel-llm-dialect--parse-error raw) nil)
+                     (user-error e))))
+          (should err)
+          (should (string-match-p "tool-call syntax"
+                                  (error-message-string err))))))))
+
+(ert-deftest scalpel-llm-dialect-test-tool-call-markup-inside-json-still-parses ()
+  "A JSON action array quoting tool-call markup is still a valid reply.
+Detection runs only when no payload was found, so widening the tag
+list cannot turn a well-formed array into a parse error."
+  (let ((result (scalpel-llm-dialect--default-parse
+                 "[{\"tool\":\"reply\",\"text\":\"use <tool_call> instead\"}]")))
+    (ert-info ((format "Result: %S" result))
+      (should (equal (plist-get (car result) :text)
+                     "use <tool_call> instead")))))
+
 (ert-deftest scalpel-llm-dialect-test-visible-raw-exposes-invisible-bytes ()
   "A reply that fails to parse must expose the bytes that broke it.
 Regression: the error used %S, which prints control bytes and NBSP
