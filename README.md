@@ -282,7 +282,7 @@ First, install and configure `gptel`. A minimal setup using `use-package` is:
           :endpoint "/api/v1/chat/completions"
           :stream t
           :key (auth-source-pick-first-password :host "openrouter.ai")
-          :models '("minimax/minimax-m3"
+          :models '("minimax/minimax-m2.7"
                     "poolside/laguna-s-2.1")))
   (setq my-glm-low-backend
         (gptel-make-openai "OpenRouter-GLM-Low"
