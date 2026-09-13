@@ -302,7 +302,17 @@ Not a user entry point: open a console with `scalpel-open', which
 also anchors the buffer to a root directory."
   (setq-local electric-indent-mode nil)
   (setq-local comment-start "")
-  (setq buffer-read-only nil))
+  (setq buffer-read-only nil)
+  ;; Yank restores the killed text's properties, so text killed from a
+  ;; tagged region (header, context tree, a report) would paste back
+  ;; still tagged as output or conversation, and the pending-input
+  ;; scanner would never see it as an instruction.  Strip the console's
+  ;; own properties on yank; buffer-local, so other buffers are untouched.
+  (setq-local yank-excluded-properties
+              (append yank-excluded-properties
+                      '(scalpel-console-role scalpel-console-output
+                        scalpel-console-collapsed scalpel-console-consumed-body
+                        display rear-nonsticky))))
 
 (defun scalpel-console--insert-tagged (text role)
   "Insert TEXT at point tagged with ROLE in `scalpel-console-role'.

@@ -41,6 +41,21 @@
 (defconst scalpel-token--header
   "Scalpel token estimates (4 chars/token, not API usage).
 One line per round: time | console | round up/down | sys/ctx/hist/instr prompt makeup | console up/down | ALL up/down.")
+(defun scalpel-token--ensure-header ()
+  "Ensure the token buffer carries its header text.
+The header is re-created after `scalpel-token-reset' or any external
+erasure.  Comparing the first line is enough to detect prior
+initialization."
+  (with-current-buffer (get-buffer-create scalpel-token-buffer-name)
+    (let ((inhibit-read-only t))
+      (goto-char (point-min))
+      (unless (looking-at-p
+               (concat (regexp-quote
+                        (car (split-string scalpel-token--header "\n")))
+                       "$"))
+        (goto-char (point-max))
+        (insert scalpel-token--header "\n\n"))
+      (goto-char (point-max)))))
 
 (defun scalpel-token--append-line (console up down breakdown)
   "Append one accounting line for CONSOLE to the token buffer.
@@ -50,6 +65,7 @@ name is never truncated: it is the account key.  The breakdown
 columns are dimmed and the ALL columns bolded, so visual weight
 matches the account hierarchy."
   (with-current-buffer (get-buffer-create scalpel-token-buffer-name)
+    (scalpel-token--ensure-header)
     (let ((inhibit-read-only t)
           (ctot (scalpel-token--console-totals console)))
       (save-excursion
@@ -84,14 +100,12 @@ BREAKDOWN is a plist as described in `scalpel-token--append-line'."
   (interactive)
   (let ((buf (get-buffer-create scalpel-token-buffer-name)))
     (with-current-buffer buf
-      (when (= (buffer-size) 0)
-        (let ((inhibit-read-only t))
-          (insert scalpel-token--header "\n\n")))
+      (scalpel-token--ensure-header)
       (special-mode))
     (switch-to-buffer buf)))
 
 (defun scalpel-token-reset ()
-  "Clear all token accounting and the buffer."
+  "Clear all token accounting and reprint the buffer header."
   (interactive)
   (setq scalpel-token--grand-up 0
         scalpel-token--grand-down 0)
@@ -99,7 +113,8 @@ BREAKDOWN is a plist as described in `scalpel-token--append-line'."
   (when (get-buffer scalpel-token-buffer-name)
     (with-current-buffer scalpel-token-buffer-name
       (let ((inhibit-read-only t))
-        (erase-buffer)))))
+        (erase-buffer)
+        (scalpel-token--ensure-header)))))
 
 (provide 'scalpel-token)
 
