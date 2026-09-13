@@ -750,19 +750,32 @@ state of its own: everything the LLM may rely on arrives here."
           "User instruction:\n"
           instruction))
 
+(defconst scalpel-agent--dialect-error-types
+  '((scalpel-llm-dialect-tool-call-error . tool-call)
+    (scalpel-llm-dialect-prose-reply-error . prose))
+  "Reply-dialect conditions, and the planner error type each becomes.
+Both conditions carry their whole message as their single data
+element, so it is read through
+`scalpel-llm-dialect-error-message' rather than
+`error-message-string'.  The types stay apart because the console
+advises differently on each: which of them a retry can fix is not
+the same question for a malformed array and for a reply that
+followed no convention at all.")
+
 (defun scalpel-agent-plan (instruction history on-success on-error)
   "Ask the LLM for a structured plan for INSTRUCTION, without blocking.
 HISTORY is the conversation text recorded before INSTRUCTION, or
 nil.  ON-SUCCESS receives the projected action list.  ON-ERROR
 receives a plist (:type SYMBOL :message STRING): `parse' when the
-reply does not yield a valid action array, `tool-call' when it
-used a tool-calling convention instead (see
-`scalpel-llm-dialect--parse-error', whose message is read through
-`scalpel-llm-dialect-error-message'), otherwise the type forwarded
-by `scalpel-llm-request-async'.  The two parse types are separate
-because the console advises differently on each.  Only the parse
-step is guarded, so an error raised inside ON-SUCCESS escapes to
-the caller rather than being re-framed as a planner error."
+reply does not yield a valid action array, `tool-call' or `prose'
+when it answered in another convention instead -- the conditions
+`scalpel-agent--dialect-error-types' names, whose messages are read
+through `scalpel-llm-dialect-error-message' -- otherwise the type
+forwarded by `scalpel-llm-request-async'.  The parse types are
+separate because the console advises differently on each.  Only
+the parse step is guarded, so an error raised inside ON-SUCCESS
+escapes to the caller rather than being re-framed as a planner
+error."
   (scalpel-llm-request-async
    (scalpel-agent--prompt instruction history)
    (lambda (raw)
@@ -771,19 +784,18 @@ the caller rather than being re-framed as a planner error."
                                 (mapcar #'scalpel-agent--validate-action
                                         (scalpel-llm-dialect-parse raw))))
                      (error
-                      (let* ((tool-call
-                              (eq (car err)
-                                  'scalpel-llm-dialect-tool-call-error))
-                             ;; A tool-call condition carries its whole
+                      (let* ((dialect (assq (car err)
+                                            scalpel-agent--dialect-error-types))
+                             ;; A dialect condition carries its whole
                              ;; message as its data, so it is read
                              ;; verbatim: `error-message-string' would
                              ;; prefix the condition's class sentence and
                              ;; re-escape the reply.
-                             (text (if tool-call
+                             (text (if dialect
                                        (scalpel-llm-dialect-error-message err)
                                      (error-message-string err))))
                         (funcall on-error
-                                 (list :type (if tool-call 'tool-call 'parse)
+                                 (list :type (or (cdr dialect) 'parse)
                                        :message text)))
                       nil))))
        (when parsed

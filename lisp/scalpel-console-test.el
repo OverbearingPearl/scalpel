@@ -1593,6 +1593,48 @@ whatever backend and model the test session carries."
               (should (string-match-p "C-c C-b"
                                       scalpel-console--tool-call-advice)))))
       (scalpel-utils-test-kill-buffer (buffer-name buf)))))
+
+(ert-deftest scalpel-console-test-prose-advice-names-the-rephrase ()
+  "A reply written as prose is answered with rephrasing, not a retry.
+Regression: it arrived as an ordinary planner failure, so the
+console offered \\[scalpel-console-repeat] for a failure that
+resending the same instruction does not fix."
+  (let ((scalpel-agent--context-files nil)
+        (scalpel-llm-dialect-providers nil)
+        (buf (scalpel-console-test--new-console-buffer)))
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'scalpel-llm-request-async)
+                     (lambda (_prompt on-success _on-error &optional _system)
+                       (funcall on-success
+                                (concat "The dependency lives in two layers.\n\n"
+                                        "**The gateway** is the hard coupling: "
+                                        "it calls gptel.\n")))))
+            (with-current-buffer buf
+              (erase-buffer)
+              (insert "analyse the dependency\n")
+              (goto-char (point-min))
+              (scalpel-console-send-line)))
+          (with-current-buffer buf
+            (ert-info ((format "Buffer:\n%S" (buffer-string)))
+              (should (string-match-p "Scalpel planner error"
+                                      (buffer-string)))
+              (should (string-match-p
+                       (regexp-quote scalpel-console--prose-advice)
+                       (buffer-string)))
+              ;; The retry advice would promise the fix the model's
+              ;; answer shape does not give.
+              (should-not (string-match-p
+                           (regexp-quote scalpel-console--retry-advice)
+                           (buffer-string)))
+              ;; The advice must name the binding that resends the
+              ;; instruction, and the remedy that does help.
+              (should (string-match-p "C-c C-e"
+                                      scalpel-console--prose-advice))
+              (should (string-match-p "rephrase"
+                                      scalpel-console--prose-advice)))))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
+
 (ert-deftest scalpel-console-test-repeat-resends-last-instruction ()
   "Repeat resubmits the last instruction through the ordinary send path.
 Regression: after a planner-output failure the user had to retype

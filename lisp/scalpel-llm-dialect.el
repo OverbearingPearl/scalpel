@@ -213,6 +213,10 @@ spelling needs its own entry.")
   "Scalpel: planner used tool-call syntax instead of the JSON action array"
   'user-error)
 
+(define-error 'scalpel-llm-dialect-prose-reply-error
+  "Scalpel: planner replied in prose instead of the JSON action array"
+  'user-error)
+
 (defun scalpel-llm-dialect-error-message (err)
   "Return the message carried by the dialect condition ERR.
 ERR is a `scalpel-llm-dialect-tool-call-error' condition value, as
@@ -225,18 +229,53 @@ the sentence would come back doubled, and a reply that
 re-escaped into a form the user cannot read."
   (cadr err))
 
+(defun scalpel-llm-dialect--readable-raw (raw)
+  "Return RAW as it was written, for a reply that is prose.
+The reply is the answer here, not a failed parse: there is no syntax
+to inspect, and escaping it -- as `scalpel-llm-dialect--visible-raw'
+does for the branches that do have one -- turns a multi-paragraph
+answer into a single line of \\n and \\uXXXX escapes, which is what
+made a prose reply unreadable in the console.  Newlines and tabs are
+kept, because they are the answer's own shape.  Every other control
+character is dropped: the console would ring its bell for one, and a
+C1 byte would hide the text after it.  The filter mirrors
+`scalpel-agent--printable-output', which cannot be reused here --
+`scalpel-agent' requires this module, so the dependency runs the
+other way."
+  (mapconcat #'char-to-string
+             (cl-remove-if-not
+              (lambda (char)
+                (or (memq char '(?\n ?\t))
+                    (and (<= 32 char)
+                         (not (<= 127 char 159)))))
+              (string-to-list raw))
+             ""))
+
 (defun scalpel-llm-dialect--parse-error (raw)
   "Signal the `user-error' describing why RAW failed to parse.
 Distinguishes a planner reply that used tool-call syntax, one that
-was cut off before its JSON array closed, and one that was simply
-not valid JSON.  RAW is the reply as received.
+was cut off before its JSON array closed, one that held no JSON
+value at all -- prose, where there is no array to be invalid -- and
+one that was simply not valid JSON.  RAW is the reply as received.
+A prose reply is shown as it was written, because it is the answer
+rather than a failed parse; the other branches show it escaped.
 
-Tool-call syntax signals `scalpel-llm-dialect-tool-call-error', a
-`user-error' subtype, so a caller can tell it from a reply that
-merely failed to parse: that one may come back whole on a retry,
-while a reply written in another calling convention is the model's
-own habit and was observed to repeat three times in a row on one
-backend.  The other two branches signal plain `user-error'."
+Every message states the failure and shows the reply, and nothing
+more: what the user can do about it belongs to the console, which
+prints the advice its error type warrants.  A remedy written here
+too would be read twice in the console -- the two lines are
+adjacent -- and the message joins the conversation, so it would
+also be re-sent with every later request.
+
+Tool-call syntax signals `scalpel-llm-dialect-tool-call-error' and
+a prose reply `scalpel-llm-dialect-prose-reply-error', both
+`user-error' subtypes, so a caller can tell either from a reply
+that merely failed to parse: that one may come back whole on a
+retry, while a reply written in another calling convention -- or in
+none -- is the model's own habit and was observed to repeat on one
+backend.  `scalpel-agent-plan' maps each condition to its own
+planner error type for that reason.  The other branches signal
+plain `user-error'."
   (cond
    ((string-match-p scalpel-llm-dialect--tool-call-regexp raw)
     (signal 'scalpel-llm-dialect-tool-call-error
@@ -251,6 +290,22 @@ backend.  The other two branches signal plain `user-error'."
              "closed (likely the backend's output limit); nothing was "
              "executed.  Reply was: %s")
      (scalpel-llm-dialect--visible-raw raw)))
+   ;; No JSON value opened anywhere in the reply, so there is no array
+   ;; that could be invalid: the planner answered in prose.  Naming a
+   ;; syntax error here would send the user hunting for one that is not
+   ;; there, the mistake the empty-reply branch of `--default-parse'
+   ;; already exists to avoid.  This branch is reached only on the
+   ;; console's path, where a reply with an opener is either parsed or
+   ;; reported as truncated above.
+   ((not (string-match-p "\\[\\|{" raw))
+    (signal 'scalpel-llm-dialect-prose-reply-error
+            (list
+             (format (concat "Scalpel: planner replied in prose and sent no "
+                             "JSON action array; nothing was executed.  The "
+                             "reply is shown below as it was written, so the "
+                             "answer it holds can still be read.  "
+                             "Reply was:\n%s")
+                     (scalpel-llm-dialect--readable-raw raw)))))
    (t
     (user-error "Scalpel: planner returned invalid JSON: %s"
                 (scalpel-llm-dialect--visible-raw raw)))))

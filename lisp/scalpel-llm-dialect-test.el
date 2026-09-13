@@ -66,7 +66,7 @@ was the backend, not the reply's syntax."
 
 (ert-deftest scalpel-llm-dialect-test-default-parse-no-json-signals ()
   "A reply with no JSON payload signals `user-error'."
-  (ert-info ("Input: plain prose; expect user-error mentioning invalid JSON")
+  (ert-info ("Input: plain prose; expect user-error naming the prose reply")
     (should-error (scalpel-llm-dialect--default-parse "no json here")
                   :type 'user-error)))
 
@@ -343,6 +343,79 @@ session was never configured for."
                 (should (equal (plist-get (car parsed) :tool) "reply"))
                 (should-not seen)))))
       (setq gptel-backend saved-backend))))
+
+(ert-deftest scalpel-llm-dialect-test-parse-error-names-a-prose-reply ()
+  "A reply holding no JSON at all is reported as prose, not bad JSON.
+Regression: the message said \"invalid JSON\" about a reply that
+contained no JSON value, which is the category error the empty-reply
+branch of `scalpel-llm-dialect--default-parse' exists to avoid: it
+sent the user hunting for a syntax error that was not there.  The
+reply below is the shape a planner really produced when asked to
+analyse a dependency -- prose, code spans, and no array anywhere."
+  (let* ((raw (concat "The gptel dependency lives in two layers.\n\n"
+                      "**The gateway** is the hard coupling: it calls\n"
+                      "`gptel-request` and reads `gptel-backend`.\n"))
+         (err (condition-case e
+                  (progn (scalpel-llm-dialect--default-parse raw) nil)
+                (user-error e))))
+    (ert-info ((format "Raw:\n%S" raw))
+      (should err)
+      ;; Caught as the `user-error' it derives from, so the console's
+      ;; own error handler still catches it, but carrying a type of its
+      ;; own: the console advises differently on a prose answer than on
+      ;; a malformed array, and both used to arrive as `parse'.
+      (should (eq (car err) 'scalpel-llm-dialect-prose-reply-error))
+      (should (string-match-p "prose" (error-message-string err)))
+      (should-not (string-match-p "invalid JSON"
+                                  (error-message-string err)))
+      ;; The reply stays visible, as it was written: it is the only
+      ;; evidence the user has of what the planner wrote instead of an
+      ;; action array, and it is the answer, so its own line breaks are
+      ;; kept rather than escaped into one unreadable line.
+      (should (string-match-p (regexp-quote raw)
+                              (error-message-string err)))
+      (should-not (string-match-p "\\\\n"
+                                  (error-message-string err)))
+      ;; The remedy belongs to the console's advice, not here: the
+      ;; message is printed next to that advice, and it also joins the
+      ;; conversation, so a remedy written in both places is read twice
+      ;; and re-sent on every later round.
+      (should-not (string-match-p "rephrase" (error-message-string err))))))
+
+(ert-deftest scalpel-llm-dialect-test-prose-reply-drops-unprintable-bytes ()
+  "A prose reply is shown without bytes the console cannot render.
+A bell byte would make the console ring, and a C1 byte would hide
+the text after it.  Unlike the branches that report a failed parse
+-- where an invisible byte is the evidence, which is why
+`scalpel-llm-dialect--visible-raw' escapes it -- there is no syntax
+here for the byte to explain."
+  (let ((err (condition-case e
+                 (progn (scalpel-llm-dialect--default-parse
+                         "answer\a then\nnext line")
+                        nil)
+               (user-error e))))
+    (let ((message (error-message-string err)))
+      (ert-info ((format "Message:\n%S" message))
+        (should (string-match-p "answer then\nnext line" message))
+        (should-not (string-match-p "\a" message))))))
+
+(ert-deftest scalpel-llm-dialect-test-prose-type-is-a-user-error ()
+  "The prose condition stays a `user-error' and carries its own type.
+Regression: the console catches a planner-output failure as
+`user-error', so a type that stopped deriving from it would slip
+past the console's handler and surface as a backtrace; and without
+a type of its own the console could not tell a prose answer from a
+malformed reply, two failures whose remedy is not the same."
+  (should (memq 'user-error
+                (get 'scalpel-llm-dialect-prose-reply-error
+                     'error-conditions)))
+  ;; The fixture is bound rather than passed as a literal: checkdoc reads
+  ;; a literal argument of a call whose name ends in "error" as a message
+  ;; and asks for a capital letter, while a prose reply is lowercase on
+  ;; purpose -- that is the shape the parser has to recognise.
+  (let ((prose "plain prose, no JSON"))
+    (should-error (scalpel-llm-dialect--parse-error prose)
+                  :type 'scalpel-llm-dialect-prose-reply-error)))
 
 (provide 'scalpel-llm-dialect-test)
 

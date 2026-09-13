@@ -652,6 +652,36 @@ followed three times without the reply changing."
           (should (string-match-p "tool-call syntax"
                                   (plist-get error :message))))))))
 
+(ert-deftest scalpel-agent-test-plan-reports-a-prose-reply-as-its-own-type ()
+  "A reply written as prose is reported as `prose', not `parse'.
+Regression: both arrived as `parse', so the console advised a retry
+for a failure that resending the same instruction does not fix --
+the same request gets the same shape back from the same backend."
+  ;; Dispatch reads the session's own backend and model, so a dialect
+  ;; registered for them would decide this test's outcome.  None is
+  ;; registered here: the subject is the parser's own report.
+  (let ((scalpel-llm-dialect-providers nil))
+    (cl-letf (((symbol-function 'scalpel-llm-request-async)
+               (lambda (_prompt on-success _on-error &optional _system)
+                 (funcall on-success
+                          (concat "The dependency lives in two layers.\n\n"
+                                  "**The gateway** is the hard coupling: it\n"
+                                  "calls gptel.\n")))))
+      (let (error)
+        (scalpel-agent-plan
+         "analyse the dependency" nil
+         (lambda (_actions) (ert-fail "a prose reply must not plan"))
+         (lambda (err) (setq error err)))
+        (ert-info ((format "Error: %S" error))
+          (should (eq (plist-get error :type) 'prose))
+          (should (string-match-p "prose" (plist-get error :message)))
+          ;; The answer stays readable: it is the whole evidence the
+          ;; user has of what the planner wrote instead of an array.
+          (should (string-match-p "The gateway"
+                                  (plist-get error :message)))
+          (should-not (string-match-p "\\\\n"
+                                      (plist-get error :message))))))))
+
 (ert-deftest scalpel-agent-test-system-prompt-declares-every-tool ()
   "Every dispatchable tool must be declared to the planner.
 Regression: `shell' was dispatchable and implemented but absent
