@@ -95,17 +95,51 @@ end the payload early."
       (when end
         (substring raw start end)))))
 
+(defun scalpel-llm-dialect--json-unterminated-p (raw)
+  "Return non-nil when RAW opens a JSON value that never closes.
+The scanner mirrors `scalpel-llm-dialect--json-payload': brackets
+inside string literals never count, and a backslash escapes the
+next character."
+  (let* ((start (string-match "\\[\\|{" raw))
+         (depth 0)
+         (in-string nil)
+         (escaped nil)
+         (i start))
+    (and start
+         (progn
+           (while (and i (< i (length raw)) (zerop depth))
+             (let ((char (aref raw i)))
+               (cond
+                (escaped (setq escaped nil))
+                (in-string
+                 (cond ((eq char ?\\) (setq escaped t))
+                       ((eq char ?\") (setq in-string nil))))
+                ((eq char ?\") (setq in-string t))
+                ((memq char '(?\[ ?\{)) (setq depth (1+ depth)))
+                ((memq char '(?\] ?\})) (setq depth (1- depth)))))
+             (setq i (1+ i)))
+           (> depth 0)))))
+
 (defun scalpel-llm-dialect--parse-error (raw)
   "Signal the `user-error' describing why RAW failed to parse.
-Distinguishes a planner reply that used tool-call syntax from one
-that was simply not valid JSON.  RAW is the reply as received."
-  (if (string-match-p "<\\(?:invoke\\|tool_calls\\|function_calls\\)\\b" raw)
-      (user-error
-       (concat "Scalpel: planner used tool-call syntax instead of the JSON "
-               "action array; nothing was executed.  Reply was: %s")
-       (scalpel-llm-dialect--visible-raw raw))
+Distinguishes a planner reply that used tool-call syntax, one that
+was cut off before its JSON array closed, and one that was simply
+not valid JSON.  RAW is the reply as received."
+  (cond
+   ((string-match-p "<\\(?:invoke\\|tool_calls\\|function_calls\\)\\b" raw)
+    (user-error
+     (concat "Scalpel: planner used tool-call syntax instead of the JSON "
+             "action array; nothing was executed.  Reply was: %s")
+     (scalpel-llm-dialect--visible-raw raw)))
+   ((scalpel-llm-dialect--json-unterminated-p raw)
+    (user-error
+     (concat "Scalpel: planner reply was cut off before its JSON array "
+             "closed (likely the backend's output limit); nothing was "
+             "executed.  Reply was: %s")
+     (scalpel-llm-dialect--visible-raw raw)))
+   (t
     (user-error "Scalpel: planner returned invalid JSON: %s"
-                (scalpel-llm-dialect--visible-raw raw))))
+                (scalpel-llm-dialect--visible-raw raw)))))
 
 (defun scalpel-llm-dialect--escape-raw-controls (payload)
   "Return PAYLOAD with raw control characters inside JSON strings escaped.

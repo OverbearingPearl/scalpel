@@ -255,7 +255,9 @@ so non-zero counters made STOP delete a character inside
             (save-excursion
               (goto-char (point-min))
               (should (search-forward
-                       "Scalpel: 12 up, 34 down, 0s\n" nil t)))
+                       (concat "Scalpel: up 12 = sys 12 + ctx 0 + hist 0"
+                               " + instr 0, down 34, 0s\n")
+                       nil t)))
             ;; Refreshing rewrites the same single line.
             (funcall refresh)
             (funcall refresh)

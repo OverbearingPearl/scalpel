@@ -97,6 +97,19 @@ Moved from `scalpel-agent-test-parse-json-object-not-array'."
       "{\"actions\":[{\"tool\":\"reply\",\"text\":\"hi\"}]}")
      :type 'user-error)))
 
+(ert-deftest scalpel-llm-dialect-test-parse-error-names-truncated-json ()
+  "A reply whose JSON array never closes is reported as truncated.
+Regression: an unterminated array fell into the generic invalid-JSON
+error, sending the user hunting for a syntax error when the real
+cause was the backend cutting the reply off."
+  (let ((raw "[{\"tool\":\"reply\",\"text\":\"\\u4f60\\u597d"))
+    (let ((err (condition-case e
+                   (progn (scalpel-llm-dialect--default-parse raw) nil)
+                 (user-error e))))
+      (ert-info ((format "Raw:\n%S" raw))
+        (should err)
+        (should (string-match-p "cut off" (error-message-string err)))))))
+
 (ert-deftest scalpel-llm-dialect-test-json-payload-without-json ()
   "A reply holding no complete JSON value has no payload."
   (ert-info ("Input: prose and an unterminated array; expect nil both times")
