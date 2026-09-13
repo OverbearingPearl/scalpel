@@ -7,6 +7,7 @@
 ;; SPDX-License-Identifier: Apache-2.0
 
 ;;; Commentary:
+
 ;; Structural locator for .gitignore buffers.  A "definition" is one
 ;; pattern line; the symbol is the line's text.  Comment and blank
 ;; lines are never symbols.

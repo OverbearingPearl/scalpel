@@ -7,6 +7,7 @@
 ;; SPDX-License-Identifier: Apache-2.0
 
 ;;; Commentary:
+
 ;; Structural locator for YAML buffers.  A "definition" is one top-level
 ;; key's block: the key line plus everything up to the next line that is
 ;; neither indented nor blank.  The symbol is the key text.

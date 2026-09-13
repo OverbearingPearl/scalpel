@@ -7,6 +7,7 @@
 ;; SPDX-License-Identifier: Apache-2.0
 
 ;;; Commentary:
+
 ;; Provides the *scalpel* buffer where users type a textual instruction and
 ;; press RET to send it to the agent.  S-RET inserts a newline, so an
 ;; instruction may span several lines and is still sent as one message.  The

@@ -7,6 +7,7 @@
 ;; SPDX-License-Identifier: Apache-2.0
 
 ;;; Commentary:
+
 ;; Dispatch to per-language locator providers by file-name regexp.
 
 ;;; Code:

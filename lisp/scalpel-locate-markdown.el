@@ -7,6 +7,7 @@
 ;; SPDX-License-Identifier: Apache-2.0
 
 ;;; Commentary:
+
 ;; Structural locator for Markdown buffers.  A "definition" is a heading
 ;; section: the heading line plus everything up to the next heading of
 ;; the same or higher level.  The symbol is the heading text.

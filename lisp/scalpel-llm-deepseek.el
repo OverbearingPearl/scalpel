@@ -7,6 +7,7 @@
 ;; SPDX-License-Identifier: Apache-2.0
 
 ;;; Commentary:
+
 ;; Reply dialect for DeepSeek backends.  DeepSeek models emit their
 ;; internal tool-call delimiters (U+FF5C fullwidth vertical bars around
 ;; DSML tags) as literal text when the API layer does not carry the

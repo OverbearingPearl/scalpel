@@ -7,6 +7,7 @@
 ;; SPDX-License-Identifier: Apache-2.0
 
 ;;; Commentary:
+
 ;; Structural locator for Emacs Lisp buffers.
 
 ;;; Code:

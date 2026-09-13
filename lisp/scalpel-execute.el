@@ -7,6 +7,7 @@
 ;; SPDX-License-Identifier: Apache-2.0
 
 ;;; Commentary:
+
 ;; Applies an edit only within the verified bounds, never beyond.
 ;;
 ;; This module is what makes unconfirmed application defensible: the replacement

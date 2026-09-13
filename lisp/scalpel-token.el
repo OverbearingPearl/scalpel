@@ -7,6 +7,7 @@
 ;; SPDX-License-Identifier: Apache-2.0
 
 ;;; Commentary:
+
 ;; Per-round token accounting in a dedicated buffer.  Estimates use the
 ;; same heuristic as `scalpel-llm--count-tokens' (4 characters per
 ;; ASCII token, one token per CJK character); they are cost estimates,

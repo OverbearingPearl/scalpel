@@ -7,6 +7,7 @@
 ;; SPDX-License-Identifier: Apache-2.0
 
 ;;; Commentary:
+
 ;; Provides context, structured-plan parsing, and action dispatch.
 ;;
 ;; Dispatch applies each action as it is parsed: edits are not queued for

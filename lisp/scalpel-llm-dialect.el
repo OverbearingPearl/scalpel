@@ -7,6 +7,7 @@
 ;; SPDX-License-Identifier: Apache-2.0
 
 ;;; Commentary:
+
 ;; Backends differ in how their replies surface, not in how they are
 ;; sent: gptel already owns the wire protocol.  What varies is the
 ;; reply dialect -- tool-call markers a model leaks as plain text,

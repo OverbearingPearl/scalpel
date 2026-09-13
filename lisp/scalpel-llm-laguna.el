@@ -7,6 +7,7 @@
 ;; SPDX-License-Identifier: Apache-2.0
 
 ;;; Commentary:
+
 ;; Reply dialect for Laguna backends.  Laguna writes its answer in a
 ;; text calling convention of its own -- one `<tool_call>' block per
 ;; action, each holding a tool name and `<arg_key>'/`<arg_value>'
