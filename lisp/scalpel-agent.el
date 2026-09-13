@@ -25,6 +25,7 @@
 (require 'scalpel-llm)
 (require 'scalpel-llm-dialect)
 (require 'scalpel-llm-deepseek)
+(require 'scalpel-llm-laguna)
 (require 'scalpel-locate)
 (require 'scalpel-execute)
 (require 'scalpel-sandbox)
