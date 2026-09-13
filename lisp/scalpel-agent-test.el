@@ -59,6 +59,34 @@
         (with-current-buffer (find-file-noselect this-file)
           (should (string= (buffer-string) "(defun foo (x)\n  (+ x 2))\n")))))))
 
+(ert-deftest scalpel-agent-test-execute-action-create-separates-blocks ()
+  "A create action lands after its anchor with blank lines around it.
+One blank line separates it on each side.  The layout is applied by
+`scalpel-execute-insert-after' on disk, not negotiated through the
+prompt."
+  (scalpel-utils-test-with-temp-file ".el"
+    (with-temp-file this-file
+      (insert "(defun foo (x)\n  (+ x 1))\n\n(defun bar ()\n  nil)\n"))
+    (cl-letf (((symbol-function 'scalpel-llm-request-async)
+               (lambda (_prompt on-success _on-error &optional _system)
+                 (funcall on-success "(defun baz ()\n  t)"))))
+      (let (report)
+        (scalpel-agent-execute-action
+         (list :tool "create" :file this-file :symbol "baz"
+               :instruction "add baz" :after "foo")
+         (lambda (r) (setq report r))
+         (lambda (err) (ert-fail (plist-get err :message))))
+        (ert-info ((format "Report: %S" report))
+          (should (string-match "Created baz" report)))
+        (let ((on-disk (with-temp-buffer
+                         (insert-file-contents this-file)
+                         (buffer-string))))
+          (ert-info ((format "On disk:\n%S" on-disk))
+            (should (string= on-disk
+                             (concat "(defun foo (x)\n  (+ x 1))\n\n"
+                                     "(defun baz ()\n  t)\n\n"
+                                     "(defun bar ()\n  nil)\n")))))))))
+
 (ert-deftest scalpel-agent-test-execute-action-delete ()
   "A delete action drops the block, its blank line, and the buffer's state.
 The action settles synchronously -- no LLM request is involved -- and

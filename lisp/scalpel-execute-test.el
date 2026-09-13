@@ -98,6 +98,54 @@ instead of gaining a blank line between them."
     (ert-info ((format "Buffer:\n%S" (buffer-string)))
       (should (string= (buffer-string) "(defun b ())\n")))))
 
+(ert-deftest scalpel-execute-test-insert-after-separates-tight-neighbours ()
+  "An insertion between two tight definitions gains blank lines.
+It gets one blank line on each side, and never two."
+  (with-temp-buffer
+    (insert "(defun a ())\n(defun c ())\n")
+    (goto-char (point-min))
+    (let ((end (progn (search-forward "(defun a ())") (point))))
+      (scalpel-execute-insert-after end "(defun b ())"))
+    (ert-info ((format "Buffer:\n%S" (buffer-string)))
+      (should (string= (buffer-string)
+                       (concat "(defun a ())\n\n(defun b ())\n\n"
+                               "(defun c ())\n"))))))
+
+(ert-deftest scalpel-execute-test-insert-after-keeps-existing-blanks ()
+  "Blank lines already present at a join are kept, never doubled."
+  (with-temp-buffer
+    (insert "(defun a ())\n\n(defun c ())\n")
+    (goto-char (point-min))
+    (let ((end (progn (search-forward "(defun a ())") (point))))
+      (scalpel-execute-insert-after end "(defun b ())"))
+    (ert-info ((format "Buffer:\n%S" (buffer-string)))
+      (should (string= (buffer-string)
+                       (concat "(defun a ())\n\n(defun b ())\n\n"
+                               "(defun c ())\n"))))))
+
+(ert-deftest scalpel-execute-test-insert-after-at-buffer-end ()
+  "An insertion after the last definition still gets a blank line.
+The separating blank line is added and the insertion ends with a
+terminated line."
+  (with-temp-buffer
+    (insert "(defun a ())\n")
+    (goto-char (point-min))
+    (let ((end (progn (search-forward "(defun a ())") (point))))
+      (scalpel-execute-insert-after end "(defun b ())"))
+    (ert-info ((format "Buffer:\n%S" (buffer-string)))
+      (should (string= (buffer-string)
+                       "(defun a ())\n\n(defun b ())\n")))))
+
+(ert-deftest scalpel-execute-test-insert-after-refuses-unbalanced ()
+  "An unbalanced insertion is refused, as a replacement is."
+  (with-temp-buffer
+    (insert "(defun a ())\n")
+    (goto-char (point-min))
+    (let ((end (progn (search-forward "(defun a ())") (point))))
+      (should-error
+       (scalpel-execute-insert-after end "(defun b (")
+       :type 'user-error))))
+
 (provide 'scalpel-execute-test)
 
 ;;; scalpel-execute-test.el ends here

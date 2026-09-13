@@ -112,6 +112,56 @@ the survivor from.  Return nil."
           (when (= keep 1)
             (insert "\n")))))))
 
+(defun scalpel-execute--blank-line-p (pos)
+  "Return non-nil when the line at POS is blank.
+A blank line holds only whitespace.  POS at `point-max' is the end
+of the buffer, not a blank line."
+  (and (< pos (point-max))
+       (save-excursion
+         (goto-char pos)
+         (looking-at-p "[ \t]*$"))))
+
+(defun scalpel-execute-insert-after (end new-text)
+  "Insert NEW-TEXT on its own lines after the block ending at END.
+The insertion starts on the line following the anchor's last one
+and is separated from the anchor and from whatever follows by
+exactly one blank line whenever the touching lines are code; a
+blank line already present at a join is kept, never doubled.  The
+buffer is saved when it visits a file.  Signal `user-error' when
+NEW-TEXT is structurally unbalanced."
+  (unless (scalpel-execute--brackets-balanced-p new-text)
+    (user-error "Scalpel: replacement has unbalanced brackets; edit refused"))
+  (let ((inhibit-read-only t))
+    (goto-char end)
+    ;; The insertion begins on the line after the anchor's last one,
+    ;; even when the anchor's range stops short of its newline.
+    (unless (bolp) (forward-line 1))
+    ;; A blank line already separating the anchor from the insertion
+    ;; is kept: start below it.  Otherwise one is added when the
+    ;; anchor's last line is code.
+    (if (scalpel-execute--blank-line-p (point))
+        (forward-line 1)
+      (when (save-excursion (forward-line -1)
+                            (not (scalpel-execute--blank-line-p (point))))
+        (insert "\n")))
+    (insert new-text)
+    ;; The insertion owns its last line: terminate it when NEW-TEXT
+    ;; does not, so the following text keeps its own line.  The
+    ;; newline alone leaves point at the start of the next line; a
+    ;; `forward-line' here would skip over it.
+    (unless (bolp)
+      (insert "\n"))
+    ;; One blank line between the insertion and the next definition
+    ;; when both edges are code; an existing blank line is left alone.
+    ;; At `point-max' there is no following definition to separate
+    ;; the insertion from, so no blank line is added.
+    (when (and (< (point) (point-max))
+               (not (scalpel-execute--blank-line-p (point)))
+               (save-excursion (forward-line -1)
+                               (not (scalpel-execute--blank-line-p (point)))))
+      (insert "\n")))
+  (scalpel-execute--save))
+
 (defun scalpel-execute-delete (beg end)
   "Delete the block BEG..END and reconcile the blank lines around it.
 The line the block owns is deleted whole, and the blank lines the

@@ -718,6 +718,18 @@ region was modified while an LLM request was in flight."
       (scalpel-execute-replace (car range) (cdr range) new-text)
       (format "Edited %s in %s" symbol (buffer-name (current-buffer))))))
 
+(defun scalpel-agent--create-after-anchor (file symbol after expected-body new-text)
+  "Insert NEW-TEXT after the anchor AFTER in FILE, verified unchanged.
+SYMBOL names the definition being created and appears in the report
+only.  EXPECTED-BODY is the anchor text last seen; the region is
+re-verified before anything is applied.  The layout between the
+anchor, the new definition and what follows is reconciled by
+`scalpel-execute-insert-after', not by the planner."
+  (with-current-buffer (find-file-noselect file)
+    (let ((range (scalpel-agent--verified-range file after expected-body)))
+      (scalpel-execute-insert-after (cdr range) new-text)
+      (format "Created %s in %s" symbol (buffer-name (current-buffer))))))
+
 (defun scalpel-agent-edit (file symbol instruction on-success on-error)
   "Edit SYMBOL in FILE per INSTRUCTION, without blocking.
 ON-SUCCESS receives the report string.  ON-ERROR receives a plist
@@ -816,9 +828,8 @@ ON-SUCCESS receives the report string.  ON-ERROR receives a plist
                           (format "No change needed: %s in %s" symbol file)))
                 ((scalpel-locate-single-definition-p file new-text)
                  (funcall on-success
-                          (scalpel-agent--apply-if-unchanged
-                           file after anchor-body
-                           (concat anchor-body "\n" new-text))))
+                          (scalpel-agent--create-after-anchor
+                           file symbol after anchor-body new-text)))
                 (t
                  (funcall on-error
                           (list :type 'no-replacement
