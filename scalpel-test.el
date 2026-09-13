@@ -154,16 +154,23 @@ previous run's tests already deleted."
 
 (defun scalpel-test-run-internal ()
   "Run the suite in this Emacs.
-In batch mode, runs all tests and exits.  Interactively, runs tests
-with `ert' so results appear in the *ert* buffer."
-  (ert-delete-all-tests)
-  (scalpel-test--kill-temp-file-buffers)
-  (scalpel-test-reload-modules)
-  (scalpel-test--load-test-files)
-  (scalpel-test--kill-temp-file-buffers)
-  (if noninteractive
-      (ert-run-tests-batch-and-exit "scalpel-")
-    (ert "scalpel-")))
+In batch mode, runs all tests and exits.  Interactively, discards any
+existing ERT results buffer and then runs tests with `ert', so the
+results buffer is recreated with the invoking directory as its
+`default-directory'."
+  (let ((dir default-directory))
+    (ert-delete-all-tests)
+    (scalpel-test--kill-temp-file-buffers)
+    (scalpel-test-reload-modules)
+    (scalpel-test--load-test-files)
+    (scalpel-test--kill-temp-file-buffers)
+    (let ((default-directory dir))
+      (if noninteractive
+          (ert-run-tests-batch-and-exit "scalpel-")
+        ;; ERT's results buffer name is hard-coded as "*ert*".
+        (when (get-buffer "*ert*")
+          (kill-buffer "*ert*"))
+        (ert "scalpel-")))))
 
 (defun scalpel-test-run ()
   "Run every Scalpel ERT test.
