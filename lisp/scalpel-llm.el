@@ -74,11 +74,37 @@ Companion to `scalpel-llm--total-uploaded'.")
   "Return non-nil when MESSAGE indicates gptel needs an API key."
   (string-match-p "gptel-api-key.*is not valid" message))
 
+(defconst scalpel-llm--cjk-ranges
+  '((#x2E80 . #x9FFF)   ; CJK radicals, strokes, kana, unified ideographs
+    (#xF900 . #xFAFF)   ; CJK compatibility ideographs
+    (#x3000 . #x303F)   ; CJK punctuation
+    (#xFF00 . #xFF60))  ; fullwidth forms
+  "Code-point ranges counted as one token per character.
+Modern tokenizers (DeepSeek, GPT, Claude) spend roughly one token
+per CJK character, against roughly four ASCII characters per
+token, so a single characters-per-token ratio cannot serve both.")
+
+(defun scalpel-llm--cjk-char-p (char)
+  "Return non-nil when CHAR falls in a CJK code-point range."
+  (cl-some (lambda (range)
+             (and (>= char (car range)) (<= char (cdr range))))
+           scalpel-llm--cjk-ranges))
+
 (defun scalpel-llm--count-tokens (text)
   "Return an approximate token count for TEXT.
-Uses a 4-characters-per-token heuristic; accurate enough for
-status display."
-  (/ (length text) 4))
+ASCII and other non-CJK text uses the 4-characters-per-token
+heuristic; CJK characters are counted at one token per character,
+which is what modern tokenizers actually spend on them.  The
+previous single ratio priced Chinese text at a quarter of its real
+cost, so the status line and the token accounting under-reported
+every CJK-heavy prompt."
+  (let ((cjk 0)
+        (other 0))
+    (dolist (char (string-to-list text))
+      (if (scalpel-llm--cjk-char-p char)
+          (setq cjk (1+ cjk))
+        (setq other (1+ other))))
+    (+ cjk (ceiling (/ other 4.0)))))
 
 (defun scalpel-llm--reset-reasoning-buffer ()
   "Clear the reasoning buffer for a new request."

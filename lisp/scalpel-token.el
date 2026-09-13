@@ -8,8 +8,9 @@
 
 ;;; Commentary:
 ;; Per-round token accounting in a dedicated buffer.  Estimates use the
-;; same 4-characters-per-token heuristic as `scalpel-llm--count-tokens';
-;; they are cost estimates, not API usage reports.  Each round appends
+;; same heuristic as `scalpel-llm--count-tokens' (4 characters per
+;; ASCII token, one token per CJK character); they are cost estimates,
+;; not API usage reports.  Each round appends
 ;; one line naming the console, the round's up/down estimate, that
 ;; console's cumulative totals, the grand total across all consoles,
 ;; and a breakdown (system prompt, context files, history, instruction)
@@ -39,7 +40,7 @@
   (or (gethash console scalpel-token--console-totals) (list 0 0)))
 
 (defconst scalpel-token--header
-  "Scalpel token estimates (4 chars/token, not API usage).
+  "Scalpel token estimates (4 chars/token ASCII, 1 token/char CJK; not API usage).
 One line per round: time | console | round up/down | sys/ctx/hist/instr prompt makeup | console up/down | ALL up/down.")
 (defun scalpel-token--ensure-header ()
   "Ensure the token buffer carries its header text.
@@ -66,6 +67,8 @@ columns are dimmed and the ALL columns bolded, so visual weight
 matches the account hierarchy."
   (with-current-buffer (get-buffer-create scalpel-token-buffer-name)
     (scalpel-token--ensure-header)
+    ;; The header line above states the heuristic; keep it in sync with
+    ;; `scalpel-llm--count-tokens'.
     (let ((inhibit-read-only t)
           (ctot (scalpel-token--console-totals console)))
       (save-excursion

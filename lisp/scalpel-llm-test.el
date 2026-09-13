@@ -26,6 +26,20 @@ buffer behind."
   (should (scalpel-llm--api-key-error-p "‘gptel-api-key’ is not valid"))
   (should-not (scalpel-llm--api-key-error-p "Scalpel: LLM request idle for more than 30 seconds")))
 
+(ert-deftest scalpel-llm-test-count-tokens-prices-cjk-per-character ()
+  "CJK characters cost about one token each, not a quarter of one.
+Regression: the 4-characters-per-token heuristic priced Chinese
+text at a quarter of its real cost, so a prompt dominated by
+Chinese was under-reported fourfold."
+  (ert-info ("Input: 8 ASCII chars; expect 2 tokens")
+    (should (= (scalpel-llm--count-tokens "abcdefgh") 2)))
+  (ert-info ("Input: 8 CJK chars; expect 8 tokens, not 2")
+    (should (= (scalpel-llm--count-tokens "你好世界，测试。") 8)))
+  (ert-info ("Input: mixed; expect CJK per char plus ASCII per 4")
+    (should (= (scalpel-llm--count-tokens "你好abcd") 3)))
+  (ert-info ("Input: accented Latin is not CJK; expect the ASCII ratio")
+    (should (= (scalpel-llm--count-tokens "café") 1))))
+
 (ert-deftest scalpel-llm-test-token-counters-are-defined ()
   "The cumulative token counters must be defined at load time.
 Regression: `scalpel-llm-request-async' updates
