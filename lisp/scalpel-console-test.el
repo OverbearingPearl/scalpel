@@ -160,7 +160,14 @@ branch."
                      (lambda (_p on-success _on-error &optional _s)
                        (funcall on-success
                                 "[{\"tool\":\"reply\",\"text\":\"done\"}]"))))
-            (scalpel-console-open)
+            ;; Anchor the console to the temp directory: `open' uses the
+            ;; caller's `default-directory' as its root, and the test's
+            ;; own buffer would anchor it to the package source tree --
+            ;; a user session, which the kill confirmation protects.
+            (let ((default-directory
+                   (file-name-as-directory
+                    (expand-file-name temporary-file-directory))))
+              (scalpel-console-open))
             (setq buf (current-buffer))
             (with-current-buffer buf
               ;; The session context is buffer-local to the console, so
@@ -196,7 +203,12 @@ branch."
                        (lambda () nil))
                       ((symbol-function 'read-file-name)
                        (lambda (&rest _) this-file)))
-              (scalpel-console-open)
+              ;; Anchor the console to the temp directory, for the same
+              ;; reason as in `...-open-shows-context' above.
+              (let ((default-directory
+                     (file-name-as-directory
+                      (expand-file-name temporary-file-directory))))
+                (scalpel-console-open))
               (setq buf (current-buffer))
               (with-current-buffer buf
                 (scalpel-console-add-file))

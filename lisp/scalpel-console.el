@@ -207,6 +207,68 @@ or signal a `user-error' when there is none."
       (or found
           (user-error "Scalpel: no console for %s; run `scalpel-open'" dir))))))
 
+(defun scalpel-console--confirm-kill ()
+  "Ask the user before killing a Scalpel console buffer.
+The buffer is the only record of the conversation, so killing it
+destroys the session irrecoverably; every killer -- user command,
+`kill-matching-buffer', a package -- passes through this query.
+Two cases skip the question because there is no session record to
+lose: batch runs have no user to answer, and a console rooted under
+the variable `temporary-file-directory' is a test artifact, not a
+user session -- without this exemption an in-process test run
+blocks on the prompt."
+  (or noninteractive
+      (null scalpel-console--root)
+      (string-prefix-p
+       (file-name-as-directory
+        (expand-file-name temporary-file-directory))
+       (expand-file-name scalpel-console--root))
+      (yes-or-no-p
+       (format "Kill Scalpel console %s?  Its conversation record will be lost? "
+               (buffer-name)))))
+
+(defun scalpel-console--session-snapshot ()
+  "Return the session state for every live console buffer.
+A console's session state is held in buffer-local variables that die
+when the module is unloaded, while the buffer text survives.  This is
+why these values are captured before an unload and restored after the
+reload.  The result is consumed by `scalpel-console--session-restore'."
+  (let (acc)
+    (dolist (buffer (buffer-list))
+      (with-current-buffer buffer
+        (when (bound-and-true-p scalpel-console--root)
+          (push (list (buffer-name)
+                      scalpel-console--root
+                      (when (boundp 'scalpel-agent--context-files)
+                        scalpel-agent--context-files)
+                      (when (boundp 'scalpel-console--context-baseline)
+                        scalpel-console--context-baseline))
+                acc))))
+    (nreverse acc)))
+
+(defun scalpel-console--session-restore (snapshot)
+  "Put a console's session back after the modules were reloaded.
+SNAPSHOT is the list produced by `scalpel-console--session-snapshot'.
+The conversation never left the buffer, only the variables that make
+the buffer recognizable as a console were lost, so re-installing them
+is enough to carry the session on.  Buffers killed while the modules
+were reloaded are skipped."
+  (dolist (entry snapshot)
+    (let* ((buffer-name (nth 0 entry))
+           (root (nth 1 entry))
+           (context-files (nth 2 entry))
+           (context-baseline (nth 3 entry))
+           (buffer (get-buffer buffer-name)))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer
+          (unless (derived-mode-p 'scalpel-console-mode)
+            (setq buffer-read-only nil)
+            (scalpel-console-mode))
+          (setq-local scalpel-console--root root)
+          (setq-local default-directory root)
+          (setq-local scalpel-agent--context-files context-files)
+          (setq-local scalpel-console--context-baseline context-baseline))))))
+
 (defun scalpel-console--tag-change (pos)
   "Return the next position after POS where the console tags change.
 POS must be below `point-max'.  Tags are `scalpel-console-role'
@@ -334,7 +396,11 @@ also anchors the buffer to a root directory."
               (append yank-excluded-properties
                       '(scalpel-console-role scalpel-console-output
                         scalpel-console-collapsed scalpel-console-consumed-body
-                        display rear-nonsticky))))
+                        display rear-nonsticky)))
+  ;; Buffer-local, so only console buffers ask; every killer of this
+  ;; buffer goes through the query.
+  (add-hook 'kill-buffer-query-functions
+            #'scalpel-console--confirm-kill nil t))
 
 (defun scalpel-console--insert-tagged (text role)
   "Insert TEXT at point tagged with ROLE in `scalpel-console-role'.
@@ -1089,6 +1155,17 @@ the agent can access its own earlier replies and shell output."
       (funcall scalpel-llm--cancel-current)
     (ding)
     (message "Scalpel: no request in flight to cancel.")))
+
+(defun scalpel-console-unload-function ()
+  "Suppress `unload-feature's default cleanup for this module.
+The default cleanup kills every buffer whose major mode is defined
+here, which would destroy live console sessions; a reload that
+follows redefines every function and variable anyway, so the
+cleanup buys nothing and costs the session.  Returning non-nil
+tells `unload-feature' to skip its default work.  Hooks registered
+by this module are none, so nothing needs manual removal; revisit
+this if one is added."
+  t)
 
 (provide 'scalpel-console)
 

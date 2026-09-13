@@ -12,7 +12,7 @@
 ;;; Code:
 
 (defconst scalpel-locate-elisp--defining-forms
-  '(defun defmacro defvar defcustom defconst)
+  '(defun defmacro defvar defvar-local defcustom defconst)
   "Top-level defining forms recognised as one complete definition.
 Structural contract shared by the definition regexes below and by
 `scalpel-locate-elisp--single-definition-p'.")
