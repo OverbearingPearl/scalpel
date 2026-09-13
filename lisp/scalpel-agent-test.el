@@ -304,8 +304,8 @@ never ran the round that would have read it back."
 
 (ert-deftest scalpel-agent-test-context-omits-symbols-without-provider ()
   "Files without a locator provider render without a SYMBOLS line."
-  (let ((scalpel-agent--context-files '("/tmp/notes.md")))
-    (should (string= (scalpel-agent-context) "FILE: /tmp/notes.md"))))
+  (let ((scalpel-agent--context-files '("/tmp/notes.unknown")))
+    (should (string= (scalpel-agent-context) "FILE: /tmp/notes.unknown"))))
 
 (ert-deftest scalpel-agent-test-context-remove-by-directory-prefix ()
   "Removing a directory removes all files beneath it from the context."

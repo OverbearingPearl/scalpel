@@ -171,6 +171,7 @@ Components live in focused modules:
 - `scalpel-agent` – LLM planning integration and structured action parser
 - `scalpel-locate` – locator dispatch; resolves actions to byte ranges via per-language providers
 - `scalpel-locate-elisp` – built-in structural locator provider for Emacs Lisp
+- `scalpel-locate-markdown` – built-in structural locator provider for Markdown (heading sections)
 - `scalpel-execute` – boundary-locked edit application and deletion,
   written to disk as applied
 - `scalpel-sandbox` – command sandbox for shell actions (`bubblewrap` on Linux, `sandbox-exec` on macOS)
@@ -226,6 +227,7 @@ the Emacs point to that block; point is the strongest coordinate Scalpel knows.
 | Language | Primary Locator | Fallback | Supported Granularity |
 | --- | --- | --- | --- |
 | Emacs Lisp | built-in `syntax-ppss` + `beginning-of-defun` | none | function/macro/defvar blocks |
+| Markdown | built-in structural scan (ATX headings) | none | heading sections |
 | Rust | rust-analyzer (LSP) | tree-sitter | functions, methods, impl items |
 | TypeScript / JS | tsserver (LSP) | tree-sitter | function/class/module blocks |
 | Go | gopls (LSP) | tree-sitter | funcs, types |
@@ -380,8 +382,8 @@ Inside the console:
 Scalpel is in active, deliberately small MVP stages.
 
 **Currently implemented**
-- Emacs Lisp structural location, plus the provider dispatch API
-  (`scalpel-locate` and `scalpel-locate-elisp`)
+- Emacs Lisp and Markdown structural location, plus the provider dispatch API
+  (`scalpel-locate`, `scalpel-locate-elisp`, and `scalpel-locate-markdown`)
 - The console and the multi-round agent loop: context management, shell-output
   continuation, and conversation replay
 - Structured action planning and parsing (`edit`, `create`, `delete`, `read`,

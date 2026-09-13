@@ -13,6 +13,7 @@
 
 (require 'cl-lib)
 (require 'scalpel-locate-elisp)
+(require 'scalpel-locate-markdown)
 
 (defvar scalpel-locate-providers nil
   "Alist of (REGEXP . PROVIDER-PLIST) for registered locator providers.
@@ -81,6 +82,13 @@ registered for FILE."
  (list :locate #'scalpel-locate-elisp-range
        :list-symbols #'scalpel-locate-elisp-list-symbols
        :single-definition-p #'scalpel-locate-elisp--single-definition-p))
+
+;; Built-in Markdown provider.
+(scalpel-locate-register-provider
+ "\\.md\\'"
+ (list :locate #'scalpel-locate-markdown-range
+       :list-symbols #'scalpel-locate-markdown-list-symbols
+       :single-definition-p #'scalpel-locate-markdown--single-definition-p))
 
 (provide 'scalpel-locate)
 
