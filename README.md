@@ -279,8 +279,7 @@ First, install and configure `gptel`. A minimal setup using `use-package` is:
           :endpoint "/chat/completions"
           :stream t
           :key (auth-source-pick-first-password :host "api.deepseek.com")
-          :models '("deepseek-v4-flash")
-          :request-params '(:extra_body (:thinking (:type "disabled")))))
+          :models '("deepseek-v4-flash")))
   )
 ```
 
