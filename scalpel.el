@@ -51,10 +51,16 @@
   :group 'tools)
 
 ;;;###autoload
-(defun scalpel-open ()
-  "Open the Scalpel agent console."
-  (interactive)
-  (scalpel-console-open))
+(defun scalpel-open (root)
+  "Open the Scalpel agent console for ROOT.
+Prompt for the directory, defaulting to the current
+`default-directory'; the console is anchored there."
+  (interactive
+   (list (read-directory-name "Scalpel console root: "
+                              default-directory nil t)))
+  (let ((default-directory (file-name-as-directory
+                            (expand-file-name root))))
+    (scalpel-console-open)))
 
 (defalias 'scalpel-set-backend #'scalpel-llm-select-backend
   "Interactively switch the gptel backend used for future Scalpel requests.")
