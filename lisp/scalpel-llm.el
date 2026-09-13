@@ -112,10 +112,20 @@ every CJK-heavy prompt."
     (erase-buffer)))
 
 (defun scalpel-llm--append-reasoning (chunk)
-  "Append CHUNK to the reasoning buffer."
+  "Append CHUNK to the reasoning buffer.
+Follow the end of the buffer only when point is already there, so
+that scrolling back through earlier output is not interrupted by
+new chunks."
   (with-current-buffer (get-buffer-create scalpel-llm-reasoning-buffer-name)
-    (goto-char (point-max))
-    (insert chunk)))
+    (let ((follow (or (null (get-buffer-window (current-buffer) t))
+                      (eobp))))
+      (if follow
+          (progn
+            (goto-char (point-max))
+            (insert chunk))
+        (save-excursion
+          (goto-char (point-max))
+          (insert chunk))))))
 
 (defun scalpel-llm-request-async (prompt on-success on-error &optional system)
   "Send PROMPT to the configured gptel backend without blocking.
