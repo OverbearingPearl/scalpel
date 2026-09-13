@@ -99,6 +99,7 @@ late response would corrupt the next request."
     (let ((scalpel-llm-timeout 0.2)
           (gptel-backend (scalpel-llm-test--mock-backend))
           saved-callback
+          waited
           error)
       (cl-letf (((symbol-function 'gptel-request)
                  (lambda (_prompt &rest args)
@@ -109,12 +110,20 @@ late response would corrupt the next request."
          (lambda (_response) (ert-fail "a silent backend must not succeed"))
          (lambda (err) (setq error err)))
         ;; The timer runs from the event loop, not from the request, so
-        ;; this waits for it instead of calling it.  The deadline keeps a
-        ;; timer that never fires from hanging.
-        (let ((deadline (+ (float-time) 2)))
+        ;; this waits for it instead of calling it.  The wait uses
+        ;; `sleep-for', not `sit-for': `sit-for' returns as soon as input
+        ;; is pending, and an interactive session has input queued while a
+        ;; test runs, so the loop could spend its whole deadline without
+        ;; ever letting the idle timer become due -- a batch run, with
+        ;; nothing queued, never showed it.  The deadline itself only
+        ;; stops a timer that never fires from hanging the suite.
+        (let ((started (float-time))
+              (deadline (+ (float-time) 10)))
           (while (and (null error) (< (float-time) deadline))
-            (sit-for 0.05))))
-      (should (eq (plist-get error :type) 'idle))
+            (sleep-for 0.05))
+          (setq waited (- (float-time) started))))
+      (ert-info ((format "Waited %.2fs; error: %S" waited error))
+        (should (eq (plist-get error :type) 'idle)))
       (should saved-callback)
       (let ((tokens scalpel-llm--tokens-received))
         (funcall saved-callback "late chunk" nil)

@@ -1547,7 +1547,9 @@ not tell that resending the instruction was the whole fix."
             (ert-info ((format "Buffer:\n%S" (buffer-string)))
               (should (string-match-p "Scalpel planner error" (buffer-string)))
               (should (string-match-p "missing required field" (buffer-string)))
-              (should (string-match-p "scalpel-console-repeat" (buffer-string)))
+              (should (string-match-p
+                       (regexp-quote scalpel-console--retry-advice)
+                       (buffer-string)))
               ;; The failure stays in the conversation: it is about the
               ;; planner, not about Scalpel's own boundary.
               (should (string-match-p
@@ -1555,6 +1557,38 @@ not tell that resending the instruction was the whole fix."
                        (scalpel-console--history))))))
       (scalpel-utils-test-kill-buffer (buffer-name buf)))))
 
+(ert-deftest scalpel-console-test-tool-call-advice-names-the-backend-switch ()
+  "A reply in tool-call syntax is answered with the backend switch.
+Regression: this failure was met with the same retry advice as a
+truncated or malformed reply, so a user whose backend reproduces
+the reply verbatim had no exit from the loop."
+  (let ((scalpel-agent--context-files nil)
+        (buf (scalpel-console-test--new-console-buffer)))
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'scalpel-llm-request-async)
+                     (lambda (_prompt on-success _on-error &optional _system)
+                       (funcall on-success
+                                (concat "<tool_call>shell<arg_key>command"
+                                        "</arg_key><arg_value>ls</arg_value>"
+                                        "</tool_call>")))))
+            (with-current-buffer buf
+              (erase-buffer)
+              (insert "look around\n")
+              (goto-char (point-min))
+              (scalpel-console-send-line)))
+          (with-current-buffer buf
+            (ert-info ((format "Buffer:\n%S" (buffer-string)))
+              (should (string-match-p "Scalpel planner error"
+                                      (buffer-string)))
+              (should (string-match-p
+                       (regexp-quote scalpel-console--tool-call-advice)
+                       (buffer-string)))
+              ;; The advice must name the binding that switches
+              ;; backends, not a key that happens to exist.
+              (should (string-match-p "C-c C-b"
+                                      scalpel-console--tool-call-advice)))))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
 (ert-deftest scalpel-console-test-repeat-resends-last-instruction ()
   "Repeat resubmits the last instruction through the ordinary send path.
 Regression: after a planner-output failure the user had to retype

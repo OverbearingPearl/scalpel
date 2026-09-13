@@ -30,16 +30,17 @@ instead of the JSON action array.")
 
 (defun scalpel-llm-deepseek-parse-reply (raw)
   "Parse a DeepSeek raw reply RAW, refusing DSML tool-call syntax.
-Signal `user-error' when RAW carries the DSML delimiters: nothing
-was executed, and the error names the behavior so the user can
-switch backend or rephrase.  Otherwise delegate to the default
-parser."
+Signal `scalpel-llm-dialect-tool-call-error' when RAW carries the
+DSML delimiters: nothing was executed, and the type tells the
+console that switching backend, not retrying, is the remedy.
+Otherwise delegate to the default parser."
   (when (string-match-p scalpel-llm-deepseek--dsml-regexp raw)
-    (user-error
-     (concat "Scalpel: DeepSeek planner emitted DSML tool-call syntax "
-             "instead of the JSON action array; nothing was executed.  "
-             "Reply was: %s")
-     (scalpel-llm-dialect--visible-raw raw)))
+    (signal 'scalpel-llm-dialect-tool-call-error
+            (list
+             (format (concat "Scalpel: DeepSeek planner emitted DSML "
+                             "tool-call syntax instead of the JSON action "
+                             "array; nothing was executed.  Reply was: %s")
+                     (scalpel-llm-dialect--visible-raw raw)))))
   (scalpel-llm-dialect--default-parse raw))
 
 (scalpel-llm-dialect-register

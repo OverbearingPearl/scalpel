@@ -140,17 +140,42 @@ delimiter must follow the name, so `<tool_call>' matches while
 `tool_call' does not match the prefix of `<tool_calls>': each
 spelling needs its own entry.")
 
+(define-error 'scalpel-llm-dialect-tool-call-error
+  "Scalpel: planner used tool-call syntax instead of the JSON action array"
+  'user-error)
+
+(defun scalpel-llm-dialect-error-message (err)
+  "Return the message carried by the dialect condition ERR.
+ERR is a `scalpel-llm-dialect-tool-call-error' condition value, as
+`condition-case' binds it; its whole message is that condition's
+first data element.  That element is read directly rather than
+through `error-message-string', which renders a condition defined
+by `define-error' as \"MESSAGE: DATA\" with DATA printed by `%S':
+the sentence would come back doubled, and a reply that
+`scalpel-llm-dialect--visible-raw' escaped on purpose would be
+re-escaped into a form the user cannot read."
+  (cadr err))
+
 (defun scalpel-llm-dialect--parse-error (raw)
   "Signal the `user-error' describing why RAW failed to parse.
 Distinguishes a planner reply that used tool-call syntax, one that
 was cut off before its JSON array closed, and one that was simply
-not valid JSON.  RAW is the reply as received."
+not valid JSON.  RAW is the reply as received.
+
+Tool-call syntax signals `scalpel-llm-dialect-tool-call-error', a
+`user-error' subtype, so a caller can tell it from a reply that
+merely failed to parse: that one may come back whole on a retry,
+while a reply written in another calling convention is the model's
+own habit and was observed to repeat three times in a row on one
+backend.  The other two branches signal plain `user-error'."
   (cond
    ((string-match-p scalpel-llm-dialect--tool-call-regexp raw)
-    (user-error
-     (concat "Scalpel: planner used tool-call syntax instead of the JSON "
-             "action array; nothing was executed.  Reply was: %s")
-     (scalpel-llm-dialect--visible-raw raw)))
+    (signal 'scalpel-llm-dialect-tool-call-error
+            (list
+             (format (concat "Scalpel: planner used tool-call syntax "
+                             "instead of the JSON action array; nothing was "
+                             "executed.  Reply was: %s")
+                     (scalpel-llm-dialect--visible-raw raw)))))
    ((scalpel-llm-dialect--json-unterminated-p raw)
     (user-error
      (concat "Scalpel: planner reply was cut off before its JSON array "

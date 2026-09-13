@@ -753,10 +753,14 @@ state of its own: everything the LLM may rely on arrives here."
 HISTORY is the conversation text recorded before INSTRUCTION, or
 nil.  ON-SUCCESS receives the projected action list.  ON-ERROR
 receives a plist (:type SYMBOL :message STRING): `parse' when the
-reply does not yield a valid action array, otherwise the type
-forwarded by `scalpel-llm-request-async'.  Only the parse step is
-guarded, so an error raised inside ON-SUCCESS escapes to the caller
-rather than being re-framed as a planner error."
+reply does not yield a valid action array, `tool-call' when it
+used a tool-calling convention instead (see
+`scalpel-llm-dialect--parse-error', whose message is read through
+`scalpel-llm-dialect-error-message'), otherwise the type forwarded
+by `scalpel-llm-request-async'.  The two parse types are separate
+because the console advises differently on each.  Only the parse
+step is guarded, so an error raised inside ON-SUCCESS escapes to
+the caller rather than being re-framed as a planner error."
   (scalpel-llm-request-async
    (scalpel-agent--prompt instruction history)
    (lambda (raw)
@@ -765,9 +769,20 @@ rather than being re-framed as a planner error."
                                 (mapcar #'scalpel-agent--validate-action
                                         (scalpel-llm-dialect-parse raw))))
                      (error
-                      (funcall on-error
-                               (list :type 'parse
-                                     :message (error-message-string err)))
+                      (let* ((tool-call
+                              (eq (car err)
+                                  'scalpel-llm-dialect-tool-call-error))
+                             ;; A tool-call condition carries its whole
+                             ;; message as its data, so it is read
+                             ;; verbatim: `error-message-string' would
+                             ;; prefix the condition's class sentence and
+                             ;; re-escape the reply.
+                             (text (if tool-call
+                                       (scalpel-llm-dialect-error-message err)
+                                     (error-message-string err))))
+                        (funcall on-error
+                                 (list :type (if tool-call 'tool-call 'parse)
+                                       :message text)))
                       nil))))
        (when parsed
          (funcall on-success (cdr parsed)))))

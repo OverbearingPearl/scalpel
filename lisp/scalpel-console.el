@@ -363,12 +363,36 @@ caller can delete them without invalidating earlier ones."
   "Keymap used in Scalpel console buffers.")
 
 (defconst scalpel-console--planner-error-types
-  '(parse malformed unknown-tool no-replacement)
+  '(parse tool-call malformed unknown-tool no-replacement)
   "Error types caused by the planner's reply, not by Scalpel or the user.
 A round that fails with one of these did not run anything: the
-model's output broke the action contract.  The console marks them
-with a distinct header so the user can tell at a glance that a
-plain retry is the right move.")
+model's output broke the action contract, so the console marks them
+with a distinct header.  Which advice sits under that header
+depends on the type: `tool-call' means the model answered in
+another calling convention, which no retry of the same request on
+the same backend fixes, while `parse' may come back whole on a
+second try.")
+
+(defconst scalpel-console--retry-advice
+  (concat "(the model's reply was not usable; nothing was executed.  "
+          "Press C-c C-e or M-x scalpel-console-repeat to retry)")
+  "Advice shown under the header of an ordinary planner failure.
+Structural contract shared by `scalpel-console--run-round', which
+prints it, and the test that pins it, so the key it names stays the
+key `scalpel-console-mode-map' actually binds.")
+
+(defconst scalpel-console--tool-call-advice
+  (concat "(the model answered in a tool-calling convention Scalpel does "
+          "not parse, so nothing was executed.  A backend that answers "
+          "this way tends to answer this way again, so retrying the same "
+          "request rarely helps: switch the backend with C-c C-b, or "
+          "rephrase.  To try again anyway: C-c C-e)")
+  "Advice shown under the header when the planner used tool-call syntax.
+Separate from `scalpel-console--retry-advice' because the two
+failures differ in what the user can do.  This one names the
+backend switch, and says \"tends to\" rather than \"will\" on
+purpose: the repetition is an observation from one backend on one
+task shape, not a property of every model that leaks this syntax.")
 
 (defvar-local scalpel-console--last-instruction nil
   "The instruction this console last sent, for `scalpel-console-repeat'.
@@ -996,15 +1020,15 @@ ON-COMPLETE, so it is never left pointing at a dead buffer."
                      (scalpel-console--insert-tagged
                       (if (scalpel-console--planner-error-p err)
                           ;; A planner-output failure ran nothing, so
-                          ;; the header tells the user a retry is the
-                          ;; whole remedy, and names the repeat key.
-                          (format (concat "Scalpel planner error: %s\n"
-                                          "(the model's reply was not "
-                                          "usable; nothing was executed.  "
-                                          "Press C-c C-e or M-x "
-                                          "scalpel-console-repeat to "
-                                          "retry)\n\n")
-                                  (plist-get err :message))
+                          ;; the header names the model as the part that
+                          ;; failed and the advice says what helps: a
+                          ;; retry for a malformed reply, a backend
+                          ;; switch for one written as a tool call.
+                          (format "Scalpel planner error: %s\n%s\n\n"
+                                  (plist-get err :message)
+                                  (if (eq (plist-get err :type) 'tool-call)
+                                      scalpel-console--tool-call-advice
+                                    scalpel-console--retry-advice))
                         (format "Scalpel error: %s\n\n"
                                 (plist-get err :message)))
                       'assistant))

@@ -152,6 +152,42 @@ the user hunting for a JSON syntax error that did not exist."
         (should-not (string-match-p "invalid JSON"
                                     (error-message-string err)))))))
 
+(ert-deftest scalpel-llm-dialect-test-tool-call-error-keeps-the-reply-visible ()
+  "The tool-call error carries its own type and still quotes the reply.
+Regression: splitting the type out of the plain `user-error' is what
+lets the console change its advice, and the message must survive
+that change -- the reply is the only evidence the user has of what
+the model did instead of planning.  The message is read through
+`scalpel-llm-dialect-error-message', because `error-message-string'
+renders a `define-error' condition as \"class: data\", doubling the
+sentence and re-escaping the reply; the literal reply compared
+below is what fails if that renderer is used again."
+  (let ((raw (concat "<tool_call>shell<arg_key>command</arg_key>"
+                     "<arg_value>ls</arg_value></tool_call>")))
+    (let ((err (condition-case e
+                   (progn (scalpel-llm-dialect--default-parse raw) nil)
+                 (scalpel-llm-dialect-tool-call-error e))))
+      (ert-info ((format "Error: %S" err))
+        (should err)
+        (should (eq (car err) 'scalpel-llm-dialect-tool-call-error))
+        (let ((message (scalpel-llm-dialect-error-message err)))
+          (ert-info ((format "Message: %S" message))
+            (should (string-match-p "tool-call syntax" message))
+            (should (string-match-p
+                     (regexp-quote (scalpel-llm-dialect--visible-raw raw))
+                     message))))))))
+
+(ert-deftest scalpel-llm-dialect-test-tool-call-type-is-a-user-error ()
+  "The tool-call condition stays a `user-error'.
+Regression: the console handler and its tests catch a parse failure
+as `user-error'; a type that stopped deriving from it would slip
+past the console's error handler and surface as a backtrace."
+  (should (memq 'user-error
+                (get 'scalpel-llm-dialect-tool-call-error
+                     'error-conditions)))
+  (should-error (scalpel-llm-dialect--parse-error "<tool_call>x</tool_call>")
+                :type 'user-error))
+
 (ert-deftest scalpel-llm-dialect-test-tool-call-detection-covers-every-tag ()
   "Every registered tool-call tag makes the reply fail as tool-call syntax.
 The list is the contract: a dialect added to it is detected with no
