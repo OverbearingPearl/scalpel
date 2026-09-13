@@ -337,6 +337,7 @@ Inside the console:
 - `C-c C-d` – remove a file or directory from the context
 - `C-c C-r` – clear the context
 - `C-c C-f` – forget the conversation; keeps the context files
+- `C-c C-e` – repeat the previous instruction verbatim (after a planner-output failure)
 - `M-x scalpel-token-open` – show per-round token accounting (round, per-console and grand totals)
 - `M-x scalpel-token-reset` – clear the token accounting
 - `M-x scalpel-history` – show previous Scalpel sessions

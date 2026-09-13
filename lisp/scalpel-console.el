@@ -245,9 +245,22 @@ caller can delete them without invalidating earlier ones."
     (define-key map (kbd "C-c C-d") #'scalpel-console-remove-file)
     (define-key map (kbd "C-c C-r") #'scalpel-console-reset-context)
     (define-key map (kbd "C-c C-f") #'scalpel-console-forget-history)
+    (define-key map (kbd "C-c C-e") #'scalpel-console-repeat)
     (define-key map (kbd "C-c C-o") #'scalpel-console-toggle-output)
     map)
   "Keymap used in Scalpel console buffers.")
+
+(defconst scalpel-console--planner-error-types
+  '(parse malformed unknown-tool no-replacement)
+  "Error types caused by the planner's reply, not by Scalpel or the user.
+A round that fails with one of these did not run anything: the
+model's output broke the action contract.  The console marks them
+with a distinct header so the user can tell at a glance that a
+plain retry is the right move.")
+
+(defvar-local scalpel-console--last-instruction nil
+  "The instruction this console last sent, for `scalpel-console-repeat'.
+Buffer-local: each console session repeats its own last instruction.")
 
 (defvar-local scalpel-console--busy nil
   "Non-nil while an agent request is in flight for this console.
@@ -865,7 +878,19 @@ ON-COMPLETE, so it is never left pointing at a dead buffer."
                       (format "Scalpel error: %s" (plist-get err :message)))
                    (let ((inhibit-read-only t))
                      (scalpel-console--insert-tagged
-                      (format "Scalpel error: %s\n\n" (plist-get err :message))
+                      (if (scalpel-console--planner-error-p err)
+                          ;; A planner-output failure ran nothing, so
+                          ;; the header tells the user a retry is the
+                          ;; whole remedy, and names the repeat key.
+                          (format (concat "Scalpel planner error: %s\n"
+                                          "(the model's reply was not "
+                                          "usable; nothing was executed.  "
+                                          "Press C-c C-e or M-x "
+                                          "scalpel-console-repeat to "
+                                          "retry)\n\n")
+                                  (plist-get err :message))
+                        (format "Scalpel error: %s\n\n"
+                                (plist-get err :message)))
                       'assistant))
                    ;; An error turn is a conversation turn too: it becomes the
                    ;; newest assistant turn, so the report before it has to be
@@ -988,6 +1013,26 @@ point, so a second RET during a round is refused."
                   (setq scalpel-console--busy nil))))))))
       (run-next))))
 
+(defun scalpel-console--planner-error-p (err)
+  "Return non-nil when ERR names a planner-output failure.
+Such a round executed nothing and failed because the model's reply
+did not follow the action contract, so retrying the same
+instruction is the natural next step."
+  (memq (plist-get err :type) scalpel-console--planner-error-types))
+
+(defun scalpel-console-repeat ()
+  "Re-send the previous instruction without retyping it.
+The instruction is inserted as pending input and sent through the
+ordinary send path, so the conversation, the context and the busy
+guard all behave exactly as if the user had typed it again."
+  (interactive)
+  (with-current-buffer (scalpel-console--target-buffer)
+    (unless scalpel-console--last-instruction
+      (user-error "Scalpel: no previous instruction to repeat"))
+    (goto-char (point-max))
+    (insert scalpel-console--last-instruction "\n")
+    (scalpel-console-send-line)))
+
 (defun scalpel-console--busy-p ()
   "Return non-nil when the target console has a request in flight.
 `scalpel-console--busy' is buffer-local to the console, so it has
@@ -1022,6 +1067,9 @@ the agent can access its own earlier replies and shell output."
             (message "Scalpel: nothing to send.")
           ;; Read the conversation before this instruction joins it.
           (let ((history (scalpel-console--history)))
+            ;; Remember the instruction so `scalpel-console-repeat' can
+            ;; resubmit it verbatim after a planner-output failure.
+            (setq scalpel-console--last-instruction instr)
             ;; Rewrite the typed input into the logged user message, so the
             ;; instruction is not shown twice (once raw, once prefixed).
             ;; Regions are deleted back to front so positions stay valid.

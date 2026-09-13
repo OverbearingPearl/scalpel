@@ -1447,7 +1447,7 @@ while the planner already saw the error as the newest turn."
               (should (eq (get-text-property (match-beginning 0) 'face)
                           'scalpel-console-consumed-body-face))
               (goto-char (point-min))
-              (should (search-forward "Scalpel error: Bad JSON" nil t))
+              (should (search-forward "Scalpel planner error: Bad JSON" nil t))
               ;; The error turn holds no fenced body, so nothing is
               ;; dropped from it and it stays unmarked.
               (should-not (get-text-property (match-beginning 0) 'face)))))
@@ -1504,6 +1504,78 @@ while the planner already saw the error as the newest turn."
             (scalpel-console-remove-file))
           (should (cl-some (lambda (m) (string-match-p "context is empty" m))
                            notices)))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
+
+(ert-deftest scalpel-console-test-planner-error-gets-retry-header ()
+  "A planner-output failure is headed so a retry is the obvious step.
+Regression: a malformed action arrived as a generic \"Scalpel
+error:\", indistinguishable from a Scalpel bug, so the user could
+not tell that resending the instruction was the whole fix."
+  (let ((scalpel-agent--context-files nil)
+        (buf (scalpel-console-test--new-console-buffer)))
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'scalpel-llm-request-async)
+                     (lambda (_prompt on-success _on-error &optional _system)
+                       (funcall on-success
+                                "[{\"tool\":\"shell\",\"command\":\"ls\"}]"))))
+            (with-current-buffer buf
+              (erase-buffer)
+              (insert "look around\n")
+              (goto-char (point-min))
+              (scalpel-console-send-line)))
+          (with-current-buffer buf
+            (ert-info ((format "Buffer:\n%S" (buffer-string)))
+              (should (string-match-p "Scalpel planner error" (buffer-string)))
+              (should (string-match-p "missing required field" (buffer-string)))
+              (should (string-match-p "scalpel-console-repeat" (buffer-string)))
+              ;; The failure stays in the conversation: it is about the
+              ;; planner, not about Scalpel's own boundary.
+              (should (string-match-p
+                       "planner error"
+                       (scalpel-console--history))))))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
+
+(ert-deftest scalpel-console-test-repeat-resends-last-instruction ()
+  "Repeat resubmits the last instruction through the ordinary send path.
+Regression: after a planner-output failure the user had to retype
+the whole instruction by hand to try again."
+  (let ((scalpel-agent--context-files nil)
+        (buf (scalpel-console-test--new-console-buffer))
+        (prompts nil))
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'scalpel-llm-request-async)
+                     (lambda (prompt on-success _on-error &optional _system)
+                       (push prompt prompts)
+                       (funcall on-success
+                                "[{\"tool\":\"reply\",\"text\":\"done\"}]"))))
+            (with-current-buffer buf
+              (erase-buffer)
+              (insert "first instruction\n")
+              (goto-char (point-min))
+              (scalpel-console-send-line)
+              (scalpel-console-repeat)))
+          (ert-info ((format "Prompts: %d" (length prompts)))
+            (should (= (length prompts) 2))
+            (should (string-suffix-p "User instruction:\nfirst instruction"
+                                     (car prompts))))
+          (with-current-buffer buf
+            (ert-info ((format "Buffer:\n%S" (buffer-string)))
+              ;; The repeated turn is recorded like a typed one.
+              (should (= (how-many "User: first instruction"
+                                   (point-min) (point-max))
+                         2))
+              (should (string-match-p "Scalpel: done" (buffer-string))))))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
+
+(ert-deftest scalpel-console-test-repeat-without-history-signals ()
+  "Repeating with no previous instruction fails loudly."
+  (let ((buf (scalpel-console-test--new-console-buffer)))
+    (unwind-protect
+        (with-current-buffer buf
+          (setq scalpel-console--last-instruction nil)
+          (should-error (scalpel-console-repeat) :type 'user-error))
       (scalpel-utils-test-kill-buffer (buffer-name buf)))))
 
 (provide 'scalpel-console-test)
