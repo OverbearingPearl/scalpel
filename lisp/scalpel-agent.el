@@ -153,6 +153,18 @@ is fixed by `scalpel-agent--tool-fields' and
   :type 'string
   :group 'scalpel)
 
+(defcustom scalpel-agent-cod-prompt
+  "Think step by step, but only keep a minimum draft for each thinking step, with 5 words at most. Return the answer at the end of the response after a separator ####."
+  "Optional Chain-of-Draft reasoning prompt.
+Appended to the system prompt only when `scalpel-agent-cod-enabled' is non-nil."
+  :type 'string
+  :group 'scalpel)
+
+(defcustom scalpel-agent-cod-enabled nil
+  "Non-nil means append `scalpel-agent-cod-prompt' to the system prompt."
+  :type 'boolean
+  :group 'scalpel)
+
 (defcustom scalpel-agent-shell-max-bytes 20000
   "Maximum bytes of shell command output included in the LLM context.
 Larger outputs are truncated with an explicit marker."
@@ -699,7 +711,9 @@ rather than being re-framed as a planner error."
        (when parsed
          (funcall on-success (cdr parsed)))))
    on-error
-   scalpel-agent-system-prompt))
+   (if scalpel-agent-cod-enabled
+       (concat scalpel-agent-system-prompt "\n\n" scalpel-agent-cod-prompt)
+     scalpel-agent-system-prompt)))
 
 (defun scalpel-agent--verified-range (file symbol expected-body)
   "Return (BEG . END) of SYMBOL in FILE, verified as unchanged.
