@@ -10,64 +10,10 @@
 (require 'cl-lib)
 (require 'scalpel-agent)
 (require 'scalpel-execute)
+(require 'scalpel-llm-dialect)
 (require 'scalpel-locate)
 (require 'scalpel-locate-elisp)
 (require 'scalpel-utils-test)
-
-(ert-deftest scalpel-agent-test-parse-json ()
-  "Parse a valid JSON array of actions into a list of plists."
-  (let ((raw "[{\"tool\":\"edit\",\"file\":\"/tmp/foo.el\",\"symbol\":\"bar\",\"instruction\":\"do something\"}]"))
-    (let ((actions (scalpel-agent--parse-json raw)))
-      (should (= (length actions) 1))
-      (should (equal (plist-get (car actions) :tool) "edit"))
-      (should (equal (plist-get (car actions) :file) "/tmp/foo.el"))
-      (should (equal (plist-get (car actions) :symbol) "bar"))
-      (should (equal (plist-get (car actions) :instruction) "do something")))))
-
-(ert-deftest scalpel-agent-test-parse-json-invalid ()
-  "Invalid JSON should signal a user-error."
-  (should-error
-   (scalpel-agent--parse-json "not json")
-   :type 'error))
-
-(ert-deftest scalpel-agent-test-parse-json-object-not-array ()
-  "A JSON object (not an array of actions) should signal user-error."
-  (should-error
-   (scalpel-agent--parse-json "{\"actions\":[{\"tool\":\"reply\",\"text\":\"hi\"}]}")
-   :type 'user-error))
-
-(ert-deftest scalpel-agent-test-parse-json-fenced ()
-  "Markdown-fenced JSON should be parsed after stripping fences."
-  (let ((actions (scalpel-agent--parse-json
-                  "```json\n[{\"tool\":\"reply\",\"text\":\"hi\"}]\n```")))
-    (should (equal (plist-get (car actions) :text) "hi"))))
-
-(ert-deftest scalpel-agent-test-parse-json-tolerates-prose-around-payload ()
-  "Prose and a fence around the JSON array do not defeat parsing.
-Regression: the planner replied with a prose sentence, a json fence,
-then the array; stripping only the fences left the prose in place, so
-the whole reply went to the JSON parser and a valid plan was rejected
-as invalid JSON."
-  (let ((actions
-         (scalpel-agent--parse-json
-          (concat "I'll start by gathering the definitions.\n\n"
-                  "```json\n"
-                  "[{\"tool\":\"shell\",\"command\":\"ls\",\"reason\":\"look\",\"long-running\":false}]\n"
-                  "```\n"))))
-    (ert-info ((format "Actions:\n%S" actions))
-      (should (= (length actions) 1))
-      (should (equal (plist-get (car actions) :command) "ls")))))
-
-(ert-deftest scalpel-agent-test-json-payload-ignores-brackets-in-strings ()
-  "Brackets inside JSON strings never end the extracted payload."
-  (let ((raw "[{\"tool\":\"shell\",\"command\":\"echo ']'\",\"reason\":\"r\"}] then"))
-    (should (string= (scalpel-agent--json-payload raw)
-                     "[{\"tool\":\"shell\",\"command\":\"echo ']'\",\"reason\":\"r\"}]"))))
-
-(ert-deftest scalpel-agent-test-json-payload-without-json ()
-  "A reply holding no complete JSON value has no payload."
-  (should-not (scalpel-agent--json-payload "There is nothing to change."))
-  (should-not (scalpel-agent--json-payload "[unterminated")))
 
 (ert-deftest scalpel-agent-test-apply-if-unchanged ()
   "Apply replacement when body is unchanged; abort when it changed."
@@ -190,29 +136,6 @@ the file on disk must already hold the result."
         (should (string= (buffer-string)
                          "(defun foo (x)\n  (+ x 1))\n"))))))
 
-(ert-deftest scalpel-agent-test-parse-json-single-object ()
-  "A single JSON action object should be accepted and wrapped."
-  (let ((actions (scalpel-agent--parse-json
-                  "{\"tool\":\"reply\",\"text\":\"hi\"}")))
-    (should (= (length actions) 1))
-    (should (equal (plist-get (car actions) :text) "hi"))))
-
-(ert-deftest scalpel-agent-test-parse-json-rejects-tool-call-syntax ()
-  "A planner reply that encoded its action as an XML tool call is refused.
-Regression: the shell action arrived as an <invoke> block, and the
-error reported a bare JSON failure without naming the cause."
-  (let ((raw (concat "I'll look around.\n\n"
-                     "<invoke name=\"shell\">\n"
-                     "<parameter name=\"command\">ls</parameter>\n"
-                     "</invoke>")))
-    (let ((err (condition-case e
-                   (progn (scalpel-agent--parse-json raw) nil)
-                 (user-error e))))
-      (ert-info ((format "Raw:\n%S" raw))
-        (should err)
-        (should (string-match-p "tool-call syntax"
-                                (error-message-string err)))))))
-
 (ert-deftest scalpel-agent-test-read-whole-file ()
   "A read without a symbol returns the file inside the output fence."
   (scalpel-utils-test-with-temp-file ".el"
@@ -324,7 +247,7 @@ holding the whole file."
 Regression: `scalpel-agent--project-actions' kept only declared
 fields and `scalpel-agent--validate-action' required every declared
 one, so an optional field could be neither declared nor dropped."
-  (let ((parsed (scalpel-agent--parse-json
+  (let ((parsed (scalpel-llm-dialect--default-parse
                  (concat "[{\"tool\":\"read\",\"file\":\"/tmp/a.el\"},"
                          "{\"tool\":\"read\",\"file\":\"/tmp/a.el\","
                          "\"symbol\":\"foo\"}]"))))
@@ -340,7 +263,7 @@ one, so an optional field could be neither declared nor dropped."
 (ert-deftest scalpel-agent-test-read-requires-file ()
   "A read action without :file is rejected at validation."
   (should-error
-   (scalpel-agent--parse-json "[{\"tool\":\"read\",\"symbol\":\"foo\"}]")
+   (scalpel-agent--validate-action '(:tool "read" :symbol "foo"))
    :type 'user-error))
 
 (ert-deftest scalpel-agent-test-run-records-reads ()
@@ -826,17 +749,6 @@ so a follow-up such as \"the third point is wrong\" had no referent."
     (let ((prompt (scalpel-agent--prompt "first" nil)))
       (ert-info ((format "Prompt:\n%S" prompt))
         (should-not (string-match-p "Conversation so far:" prompt))))))
-
-(ert-deftest scalpel-agent-test-visible-raw-exposes-invisible-bytes ()
-  "A reply that fails to parse must expose the bytes that broke it.
-Regression: the error used %S, which prints control bytes and NBSP
-literally, so the offending character could not be seen."
-  (let ((shown (scalpel-agent--visible-raw "a\tb\u00A0c")))
-    (ert-info ((format "Shown: %S" shown))
-      ;; Nothing invisible may survive: a literal TAB or NBSP in the
-      ;; error message is exactly as unreadable as the original.
-      (should-not (string-match-p "[\t\u00A0]" shown))
-      (should (string-match-p "\\\\" shown)))))
 
 (ert-deftest scalpel-agent-test-shell-report-states-output-size ()
   "The report always states the true output size."

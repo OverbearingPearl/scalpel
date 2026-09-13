@@ -1,0 +1,149 @@
+;;; scalpel-llm-dialect-test.el --- Tests for scalpel-llm-dialect -*- lexical-binding: t; -*-
+
+;;; Commentary:
+
+;; Tests for the reply-dialect registry and the default parser.
+;; No LLM is contacted: the parsers are pure functions of their input.
+
+;;; Code:
+
+(require 'ert)
+(require 'cl-lib)
+(require 'scalpel-llm-dialect)
+
+(ert-deftest scalpel-llm-dialect-test-default-parse-plain-array ()
+  "A bare JSON action array parses to one plist per object."
+  (ert-info ("Input: a bare array; expect one action with :tool reply")
+    (let ((result (scalpel-llm-dialect--default-parse
+                   "[{\"tool\":\"reply\",\"text\":\"hi\"}]")))
+      (should (equal (length result) 1))
+      (should (equal (plist-get (car result) :tool) "reply"))
+      (should (equal (plist-get (car result) :text) "hi")))))
+
+(ert-deftest scalpel-llm-dialect-test-default-parse-single-object ()
+  "A single JSON object is accepted and wrapped into a one-element list."
+  (ert-info ("Input: one object; expect a one-element list")
+    (let ((result (scalpel-llm-dialect--default-parse
+                   "{\"tool\":\"reply\",\"text\":\"x\"}")))
+      (should (equal (length result) 1))
+      (should (equal (plist-get (car result) :tool) "reply")))))
+
+(ert-deftest scalpel-llm-dialect-test-default-parse-prose-wrapped ()
+  "Prose and markdown fences around the payload are ignored."
+  (ert-info ("Input: fenced array with prose; expect the array parsed")
+    (let ((result (scalpel-llm-dialect--default-parse
+                   "Here is the plan:\n```json\n[{\"tool\":\"reply\",\"text\":\"ok\"}]\n```")))
+      (should (equal (plist-get (car result) :tool) "reply")))))
+
+(ert-deftest scalpel-llm-dialect-test-default-parse-bracket-in-string ()
+  "A bracket inside a JSON string must not end the payload early."
+  (ert-info ("Input: array whose string holds ']'; expect full parse")
+    (let ((result (scalpel-llm-dialect--default-parse
+                   "[{\"tool\":\"reply\",\"text\":\"echo ']'\"}]")))
+      (should (equal (plist-get (car result) :text) "echo ']'")))))
+
+(ert-deftest scalpel-llm-dialect-test-default-parse-raw-control-escaped ()
+  "Literal newlines inside JSON strings are escaped before parsing."
+  (ert-info ("Input: string value holding a raw newline; expect it parsed")
+    (let ((result (scalpel-llm-dialect--default-parse
+                   "[{\"tool\":\"reply\",\"text\":\"a\nb\"}]")))
+      (should (equal (plist-get (car result) :text) "a\nb")))))
+
+(ert-deftest scalpel-llm-dialect-test-default-parse-no-json-signals ()
+  "A reply with no JSON payload signals `user-error'."
+  (ert-info ("Input: plain prose; expect user-error mentioning invalid JSON")
+    (should-error (scalpel-llm-dialect--default-parse "no json here")
+                  :type 'user-error)))
+
+(ert-deftest scalpel-llm-dialect-test-default-parse-unexpected-structure ()
+  "A JSON array of non-action objects signals `user-error'."
+  (ert-info ("Input: array of strings; expect user-error")
+    (should-error (scalpel-llm-dialect--default-parse "[\"a\",\"b\"]")
+                  :type 'user-error)))
+
+(ert-deftest scalpel-llm-dialect-test-default-parse-multiple-fields ()
+  "Every field of an action object survives parsing.
+Moved from `scalpel-agent-test-parse-json' when parsing became this
+module's job: the agent no longer owns a JSON parser."
+  (let ((raw "[{\"tool\":\"edit\",\"file\":\"/tmp/foo.el\",\"symbol\":\"bar\",\"instruction\":\"do something\"}]"))
+    (let ((actions (scalpel-llm-dialect--default-parse raw)))
+      (should (= (length actions) 1))
+      (should (equal (plist-get (car actions) :tool) "edit"))
+      (should (equal (plist-get (car actions) :file) "/tmp/foo.el"))
+      (should (equal (plist-get (car actions) :symbol) "bar"))
+      (should (equal (plist-get (car actions) :instruction) "do something")))))
+
+(ert-deftest scalpel-llm-dialect-test-default-parse-object-without-tool-signals ()
+  "A single JSON object that is not an action signals `user-error'.
+Moved from `scalpel-agent-test-parse-json-object-not-array'."
+  (ert-info ("Input: an object wrapping an action array; expect user-error")
+    (should-error
+     (scalpel-llm-dialect--default-parse
+      "{\"actions\":[{\"tool\":\"reply\",\"text\":\"hi\"}]}")
+     :type 'user-error)))
+
+(ert-deftest scalpel-llm-dialect-test-json-payload-without-json ()
+  "A reply holding no complete JSON value has no payload."
+  (ert-info ("Input: prose and an unterminated array; expect nil both times")
+    (should-not (scalpel-llm-dialect--json-payload
+                 "There is nothing to change."))
+    (should-not (scalpel-llm-dialect--json-payload "[unterminated"))))
+
+(ert-deftest scalpel-llm-dialect-test-parse-error-names-tool-call-syntax ()
+  "XML tool-call markup is named in the error, not reported as bad JSON.
+Moved from `scalpel-agent-test-parse-json-rejects-tool-call-syntax'."
+  (let ((raw (concat "I'll look around.\n\n"
+                     "<invoke name=\"shell\">\n"
+                     "<parameter name=\"command\">ls</parameter>\n"
+                     "</invoke>")))
+    (let ((err (condition-case e
+                   (progn (scalpel-llm-dialect--default-parse raw) nil)
+                 (user-error e))))
+      (ert-info ((format "Raw:\n%S" raw))
+        (should err)
+        (should (string-match-p "tool-call syntax"
+                                (error-message-string err)))))))
+
+(ert-deftest scalpel-llm-dialect-test-visible-raw-exposes-invisible-bytes ()
+  "A reply that fails to parse must expose the bytes that broke it.
+Regression: the error used %S, which prints control bytes and NBSP
+literally, so the offending character could not be seen.  Moved from
+`scalpel-agent-test-visible-raw-exposes-invisible-bytes'."
+  (let ((shown (scalpel-llm-dialect--visible-raw "a\tb\u00A0c")))
+    (ert-info ((format "Shown: %S" shown))
+      ;; Nothing invisible may survive: a literal TAB or NBSP in the
+      ;; error message is exactly as unreadable as the original.
+      (should-not (string-match-p "[\t\u00A0]" shown))
+      (should (string-match-p "\\\\" shown)))))
+
+(ert-deftest scalpel-llm-dialect-test-register-replaces-same-regexp ()
+  "Registering the same regexp replaces the previous provider."
+  (ert-info ("Register twice under one regexp; expect one entry, the newest")
+    (let ((scalpel-llm-dialect-providers nil))
+      (scalpel-llm-dialect-register "foo" (list :parse-reply #'identity))
+      (scalpel-llm-dialect-register "foo" (list :parse-reply #'list))
+      (should (= (length scalpel-llm-dialect-providers) 1))
+      (should (eq (plist-get (cdr (car scalpel-llm-dialect-providers))
+                             :parse-reply)
+                  #'list)))))
+
+(ert-deftest scalpel-llm-dialect-test-parse-dispatches-to-provider ()
+  "A provider registered for the active backend handles the reply."
+  (ert-info ("Bind a fake provider and backend name; expect it called")
+    (let* ((seen nil)
+           (stub (lambda (raw)
+                   (setq seen raw)
+                   (list (list :tool "reply"))))
+           (scalpel-llm-dialect-providers
+            (list (cons "stub-backend" (list :parse-reply stub))))
+           (gptel-backend
+            ;; A real backend object is built so `gptel-backend-name'
+            ;; works; no request is ever sent.
+            (gptel-make-openai "stub-backend")))
+      (should (equal (scalpel-llm-dialect-parse "anything")
+                     (list (list :tool "reply"))))
+      (should (equal seen "anything")))))
+
+(provide 'scalpel-llm-dialect-test)
+
+;;; scalpel-llm-dialect-test.el ends here

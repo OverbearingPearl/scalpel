@@ -23,6 +23,8 @@
 (require 'json)
 (require 'subr-x)
 (require 'scalpel-llm)
+(require 'scalpel-llm-dialect)
+(require 'scalpel-llm-deepseek)
 (require 'scalpel-locate)
 (require 'scalpel-execute)
 (require 'scalpel-sandbox)
@@ -609,37 +611,6 @@ names that git ignores, marked \"(gitignored)\".  Return the string
              scalpel-agent--context-files)
      "\n\n")))
 
-(defun scalpel-agent--json-payload (raw)
-  "Return the JSON action payload embedded in RAW, or nil.
-A planner reply is a container: the JSON array may be preceded by
-prose, wrapped in a markdown code fence, or both.  Return the first
-balanced JSON array or object in RAW, ignoring everything around it;
-return nil when RAW holds no complete JSON value.  Brackets inside
-JSON strings never count, so a command such as \"echo ']'\" does not
-end the payload early."
-  (let ((start (string-match "\\[\\|{" raw))
-        (i 0)
-        (depth 0)
-        (in-string nil)
-        (escaped nil)
-        end)
-    (when start
-      (setq i start)
-      (while (and (< i (length raw)) (null end))
-        (let ((char (aref raw i)))
-          (cond
-           (escaped (setq escaped nil))
-           (in-string
-            (cond ((eq char ?\\) (setq escaped t))
-                  ((eq char ?\") (setq in-string nil))))
-           ((eq char ?\") (setq in-string t))
-           ((memq char '(?\[ ?\{)) (setq depth (1+ depth)))
-           ((memq char '(?\] ?\})) (setq depth (1- depth))
-            (when (= depth 0) (setq end (1+ i))))))
-        (setq i (1+ i)))
-      (when end
-        (substring raw start end)))))
-
 (defun scalpel-agent--project-actions (actions)
   "Project parsed ACTIONS plists onto each tool's field contract.
 Return a new list of plists holding only the fields declared for
@@ -668,101 +639,6 @@ is missing."
         (user-error "Scalpel: action %s missing required field %s" tool field)))
     action))
 
-(defun scalpel-agent--visible-raw (raw)
-  "Return RAW with newlines, control bytes and non-ASCII characters escaped.
-`prin1' alone hides control bytes (`print-escape-control-characters'
-defaults to nil) and prints non-ASCII literally (`print-escape-nonascii'
-defaults to nil), so a reply that failed to parse is indistinguishable
-by eye from one that did."
-  (let ((print-escape-newlines t)
-        (print-escape-control-characters t)
-        (print-escape-nonascii t)
-        (print-escape-multibyte t))
-    (prin1-to-string raw)))
-
-(defun scalpel-agent--escape-raw-controls (payload)
-  "Return PAYLOAD with raw control characters inside JSON strings escaped.
-Models sometimes emit literal newlines or tabs inside JSON string
-values, which JSON forbids, so the whole plan fails to parse.  Only
-characters inside a string literal are touched: outside one, a
-newline is legal whitespace.  The scanner mirrors
-`scalpel-agent--json-payload': a backslash escapes the next
-character, and a quote toggles the string."
-  (let ((in-string nil)
-        (escaped nil))
-    (mapconcat
-     (lambda (char)
-       (cond
-        ;; A backslash followed by a character JSON does not define as
-        ;; an escape (models emit things like "\ docstring") is doubled,
-        ;; so the pair parses as a literal backslash instead of failing
-        ;; the whole payload.  Valid escapes pass through untouched.
-        (escaped
-         (setq escaped nil)
-         (if (memq char '(?\" ?\\ ?/ ?b ?f ?n ?r ?t ?u))
-             (string char)
-           (concat "\\\\" (string char))))
-        ((eq char ?\\) (setq escaped t) (string char))
-        ((eq char ?\") (setq in-string (not in-string)) (string char))
-        ((and in-string (memq char '(?\n ?\r ?\t)))
-         (format "\\u%04X" char))
-        (t (string char))))
-     payload "")))
-
-(defun scalpel-agent--parse-error (raw)
-  "Signal the `user-error' describing why RAW failed to parse.
-Distinguishes a planner reply that used tool-call syntax from one
-that was simply not valid JSON.  RAW is the reply as received."
-  (if (string-match-p "<\\(?:invoke\\|tool_calls\\|function_calls\\)\\b" raw)
-      (user-error
-       (concat "Scalpel: planner used tool-call syntax instead of the JSON "
-               "action array; nothing was executed.  Reply was: %s")
-       (scalpel-agent--visible-raw raw))
-    (user-error "Scalpel: planner returned invalid JSON: %s"
-                (scalpel-agent--visible-raw raw))))
-
-(defun scalpel-agent--parse-json (raw)
-  "Parse RAW to a list of action plists.
-RAW is the planner's whole reply, so the JSON payload is extracted
-from whatever prose or markdown fences surround it.  Signal
-`user-error' when RAW holds no valid JSON action array."
-  (let ((payload (scalpel-agent--json-payload raw)))
-    (unless payload
-      ;; `scalpel-agent--parse-error' signals, so a missing payload and
-      ;; an unparsable one share a single explanation path.
-      (scalpel-agent--parse-error raw))
-    (let ((parsed
-           (condition-case err
-               (json-parse-string
-                ;; Models emit \x2014-style escapes, which JSON forbids;
-                ;; normalize them to \uXXXX before parsing, then escape
-                ;; raw control characters inside string literals.
-                (scalpel-agent--escape-raw-controls
-                 (replace-regexp-in-string
-                  "\\\\x\\([0-9a-fA-F]\\{4\\}\\)" "\\\\u\\1" payload))
-                :object-type 'plist
-                :array-type 'list)
-             ;; The parser's own message names the offending construct;
-             ;; dropping it, as the previous `condition-case nil' did,
-             ;; made every parse failure indistinguishable.
-             (error
-              (user-error
-               "Scalpel: planner returned invalid JSON (%s): %s"
-               (error-message-string err)
-               (scalpel-agent--visible-raw raw))))))
-      (when (and (plistp parsed) (plist-get parsed :tool))
-        (setq parsed (list parsed)))
-      (unless (and (listp parsed)
-                   (cl-every (lambda (item)
-                               (and (listp item)
-                                    (plist-get item :tool)))
-                             parsed))
-        (user-error
-         (concat "Scalpel: planner returned unexpected structure "
-                 "(expected a JSON array of action objects): %s")
-         (scalpel-agent--visible-raw raw)))
-      (mapcar #'scalpel-agent--validate-action parsed))))
-
 (defun scalpel-agent--prompt (instruction history)
   "Return the LLM prompt for INSTRUCTION given HISTORY.
 HISTORY is the conversation text recorded before INSTRUCTION, or
@@ -790,7 +666,8 @@ rather than being re-framed as a planner error."
    (lambda (raw)
      (let ((parsed (condition-case err
                        (cons t (scalpel-agent--project-actions
-                                (scalpel-agent--parse-json raw)))
+                                (mapcar #'scalpel-agent--validate-action
+                                        (scalpel-llm-dialect-parse raw))))
                      (error
                       (funcall on-error
                                (list :type 'parse
