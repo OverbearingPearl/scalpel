@@ -141,6 +141,13 @@ character, and a quote toggles the string."
 RAW is the planner's whole reply, so the JSON payload is extracted
 from whatever prose or markdown fences surround it.  Signal
 `user-error' when RAW holds no valid JSON action array."
+  (when (string-empty-p (string-trim raw))
+    ;; An empty reply is a backend failure, not a JSON syntax problem:
+    ;; naming JSON here would send the user hunting for a syntax error
+    ;; that does not exist.
+    (user-error
+     "Scalpel: planner returned an empty reply; check the backend's \
+API key, quota and network, then retry"))
   (let ((payload (scalpel-llm-dialect--json-payload raw)))
     (unless payload
       ;; `scalpel-llm-dialect--parse-error' signals, so a missing payload

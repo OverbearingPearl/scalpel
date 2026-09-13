@@ -49,6 +49,21 @@
                    "[{\"tool\":\"reply\",\"text\":\"a\nb\"}]")))
       (should (equal (plist-get (car result) :text) "a\nb")))))
 
+(ert-deftest scalpel-llm-dialect-test-default-parse-empty-reply-signals ()
+  "An empty reply is reported as a backend failure, not bad JSON.
+Regression: an empty reply fell into the generic invalid-JSON error,
+whose message showed `%s' as \"\" and gave no hint that the cause
+was the backend, not the reply's syntax."
+  (ert-info ("Input: empty and whitespace-only replies; expect user-error naming the empty reply")
+    (should-error (scalpel-llm-dialect--default-parse "")
+                  :type 'user-error)
+    (let ((err (condition-case e
+                   (progn (scalpel-llm-dialect--default-parse "  \n") nil)
+                 (user-error e))))
+      (should err)
+      (should (string-match-p "empty reply"
+                              (error-message-string err))))))
+
 (ert-deftest scalpel-llm-dialect-test-default-parse-no-json-signals ()
   "A reply with no JSON payload signals `user-error'."
   (ert-info ("Input: plain prose; expect user-error mentioning invalid JSON")

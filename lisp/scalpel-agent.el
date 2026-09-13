@@ -29,7 +29,7 @@
 (require 'scalpel-execute)
 (require 'scalpel-sandbox)
 
-(defconst scalpel-agent--tool-vocabulary '("edit" "reply" "create" "delete" "read" "shell" "confirm")
+(defconst scalpel-agent--tool-vocabulary '("edit" "reply" "create" "delete" "rename" "delete-file" "read" "shell" "confirm")
   "Tool names the planner may emit.
 Structural contract, not user configuration: dispatch in
 `scalpel-agent-execute-action' must stay in sync with it.")
@@ -39,6 +39,8 @@ Structural contract, not user configuration: dispatch in
     ("reply" . (:tool :text))
     ("create" . (:tool :file :symbol :instruction :after))
     ("delete" . (:tool :file :symbol))
+    ("rename" . (:tool :file :to))
+    ("delete-file" . (:tool :file))
     ("read" . (:tool :file))
     ("shell" . (:tool :command :reason :long-running))
     ("confirm" . (:tool :text)))
@@ -75,6 +77,8 @@ Each action is one of:
 {\"tool\":\"reply\",\"text\":\"...\"}
 {\"tool\":\"create\",\"file\":\"/abs/path.el\",\"symbol\":\"new-name\",\"instruction\":\"...\",\"after\":\"existing-symbol\"}
 {\"tool\":\"delete\",\"file\":\"/abs/path.el\",\"symbol\":\"name\"}
+{\"tool\":\"rename\",\"file\":\"/abs/old.el\",\"to\":\"/abs/new.el\"}
+{\"tool\":\"delete-file\",\"file\":\"/abs/path.el\"}
 {\"tool\":\"read\",\"file\":\"/abs/path.el\",\"symbol\":\"name\"}
 {\"tool\":\"read\",\"file\":\"/abs/path.el\"}
 {\"tool\":\"shell\",\"command\":\"...\",\"reason\":\"...\",\"long-running\":false}
@@ -102,8 +106,13 @@ finding things -- grep, ls, git log -- and read for looking at code
 itself.  Do not read the same definition twice: nothing changes
 between rounds unless you changed it.
 Never invent commands the user did not ask for, and never use shell
-to change files: all file changes go through edit, create and
-delete.
+to change files: all file changes go through edit, create, delete,
+rename and delete-file.
+The rename action only moves the file itself: it does not touch the
+definitions inside it and does not update any other file's require,
+import or path references, so those remain the user's responsibility.
+The rename and delete-file actions are effectful and are always
+confirmed by the user before they run.
 Shell commands run with the context files above as the whole
 filesystem: they are the only files you may read, whether through a
 shell command or a read action, and they must be named by the
@@ -167,7 +176,7 @@ Raise it deliberately, or add a subdirectory instead."
   :type 'integer
   :group 'scalpel)
 
-(defcustom scalpel-agent-confirm-tools '("shell")
+(defcustom scalpel-agent-confirm-tools '("shell" "rename" "delete-file")
   "Tools that require user confirmation before execution.
 Each entry is a tool name string.  When the planner emits an action
 whose :tool is in this list, the user is prompted to confirm before
@@ -177,7 +186,12 @@ A shell action the planner did not flag as long-running skips the
 prompt: the sandbox already bounds what a command may touch, so
 only the editor-freezing case needs an answer.  Removing \"shell\"
 from this list disables the prompt for every shell action,
-including a long-running one."
+including a long-running one.
+\"rename\" and \"delete-file\" are confirmed because a file-level
+action changes which files exist rather than bytes inside a file,
+so the boundary lock cannot predict its reach and the user must
+approve it; a file the planner creates from scratch (no existing
+referents) does not need confirmation."
   :type '(repeat string)
   :group 'scalpel)
 
@@ -835,6 +849,49 @@ saved before this returns.  Return a human-readable report string."
         (format "Deleted %s in %s" symbol
                 (buffer-name (current-buffer)))))))
 
+(defun scalpel-agent-delete-file (file)
+  "Delete FILE.
+The file is removed from disk.  A buffer visiting it is killed when
+it has no unsaved changes; when it does, this refuses rather than
+discard them.  Return a human-readable report string.  Signal
+`user-error' on a malformed action or a missing file."
+  (unless file
+    (user-error "Scalpel: malformed delete-file action"))
+  (unless (file-exists-p file)
+    (user-error "Scalpel: can't delete %s: no such file" file))
+  (let ((buffer (find-buffer-visiting file)))
+    (when (and buffer (buffer-modified-p buffer))
+      (user-error "Scalpel: %s has unsaved changes; not deleting" file))
+    (when (and buffer (buffer-live-p buffer))
+      (kill-buffer buffer))
+    (delete-file file)
+    (format "Deleted file %s" file)))
+
+(defun scalpel-agent-rename (file to)
+  "Rename or move FILE to TO.
+Only the file is moved: the definitions inside it are untouched,
+and no other file's require, import or path string is updated.
+The destination must not already exist.  A buffer visiting FILE
+is saved first and then follows the rename.  Return a
+human-readable report string.  Signal `user-error' on a malformed
+action, a missing source, or an existing destination."
+  (unless (and file to)
+    (user-error "Scalpel: malformed rename action"))
+  (unless (file-exists-p file)
+    (user-error "Scalpel: can't rename %s: no such file" file))
+  (when (file-exists-p to)
+    (user-error "Scalpel: can't rename %s: %s already exists" file to))
+  (let ((buffer (find-buffer-visiting file)))
+    (when buffer
+      (with-current-buffer buffer
+        (when (buffer-modified-p)
+          (save-buffer))))
+    (rename-file file to)
+    (when (and buffer (buffer-live-p buffer))
+      (with-current-buffer buffer
+        (set-visited-file-name to t)))
+    (format "Renamed %s to %s" file to)))
+
 (defun scalpel-agent--printable-output (text)
   "Return TEXT with only tab, newline and printable characters.
 Command output can carry control bytes, such as the bell a batch
@@ -1020,8 +1077,10 @@ the action has no target."
   (or (plist-get action :command)
       (plist-get action :text)
       (let ((file (plist-get action :file))
-            (symbol (plist-get action :symbol)))
-        (cond ((and file symbol) (format "%s in %s" symbol file))
+            (symbol (plist-get action :symbol))
+            (to (plist-get action :to)))
+        (cond ((and file to) (format "%s -> %s" file to))
+              ((and file symbol) (format "%s in %s" symbol file))
               (file file)))
       (plist-get action :reason)
       "no reason"))
@@ -1032,11 +1091,11 @@ ON-SUCCESS receives the report string.  ON-ERROR receives a plist
 \(:type SYMBOL :message STRING); the type is `sandbox' when a shell
 action was refused by the sandbox, so a caller can keep the
 boundary out of the conversation.  Actions that issue no LLM
-request (`reply', `confirm', `delete', `read', `shell') settle
-synchronously; `edit' and `create' settle from their LLM's
-callback.  ON-SUCCESS and ON-ERROR run outside the internal error
-guard, so an error they raise escapes instead of being re-framed
-as an action failure."
+request (`reply', `confirm', `delete', `rename', `delete-file',
+`read', `shell') settle synchronously; `edit' and `create' settle
+from their LLM's callback.  ON-SUCCESS and ON-ERROR run outside
+the internal error guard, so an error they raise escapes instead
+of being re-framed as an action failure."
   (cl-block scalpel-agent-execute-action
     (let ((tool (plist-get action :tool)))
       (unless (member tool scalpel-agent--tool-vocabulary)
@@ -1072,6 +1131,27 @@ as an action failure."
                            (scalpel-agent-delete
                             (plist-get action :file)
                             (plist-get action :symbol))
+                         (error
+                          (funcall on-error
+                                   (list :type 'action
+                                         :message (error-message-string err)))
+                          nil))))
+           (when report (funcall on-success report))))
+        ("rename"
+         (let ((report (condition-case err
+                           (scalpel-agent-rename
+                            (plist-get action :file)
+                            (plist-get action :to))
+                         (error
+                          (funcall on-error
+                                   (list :type 'action
+                                         :message (error-message-string err)))
+                          nil))))
+           (when report (funcall on-success report))))
+        ("delete-file"
+         (let ((report (condition-case err
+                           (scalpel-agent-delete-file
+                            (plist-get action :file))
                          (error
                           (funcall on-error
                                    (list :type 'action
