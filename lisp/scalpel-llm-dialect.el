@@ -12,10 +12,18 @@
 ;; sent: gptel already owns the wire protocol.  What varies is the
 ;; reply dialect -- tool-call markers a model leaks as plain text,
 ;; escapes JSON forbids, prose around the payload.  This registry
-;; dispatches on the active gptel backend name to a provider that
-;; turns a raw reply into a parsed action list, mirroring
-;; `scalpel-locate''s provider dispatch.  A backend with no
-;; registered provider uses the default parser.
+;; dispatches on the active gptel backend's name, then on its model
+;; name, to a provider that turns a raw reply into a parsed action
+;; list, mirroring `scalpel-locate''s provider dispatch.  Both names
+;; are tried because a backend is named after the provider while a
+;; dialect belongs to the model: a Laguna model served by a backend
+;; named "OpenRouter" is reached through its model name alone.  The
+;; model name counts only when the backend declares that model:
+;; `gptel-model' keeps its value after another backend is created or
+;; selected, so an undeclared name would let one model's dialect
+;; answer for a backend that does not serve it.  See
+;; `scalpel-llm-dialect--model-name'.  A backend with no registered
+;; provider uses the default parser.
 
 ;;; Code:
 
@@ -41,17 +49,77 @@ same REGEXP replaces the previous provider."
                               (string= (car entry) regexp))
                             scalpel-llm-dialect-providers))))
 
+(defun scalpel-llm-dialect--backend-name ()
+  "Return the name of the active gptel backend, or nil.
+A backend that is not a gptel backend structure -- a stub leaked
+into the session by a test, say -- has no name rather than raising
+from inside dispatch."
+  (let ((backend (and (boundp 'gptel-backend)
+                      (symbol-value 'gptel-backend))))
+    (when backend
+      (condition-case nil
+          (gptel-backend-name backend)
+        (error nil)))))
+
+(defun scalpel-llm-dialect--name-string (value)
+  "Return VALUE as a name string, or nil when it names nothing.
+gptel takes a backend or model name as either a string or a symbol,
+so both spellings are normalized the same way here."
+  (cond ((null value) nil)
+        ((stringp value) value)
+        ((symbolp value) (symbol-name value))
+        (t nil)))
+
+(defun scalpel-llm-dialect--served-model-names ()
+  "Return the model names the active gptel backend declares, or nil.
+The declaration is what distinguishes a model this backend serves
+from a `gptel-model' left over from another one.  A backend that is
+not a gptel backend structure, or a gptel whose model accessor is
+absent, declares nothing rather than raising from inside dispatch."
+  (let ((backend (and (boundp 'gptel-backend)
+                      (symbol-value 'gptel-backend))))
+    (when backend
+      (condition-case nil
+          (delq nil (mapcar #'scalpel-llm-dialect--name-string
+                            (gptel-backend-models backend)))
+        (error nil)))))
+
+(defun scalpel-llm-dialect--model-name ()
+  "Return the model the active gptel backend serves, or nil.
+`gptel-backend' names the provider, and the provider is not always
+the dialect: a Laguna model reached through an OpenRouter backend
+is named only by its model.  The value is read through
+`symbol-value' on a quoted symbol, so a gptel without `gptel-model'
+yields nil instead of a void-variable error or a byte-compile
+warning, and a model held as a symbol is named by that symbol.
+
+Only a model the backend declares is returned.  `gptel-model' is
+not reset when another backend is created or selected, so a stale
+name would otherwise let a dialect registered for one model answer
+for a backend that does not serve it -- and a session that had once
+selected that model would keep reading every later reply in its
+dialect."
+  (let* ((model (and (boundp 'gptel-model)
+                     (symbol-value 'gptel-model)))
+         (name (scalpel-llm-dialect--name-string model)))
+    (when (member name (scalpel-llm-dialect--served-model-names))
+      name)))
+
 (defun scalpel-llm-dialect--provider ()
   "Return the provider plist for the active gptel backend, or nil.
-Dispatch keys off `gptel-backend-name'; a backend with no matching
-registration falls back to the default parser."
-  (let ((name (and (boundp 'gptel-backend) gptel-backend
-                   (gptel-backend-name gptel-backend))))
-    (when name
-      (let ((entry (cl-find-if (lambda (entry)
-                                 (string-match-p (car entry) name))
-                               scalpel-llm-dialect-providers)))
-        (and entry (cdr entry))))))
+Dispatch tries the backend's own name first and its model name
+second, because a backend is named after the provider while a
+dialect belongs to the model: `poolside/laguna-s-2.1' reached
+through a backend named \"OpenRouter\" is found by its model name
+alone.  That model name is the one the backend declares, as
+`scalpel-llm-dialect--model-name' returns it.  A backend with no
+matching registration falls back to the default parser."
+  (cl-loop for name in (delq nil (list (scalpel-llm-dialect--backend-name)
+                                       (scalpel-llm-dialect--model-name)))
+           for entry = (cl-find-if (lambda (entry)
+                                     (string-match-p (car entry) name))
+                                   scalpel-llm-dialect-providers)
+           when entry return (cdr entry)))
 
 (defun scalpel-llm-dialect--visible-raw (raw)
   "Return RAW with newlines, control bytes and non-ASCII characters escaped.

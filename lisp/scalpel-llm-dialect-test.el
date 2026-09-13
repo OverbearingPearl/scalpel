@@ -260,6 +260,90 @@ literally, so the offending character could not be seen.  Moved from
             (should (equal seen "anything")))
         (setq gptel-backend saved-backend)))))
 
+(ert-deftest scalpel-llm-dialect-test-parse-dispatches-on-the-model-name ()
+  "A dialect registered for the model is found through a provider backend.
+Regression: dispatch keyed off `gptel-backend-name' alone, so a
+Laguna model reached through a backend named \"OpenRouter\" -- the
+shape the README configures -- fell through to the default parser,
+which refused the reply as tool-call syntax even though
+`scalpel-llm-laguna' was loaded and had registered its parser."
+  (let* ((seen nil)
+         (stub (lambda (raw)
+                 (setq seen raw)
+                 (list (list :tool "reply"))))
+         (scalpel-llm-dialect-providers
+          (list (cons "laguna" (list :parse-reply stub))))
+         (saved-backend gptel-backend))
+    ;; `gptel-make-openai' may setq `gptel-backend' as a side effect
+    ;; when it is nil; save and restore the global so the test never
+    ;; leaks a stub backend into the user session.
+    (unwind-protect
+        (progn
+          (setq gptel-backend
+                (gptel-make-openai "OpenRouter" :key "test-key"
+                                   :models '("poolside/laguna-s-2.1")))
+          ;; The model lives in a buffer-local, matching gptel's own
+          ;; storage; a temp buffer keeps the binding out of the
+          ;; session the moment this test ends.
+          (with-temp-buffer
+            (set (make-local-variable 'gptel-model)
+                 "poolside/laguna-s-2.1")
+            (should (equal (scalpel-llm-dialect-parse "anything")
+                           (list (list :tool "reply"))))
+            (should (equal seen "anything"))))
+      (setq gptel-backend saved-backend))))
+
+(ert-deftest scalpel-llm-dialect-test-parse-leaves-unregistered-models-alone ()
+  "A backend and model no provider matches keep the default parser.
+Regression risk: matching every name, or the model name of a
+backend serving another model, would hand a reply this module was
+not written for to a provider registered for a different one."
+  (let ((scalpel-llm-dialect-providers
+         (list (cons "laguna" (list :parse-reply (lambda (_raw) :wrong)))))
+        (saved-backend gptel-backend))
+    (unwind-protect
+        (progn
+          (setq gptel-backend
+                (gptel-make-openai "OpenRouter" :key "test-key"
+                                   :models '("minimax/minimax-m2.7")))
+          (with-temp-buffer
+            (set (make-local-variable 'gptel-model)
+                 "minimax/minimax-m2.7")
+            (let ((parsed (scalpel-llm-dialect-parse
+                           "[{\"tool\":\"reply\",\"text\":\"hi\"}]")))
+              (ert-info ((format "Parsed: %S" parsed))
+                (should (equal (plist-get (car parsed) :tool) "reply"))))))
+      (setq gptel-backend saved-backend))))
+
+(ert-deftest scalpel-llm-dialect-test-parse-ignores-a-model-the-backend-does-not-serve ()
+  "A model name the active backend does not declare selects no dialect.
+Regression: dispatch consulted `gptel-model' on its own, so a name
+left over from another backend -- the value survives creating or
+selecting a backend -- made a dialect answer for a backend that does
+not serve that model, and the reply was read in a convention the
+session was never configured for."
+  (let* ((seen nil)
+         (stub (lambda (raw)
+                 (setq seen raw)
+                 (list (list :tool "reply"))))
+         (scalpel-llm-dialect-providers
+          (list (cons "laguna" (list :parse-reply stub))))
+         (saved-backend gptel-backend))
+    (unwind-protect
+        (progn
+          (setq gptel-backend
+                (gptel-make-openai "OpenRouter" :key "test-key"
+                                   :models '("minimax/minimax-m2.7")))
+          (with-temp-buffer
+            (set (make-local-variable 'gptel-model)
+                 "poolside/laguna-s-2.1")
+            (let ((parsed (scalpel-llm-dialect-parse
+                           "[{\"tool\":\"reply\",\"text\":\"hi\"}]")))
+              (ert-info ((format "Parsed: %S" parsed))
+                (should (equal (plist-get (car parsed) :tool) "reply"))
+                (should-not seen)))))
+      (setq gptel-backend saved-backend))))
+
 (provide 'scalpel-llm-dialect-test)
 
 ;;; scalpel-llm-dialect-test.el ends here

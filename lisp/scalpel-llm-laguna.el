@@ -26,10 +26,15 @@
 ;; `scalpel-llm-laguna--assumed-fields' and reported in the echo
 ;; area, so the substitution is visible rather than silent.
 ;;
-;; Dispatch is by gptel backend name, not by model.  A session whose
-;; Laguna traffic runs through a backend named after the provider
-;; rather than the model -- "OpenRouter", say -- must register this
-;; parser for that name itself, with `scalpel-llm-dialect-register'.
+;; Dispatch tries the backend's gptel name and then its model name, so
+;; a backend named after the provider -- "OpenRouter", say -- reaches
+;; this parser through the model it serves, with no registration of
+;; its own.  A model name is read only when the backend declares that
+;; model in `:models', because `gptel-model' survives the backend it
+;; was chosen for; the README's configuration declares the Laguna
+;; model on the OpenRouter backend, which is what makes this parser
+;; reachable there.  A backend serving a model no registration matches
+;; still gets the loud refusal below.
 
 ;;; Code:
 

@@ -186,9 +186,11 @@ copy -- not the one dispatch uses -- the copy that drifts."
 
 (ert-deftest scalpel-llm-laguna-test-registration-matches-the-laguna-name ()
   "Backends named after the model use this parser, and others do not.
-Dispatch keys off the gptel backend name, so the registration is what
-makes the dialect reachable, and the same name decides that a backend
-this module was not written for still gets the loud refusal.  The
+Dispatch keys off the gptel backend name and the model that backend
+declares, so the registration is what makes the dialect reachable,
+and a backend this module was not written for still gets the loud
+refusal: the backend below declares no model, so no model name can be
+read for it.  The
 backend is a real one, built by `gptel-make-openai' and put back
 afterwards: `gptel-backend-name' is a structure accessor that
 type-checks its argument inside its own body, so a stand-in symbol is

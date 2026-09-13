@@ -1561,8 +1561,12 @@ not tell that resending the instruction was the whole fix."
   "A reply in tool-call syntax is answered with the backend switch.
 Regression: this failure was met with the same retry advice as a
 truncated or malformed reply, so a user whose backend reproduces
-the reply verbatim had no exit from the loop."
+the reply verbatim had no exit from the loop.
+The subject is the advice, not dispatch: no dialect is registered
+here, so the reply reaches the default parser and is refused there
+whatever backend and model the test session carries."
   (let ((scalpel-agent--context-files nil)
+        (scalpel-llm-dialect-providers nil)
         (buf (scalpel-console-test--new-console-buffer)))
     (unwind-protect
         (progn

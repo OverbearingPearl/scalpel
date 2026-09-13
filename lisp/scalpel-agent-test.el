@@ -633,20 +633,24 @@ field list was always nil and the projected action lost its keys."
 Regression: both arrived as `parse', so the console answered a
 deterministic model failure with retry advice -- advice the user
 followed three times without the reply changing."
-  (cl-letf (((symbol-function 'scalpel-llm-request-async)
-             (lambda (_prompt on-success _on-error &optional _system)
-               (funcall on-success
-                        (concat "<tool_call>shell<arg_key>command</arg_key>"
-                                "<arg_value>ls</arg_value></tool_call>")))))
-    (let (error)
-      (scalpel-agent-plan
-       "look around" nil
-       (lambda (_actions) (ert-fail "a tool-call reply must not plan"))
-       (lambda (err) (setq error err)))
-      (ert-info ((format "Error: %S" error))
-        (should (eq (plist-get error :type) 'tool-call))
-        (should (string-match-p "tool-call syntax"
-                                (plist-get error :message)))))))
+  ;; Dispatch reads the session's own backend and model, so a dialect
+  ;; registered for them would decide this test's outcome.  None is
+  ;; registered here: the subject is the default parser's refusal.
+  (let ((scalpel-llm-dialect-providers nil))
+    (cl-letf (((symbol-function 'scalpel-llm-request-async)
+               (lambda (_prompt on-success _on-error &optional _system)
+                 (funcall on-success
+                          (concat "<tool_call>shell<arg_key>command</arg_key>"
+                                  "<arg_value>ls</arg_value></tool_call>")))))
+      (let (error)
+        (scalpel-agent-plan
+         "look around" nil
+         (lambda (_actions) (ert-fail "a tool-call reply must not plan"))
+         (lambda (err) (setq error err)))
+        (ert-info ((format "Error: %S" error))
+          (should (eq (plist-get error :type) 'tool-call))
+          (should (string-match-p "tool-call syntax"
+                                  (plist-get error :message))))))))
 
 (ert-deftest scalpel-agent-test-system-prompt-declares-every-tool ()
   "Every dispatchable tool must be declared to the planner.
