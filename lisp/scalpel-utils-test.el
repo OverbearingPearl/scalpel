@@ -2,8 +2,9 @@
 
 ;;; Commentary:
 
-;; Common helpers for Scalpel tests: temporary file creation and
-;; guaranteed cleanup of buffers and files, even on test failure.
+;; Common helpers for Scalpel tests: temporary file creation,
+;; guaranteed cleanup of buffers and files even on test failure, and a
+;; window excursion for the tests that select a buffer.
 
 ;;; Code:
 
@@ -46,6 +47,19 @@ name."
 FILE is a file name string.  Does nothing when FILE is absent."
   (when (file-exists-p file) (delete-file file)))
 
+(defmacro scalpel-utils-test-with-preserved-windows (&rest body)
+  "Evaluate BODY and restore the window state afterwards.
+A command under test may select the buffer it opened --
+`switch-to-buffer', as `scalpel-console-open' and
+`scalpel-token-open' both do.  Interactively that moves the user's
+display onto a buffer the test is about to kill, so every test that
+triggers such a selection wraps it here; in batch the excursion costs
+only its save/restore pair, so one form covers both modes.  Only the
+display is restored: buffer cleanup stays the test's own job, through
+`scalpel-utils-test-kill-buffer' and friends."
+  (declare (indent 0))
+  `(save-window-excursion ,@body))
+
 (defmacro scalpel-utils-test-with-temp-file (suffix &rest body)
   "Create a temporary file and evaluate BODY with cleanup guaranteed.
 SUFFIX is the file extension string (e.g. \".el\").  The created
@@ -85,6 +99,21 @@ outlived their run."
       (ert-info ((format "Survivors: %S"
                          (mapcar #'buffer-name (buffer-list))))
         (should-not (get-file-buffer resolved))))))
+
+(ert-deftest scalpel-utils-test-preserved-windows-restores-the-buffer ()
+  "The macro puts the selected buffer back after BODY selects another.
+Regression: a test that ran `scalpel-console-open' or
+`scalpel-token-open' left the user's display on a buffer the test
+then killed, so an interactive run ended where the user never went."
+  (let ((original (current-buffer))
+        (other (get-buffer-create " *scalpel-test-preserved-windows*")))
+    (unwind-protect
+        (progn
+          (scalpel-utils-test-with-preserved-windows
+            (switch-to-buffer other))
+          (ert-info ((format "Buffer after BODY: %S" (current-buffer)))
+            (should (eq (current-buffer) original))))
+      (scalpel-utils-test-kill-buffer (buffer-name other)))))
 
 (defun scalpel-utils-test--lisp-directory ()
   "Return the directory holding the Scalpel test files.

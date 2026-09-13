@@ -164,13 +164,20 @@ literally, so the offending character could not be seen.  Moved from
                    (list (list :tool "reply"))))
            (scalpel-llm-dialect-providers
             (list (cons "stub-backend" (list :parse-reply stub))))
-           (gptel-backend
-            ;; A real backend object is built so `gptel-backend-name'
-            ;; works; no request is ever sent.
-            (gptel-make-openai "stub-backend")))
-      (should (equal (scalpel-llm-dialect-parse "anything")
-                     (list (list :tool "reply"))))
-      (should (equal seen "anything")))))
+           (saved-backend gptel-backend))
+      ;; `gptel-make-openai' may setq `gptel-backend' as a side effect
+      ;; when it is nil; save and restore the global so the test never
+      ;; leaks a stub backend into the user session.
+      (unwind-protect
+          (progn
+            (setq gptel-backend
+                  ;; A real backend object is built so
+                  ;; `gptel-backend-name' works; no request is ever sent.
+                  (gptel-make-openai "stub-backend" :key "test-key"))
+            (should (equal (scalpel-llm-dialect-parse "anything")
+                           (list (list :tool "reply"))))
+            (should (equal seen "anything")))
+        (setq gptel-backend saved-backend)))))
 
 (provide 'scalpel-llm-dialect-test)
 

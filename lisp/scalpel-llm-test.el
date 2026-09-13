@@ -21,6 +21,10 @@ buffer behind."
      (when (get-buffer scalpel-llm-reasoning-buffer-name)
        (kill-buffer scalpel-llm-reasoning-buffer-name))))
 
+(defun scalpel-llm-test--mock-backend ()
+  "A backend that passes preflight without network access."
+  (gptel-make-openai "Scalpel-test" :key "test-key"))
+
 (ert-deftest scalpel-llm-test-api-key-error-p ()
   "Recognize gptel's missing-API-key setup error."
   (should (scalpel-llm--api-key-error-p "‘gptel-api-key’ is not valid"))
@@ -93,6 +97,7 @@ The abandoned request must not mutate the shared token counters, or a
 late response would corrupt the next request."
   (scalpel-llm-test-with-clean-reasoning-buffer
     (let ((scalpel-llm-timeout 0.2)
+          (gptel-backend (scalpel-llm-test--mock-backend))
           saved-callback
           error)
       (cl-letf (((symbol-function 'gptel-request)
@@ -124,6 +129,7 @@ wall-clock deadline would kill it; every callback re-arms the idle
 timer, so the idle budget must not."
   (scalpel-llm-test-with-clean-reasoning-buffer
     (let ((scalpel-llm-timeout 0.3)
+          (gptel-backend (scalpel-llm-test--mock-backend))
           saved-callback
           delivered
           error)
@@ -153,6 +159,7 @@ regain control before the response arrives, which is exactly what
 the synchronous entry point prevented."
   (scalpel-llm-test-with-clean-reasoning-buffer
     (let ((scalpel-llm-timeout 5)
+          (gptel-backend (scalpel-llm-test--mock-backend))
           saved-callback
           delivered)
       (cl-letf (((symbol-function 'gptel-request)
@@ -175,6 +182,7 @@ the synchronous entry point prevented."
   "Chunks accumulate; ON-SUCCESS runs once, at the end of the stream."
   (scalpel-llm-test-with-clean-reasoning-buffer
     (let ((scalpel-llm-timeout 5)
+          (gptel-backend (scalpel-llm-test--mock-backend))
           calls)
       (cl-letf (((symbol-function 'gptel-request)
                  (lambda (_prompt &rest args)
@@ -196,6 +204,7 @@ the synchronous entry point prevented."
   "Reasoning chunks go to the reasoning buffer, not into the response."
   (scalpel-llm-test-with-clean-reasoning-buffer
     (let ((scalpel-llm-timeout 5)
+          (gptel-backend (scalpel-llm-test--mock-backend))
           delivered)
       (cl-letf (((symbol-function 'gptel-request)
                  (lambda (_prompt &rest args)
@@ -220,6 +229,7 @@ that streams a long reasoning pass before its reply must show
 progress during that pass, not stall at zero."
   (scalpel-llm-test-with-clean-reasoning-buffer
     (let* ((scalpel-llm-timeout 5)
+           (gptel-backend (scalpel-llm-test--mock-backend))
            (reasoning "step 1 ")
            (reasoning-tokens (scalpel-llm--count-tokens reasoning))
            tokens-after-reasoning
@@ -248,6 +258,7 @@ progress during that pass, not stall at zero."
   "A nil RESPONSE from gptel is reported through ON-ERROR as `api'."
   (scalpel-llm-test-with-clean-reasoning-buffer
     (let ((scalpel-llm-timeout 5)
+          (gptel-backend (scalpel-llm-test--mock-backend))
           error
           delivered)
       (cl-letf (((symbol-function 'gptel-request)
@@ -267,6 +278,7 @@ progress during that pass, not stall at zero."
   "A synchronous failure naming the API key is reported as `api-key'."
   (scalpel-llm-test-with-clean-reasoning-buffer
     (let ((scalpel-llm-timeout 5)
+          (gptel-backend (scalpel-llm-test--mock-backend))
           error)
       (cl-letf (((symbol-function 'gptel-request)
                  (lambda (&rest _ignore)
@@ -281,6 +293,7 @@ progress during that pass, not stall at zero."
   "Any other synchronous failure is reported as `setup'."
   (scalpel-llm-test-with-clean-reasoning-buffer
     (let ((scalpel-llm-timeout 5)
+          (gptel-backend (scalpel-llm-test--mock-backend))
           error)
       (cl-letf (((symbol-function 'gptel-request)
                  (lambda (&rest _ignore)
@@ -300,6 +313,7 @@ by abandon; a success that forgot to cancel it would fire later and
 report an idle error for a request that finished long ago."
   (scalpel-llm-test-with-clean-reasoning-buffer
     (let ((scalpel-llm-timeout 0.1)
+          (gptel-backend (scalpel-llm-test--mock-backend))
           error
           delivered)
       (cl-letf (((symbol-function 'gptel-request)
@@ -316,6 +330,51 @@ report an idle error for a request that finished long ago."
       (sit-for 0.3)
       (ert-info ((format "Error after settling: %S" error))
         (should-not error)))))
+
+(ert-deftest scalpel-llm-test-async-reports-keyless-backend-immediately ()
+  "A keyless backend is reported as `api-key', never an idle timeout.
+Regression: a keyless backend -- including a stub leaked into the
+session by a test -- sent the request into a real network call that
+never called back, and the round died on the idle timer with a
+misleading `idle' error naming no cause.  The nil-backend case is
+guarded by the preflight; a keyless backend passes it and is
+caught by the synchronous error `gptel-request' raises for a
+missing key."
+  (scalpel-llm-test-with-clean-reasoning-buffer
+    (let ((scalpel-llm-timeout 5)
+          (gptel-backend (gptel-make-openai "Scalpel-test-keyless"))
+          error)
+      (cl-letf (((symbol-function 'gptel-request)
+                 (lambda (&rest _ignore)
+                   (error "\u2018gptel-api-key\u2019 is not valid"))))
+        (scalpel-llm-request-async
+         "test prompt"
+         (lambda (_r) (ert-fail "a keyless backend must not succeed"))
+         (lambda (err) (setq error err))))
+      (ert-info ((format "Error: %S" error))
+        (should (eq (plist-get error :type) 'api-key))
+        (should (string-match-p "scalpel-set-backend"
+                                (plist-get error :message))))
+      (should (null scalpel-llm--cancel-current)))))
+
+(ert-deftest scalpel-llm-test-async-reports-unconfigured-backend-immediately ()
+  "No backend at all fails fast as `api-key', not after idle timeout.
+Regression: `gptel-backend' nil made `gptel-request' hang silently
+until the idle timer reported an `idle' error."
+  (scalpel-llm-test-with-clean-reasoning-buffer
+    (let ((scalpel-llm-timeout 5)
+          (gptel-backend nil)
+          error
+          requested)
+      (cl-letf (((symbol-function 'gptel-request)
+                 (lambda (&rest _) (setq requested t) 'fake-fsm)))
+        (scalpel-llm-request-async
+         "test prompt"
+         (lambda (_r) (ert-fail "an unconfigured backend must not succeed"))
+         (lambda (err) (setq error err))))
+      (ert-info ((format "Error: %S" error))
+        (should (eq (plist-get error :type) 'api-key)))
+      (should-not requested))))
 
 (ert-deftest scalpel-llm-test-select-backend-delegates-to-gptel-menu ()
   "Backend selection delegates to `gptel-menu'."
@@ -344,6 +403,7 @@ Regression: the cancel closure existed but nothing exercised it, so
 a broken cancellation path would only surface in interactive use."
   (scalpel-llm-test-with-clean-reasoning-buffer
     (let ((scalpel-llm-timeout 5)
+          (gptel-backend (scalpel-llm-test--mock-backend))
           error
           delivered)
       (cl-letf (((symbol-function 'gptel-request)

@@ -164,11 +164,15 @@ branch."
             ;; caller's `default-directory' as its root, and the test's
             ;; own buffer would anchor it to the package source tree --
             ;; a user session, which the kill confirmation protects.
+            ;; `scalpel-console-open' selects the console in the current
+            ;; window, so the selection is confined to an excursion: an
+            ;; interactive ERT run must leave the user's display alone.
             (let ((default-directory
                    (file-name-as-directory
                     (expand-file-name temporary-file-directory))))
-              (scalpel-console-open))
-            (setq buf (current-buffer))
+              (scalpel-utils-test-with-preserved-windows
+                (scalpel-console-open)
+                (setq buf (current-buffer))))
             (with-current-buffer buf
               ;; The session context is buffer-local to the console, so
               ;; it is set in the console buffer, not in the test's own
@@ -204,12 +208,15 @@ branch."
                       ((symbol-function 'read-file-name)
                        (lambda (&rest _) this-file)))
               ;; Anchor the console to the temp directory, for the same
-              ;; reason as in `...-open-shows-context' above.
+              ;; reason as in `...-open-shows-context' above; the window
+              ;; excursion is for the same reason too, since `open'
+              ;; selects the console buffer.
               (let ((default-directory
                      (file-name-as-directory
                       (expand-file-name temporary-file-directory))))
-                (scalpel-console-open))
-              (setq buf (current-buffer))
+                (scalpel-utils-test-with-preserved-windows
+                  (scalpel-console-open)
+                  (setq buf (current-buffer))))
               (with-current-buffer buf
                 (scalpel-console-add-file))
               (with-current-buffer buf
@@ -1588,6 +1595,74 @@ the whole instruction by hand to try again."
         (with-current-buffer buf
           (setq scalpel-console--last-instruction nil)
           (should-error (scalpel-console-repeat) :type 'user-error))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
+
+(ert-deftest scalpel-console-test-session-snapshot-round-trips-every-variable ()
+  "A snapshot/restore cycle preserves every registered session variable.
+Regression: the snapshot enumerated the variables by hand, so
+`scalpel-console--last-instruction' was silently lost on a module
+reload and `scalpel-console-repeat' then reported no previous
+instruction even though the user had just sent one."
+  (let ((buf (scalpel-console-test--new-console-buffer)))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (setq scalpel-console--context-baseline 'none-yet
+                  scalpel-console--last-instruction "send it"
+                  scalpel-agent--context-files '("/tmp/scalpel-snap.el")))
+          (let ((snapshot (with-current-buffer buf
+                            (scalpel-console--session-snapshot))))
+            ;; Wipe every registered variable, the way an unload does.
+            (with-current-buffer buf
+              (setq scalpel-console--context-baseline nil
+                    scalpel-console--last-instruction nil
+                    scalpel-agent--context-files nil))
+            (scalpel-console--session-restore snapshot)
+            (with-current-buffer buf
+              (ert-info ((format "After restore: last=%S files=%S base=%S"
+                                 scalpel-console--last-instruction
+                                 scalpel-agent--context-files
+                                 scalpel-console--context-baseline))
+                (should (equal scalpel-console--last-instruction "send it"))
+                (should (equal scalpel-agent--context-files
+                               '("/tmp/scalpel-snap.el")))
+                (should (eq scalpel-console--context-baseline 'none-yet))
+                (should (equal scalpel-console--root
+                               (file-name-as-directory
+                                (expand-file-name
+                                 temporary-file-directory))))))))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
+
+(ert-deftest scalpel-console-test-session-snapshot-round-trips-token-totals ()
+  "Token accounting survives the reload the suite performs.
+Regression: the counters are global, so an unload reset them and the
+token buffer's later lines stopped agreeing with its earlier ones."
+  (let ((buf (scalpel-console-test--new-console-buffer))
+        (scalpel-token--grand-up 0)
+        (scalpel-token--grand-down 0)
+        (scalpel-token--console-totals (make-hash-table :test 'equal)))
+    (unwind-protect
+        (progn
+          (puthash (buffer-name buf) '(10 20) scalpel-token--console-totals)
+          (setq scalpel-token--grand-up 10
+                scalpel-token--grand-down 20)
+          (let ((snapshot (with-current-buffer buf
+                            (scalpel-console--session-snapshot))))
+            ;; A reload re-creates the global from its `defvar' form.
+            (setq scalpel-token--console-totals (make-hash-table :test 'equal)
+                  scalpel-token--grand-up 0
+                  scalpel-token--grand-down 0)
+            (scalpel-console--session-restore snapshot)
+            (ert-info ((format "After restore: up=%d down=%d totals=%S"
+                               scalpel-token--grand-up
+                               scalpel-token--grand-down
+                               (gethash (buffer-name buf)
+                                        scalpel-token--console-totals)))
+              (should (= scalpel-token--grand-up 10))
+              (should (= scalpel-token--grand-down 20))
+              (should (equal (gethash (buffer-name buf)
+                                      scalpel-token--console-totals)
+                             '(10 20))))))
       (scalpel-utils-test-kill-buffer (buffer-name buf)))))
 
 (provide 'scalpel-console-test)

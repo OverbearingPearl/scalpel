@@ -70,19 +70,13 @@ safety net for tests interrupted before their own cleanup ran."
           (set-buffer-modified-p nil))
         (kill-buffer buf)))))
 
-(defcustom scalpel-test-emacs (concat invocation-directory invocation-name)
-  "Emacs binary used to run the test suite in a subprocess."
-  :type 'string
-  :group 'scalpel)
-
 (defun scalpel-test-reload-modules ()
   "Reload all Scalpel modules so that ERT can exercise the latest code.
 
 Not a user entry point: this touches the running session (unloads
-modules, rebuilds keymaps), so it exists only for the batch test
-path and for in-process debugging -- an explicit downgrade point
-that does not protect user state.  Interactive runs go through
-`scalpel-test-run', which isolates the suite in a subprocess.
+modules, rebuilds keymaps).  Protection for a live console comes only
+from the busy-console check and the session snapshot/restore below,
+so callers must keep those invariants intact.
 
 Unloading a module kills the buffer-local variables that hold a console's
 root, its context file list and its diff baseline, so they are snapshotted
@@ -159,45 +153,41 @@ previous run's tests already deleted."
                                              scalpel-test--package-root))))))))
 
 (defun scalpel-test-run-internal ()
-  "Run the suite in this Emacs; the batch entry of `scalpel-test-run'.
-Runs only in a fresh `-Q --batch' child process, where there is no
-user state to protect.  Do not call it from a live session: it
-unloads and reloads modules in this Emacs."
+  "Run the suite in this Emacs.
+In batch mode, runs all tests and exits.  Interactively, runs tests
+with `ert' so results appear in the *ert* buffer."
   (ert-delete-all-tests)
   (scalpel-test--kill-temp-file-buffers)
   (scalpel-test-reload-modules)
   (scalpel-test--load-test-files)
   (scalpel-test--kill-temp-file-buffers)
-  (ert-run-tests-batch-and-exit "scalpel-"))
+  (if noninteractive
+      (ert-run-tests-batch-and-exit "scalpel-")
+    (ert "scalpel-")))
 
 (defun scalpel-test-run ()
-  "Run every Scalpel ERT test in a fresh batch Emacs.
-A child process gives the suite a clean environment and leaves this
-session's state -- open consoles, user configuration, loaded
-modules -- untouched: no unload, no reload, no keymap rebuild ever
-runs here.  Output lands in the *scalpel-test* buffer."
+  "Run every Scalpel ERT test.
+In batch mode (`noninteractive'), run tests in this Emacs and exit.
+Interactively (`M-x'), run the modules and the suite in this Emacs,
+so results appear in the *ert* buffer.  A console with a round in
+flight makes the reload signal a `user-error'."
   (interactive)
-  (let ((buffer (get-buffer-create "*scalpel-test*"))
-        (default-directory scalpel-test--package-root))
-    (with-current-buffer buffer
-      (let ((inhibit-read-only t))
-        (erase-buffer)))
-    (make-process
-     :name "scalpel-test"
-     :buffer buffer
-     :command (list scalpel-test-emacs "--batch" "-Q"
-                    "-l" (expand-file-name "scalpel-test.el"
-                                           scalpel-test--package-root)
-                    "--eval" "(scalpel-test-run-internal)")
-     :sentinel (lambda (proc _event)
-                 (when (memq (process-status proc) '(exit signal))
-                   (with-current-buffer "*scalpel-test*"
-                     (goto-char (point-max))
-                     (insert (format "\nScalpel test process %s.\n"
-                                     (if (zerop (process-exit-status proc))
-                                         "passed"
-                                       "failed")))))))
-    (display-buffer buffer)))
+  (scalpel-test-run-internal))
+
+(ert-deftest scalpel-test-run-runs-in-this-emacs ()
+  "Interactive `scalpel-test-run' runs the suite here, not in a child.
+Regression: it started a `--batch' child Emacs, so `M-x
+scalpel-test-run' produced no *ert* buffer in the running editor."
+  (let ((called 0)
+        (spawned nil))
+    (cl-letf (((symbol-function 'scalpel-test-run-internal)
+               (lambda () (setq called (1+ called))))
+              ((symbol-function 'make-process)
+               (lambda (&rest _) (setq spawned t))))
+      (call-interactively #'scalpel-test-run))
+    (ert-info ((format "called=%d spawned=%S" called spawned))
+      (should (= called 1))
+      (should-not spawned))))
 
 (ert-deftest scalpel-test-open-prompts-and-anchors-console ()
   "`scalpel-open' prompts for a directory and anchors the console there.

@@ -127,7 +127,7 @@ new chunks."
           (goto-char (point-max))
           (insert chunk))))))
 
-(defun scalpel-llm-request-async (prompt on-success on-error &optional system)
+(cl-defun scalpel-llm-request-async (prompt on-success on-error &optional system)
   "Send PROMPT to the configured gptel backend without blocking.
 Return immediately.  ON-SUCCESS is called with the accumulated
 response string once the stream ends.  ON-ERROR is called with a
@@ -225,6 +225,23 @@ in the echo area rather than escaping into gptel's process filter."
                     :message "Scalpel: request cancelled")))))
       (setq cancel-fn (lambda () (cancel-request)))
       (setq scalpel-llm--cancel-current cancel-fn)
+      ;; Preflight: with `gptel-backend' nil, `gptel-request' dispatches
+      ;; into gptel's default path that neither raises synchronously nor
+      ;; calls back, and the round dies on the idle timer with a
+      ;; misleading "idle" error.  A configured backend whose key is
+      ;; missing still raises synchronously inside `gptel-request', and
+      ;; that path reports `api-key' already; only the nil case needs
+      ;; this guard.
+      (unless (and (boundp 'gptel-backend) gptel-backend)
+        (abandon)
+        (notify-error
+         (list :type 'api-key
+               :message
+               (concat "Scalpel: gptel backend is not configured or has no "
+                       "API key.  Run `M-x scalpel-set-backend' or press "
+                       "`C-c C-b' in the *scalpel* buffer to choose a "
+                       "backend and enter credentials")))
+        (cl-return-from scalpel-llm-request-async))
       (condition-case err
           (progn
             (arm-deadline)

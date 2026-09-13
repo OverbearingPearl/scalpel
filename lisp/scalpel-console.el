@@ -227,47 +227,94 @@ blocks on the prompt."
        (format "Kill Scalpel console %s?  Its conversation record will be lost? "
                (buffer-name)))))
 
+(defconst scalpel-console--session-variables
+  '(scalpel-console--root
+    scalpel-console--context-baseline
+    scalpel-console--last-instruction
+    scalpel-agent--context-files)
+  "Buffer-local variables that together hold one console session.
+`scalpel-console--session-snapshot' captures exactly these and
+`scalpel-console--session-restore' puts them back, so a module reload
+never costs a live console its session.  A new buffer-local session
+variable belongs in this list; nothing else enumerates them, so
+forgetting to add it here is the only way to lose one.
+
+Transient state is deliberately left out.  `scalpel-console--busy'
+must not survive a reload, and the reload is refused while it is set,
+so restoring it would only risk resurrecting a dead round.
+`scalpel-agent--shell-output' is reset before and read within a
+single action, so its value belongs to no session.")
+
+(defconst scalpel-console--session-globals
+  '(scalpel-token--console-totals
+    scalpel-token--grand-up
+    scalpel-token--grand-down)
+  "Global variables carrying session accounting across consoles.
+Unlike `scalpel-console--session-variables' these are not
+buffer-local: the token totals span every console, so they are
+captured once and set back once.  They are worth carrying because the
+token buffer keeps its lines across a reload, and a counter reset to
+zero would make its later lines disagree with its earlier ones.
+A global that no reader depends on across a reload does not belong
+here.")
+
 (defun scalpel-console--session-snapshot ()
-  "Return the session state for every live console buffer.
-A console's session state is held in buffer-local variables that die
-when the module is unloaded, while the buffer text survives.  This is
-why these values are captured before an unload and restored after the
-reload.  The result is consumed by `scalpel-console--session-restore'."
-  (let (acc)
+  "Return the session state to carry across a module reload.
+The per-buffer part is a list of (BUFFER-NAME . ((VAR . VALUE) ...))
+covering the buffer-local variables in
+`scalpel-console--session-variables'; the global part holds the same
+\(VAR . VALUE) shape for `scalpel-console--session-globals'.  The
+result is consumed by `scalpel-console--session-restore'.
+
+A console's state lives in these variables, which die when the module
+is unloaded, while the buffer text survives -- which is why they are
+captured here and put back afterwards.  A variable carrying session
+state goes in one of the two lists; nothing else enumerates them, so
+there is one place, not several, to update when one is added."
+  (let (buffers)
     (dolist (buffer (buffer-list))
       (with-current-buffer buffer
         (when (bound-and-true-p scalpel-console--root)
-          (push (list (buffer-name)
-                      scalpel-console--root
-                      (when (boundp 'scalpel-agent--context-files)
-                        scalpel-agent--context-files)
-                      (when (boundp 'scalpel-console--context-baseline)
-                        scalpel-console--context-baseline))
-                acc))))
-    (nreverse acc)))
+          (push (cons (buffer-name)
+                      (mapcar (lambda (var)
+                                (cons var
+                                      (and (boundp var) (symbol-value var))))
+                              scalpel-console--session-variables))
+                buffers))))
+    (list :buffers (nreverse buffers)
+          :globals (mapcar (lambda (var)
+                             (cons var
+                                   (and (boundp var) (symbol-value var))))
+                           scalpel-console--session-globals))))
 
 (defun scalpel-console--session-restore (snapshot)
   "Put a console's session back after the modules were reloaded.
-SNAPSHOT is the list produced by `scalpel-console--session-snapshot'.
-The conversation never left the buffer, only the variables that make
-the buffer recognizable as a console were lost, so re-installing them
-is enough to carry the session on.  Buffers killed while the modules
-were reloaded are skipped."
-  (dolist (entry snapshot)
-    (let* ((buffer-name (nth 0 entry))
-           (root (nth 1 entry))
-           (context-files (nth 2 entry))
-           (context-baseline (nth 3 entry))
-           (buffer (get-buffer buffer-name)))
+SNAPSHOT is the value `scalpel-console--session-snapshot' returned.
+The conversation never left the buffer, only the variables listed in
+`scalpel-console--session-variables' and
+`scalpel-console--session-globals' were lost, so re-installing them
+is enough to carry the session on.  A buffer killed while the modules
+were reloaded is skipped."
+  (dolist (entry (plist-get snapshot :buffers))
+    (let ((buffer (get-buffer (car entry))))
       (when (buffer-live-p buffer)
         (with-current-buffer buffer
           (unless (derived-mode-p 'scalpel-console-mode)
             (setq buffer-read-only nil)
             (scalpel-console-mode))
-          (setq-local scalpel-console--root root)
-          (setq-local default-directory root)
-          (setq-local scalpel-agent--context-files context-files)
-          (setq-local scalpel-console--context-baseline context-baseline))))))
+          ;; Every variable is restored through `make-local-variable', so
+          ;; a binding the unload removed is recreated and one it left
+          ;; alone is overwritten with its snapshot value.
+          (dolist (pair (cdr entry))
+            (set (make-local-variable (car pair)) (cdr pair)))
+          ;; `--root' was restored just above, so the console stays
+          ;; anchored to the directory its session belongs to.
+          (setq-local default-directory scalpel-console--root)))))
+  ;; A reload re-creates each global from its `defvar' form, so the
+  ;; captured value -- a hash table, say -- is set back onto the fresh
+  ;; symbol and the accounting it held is not reset to empty.
+  (dolist (pair (plist-get snapshot :globals))
+    (set (car pair) (cdr pair))))
 
 (defun scalpel-console--tag-change (pos)
   "Return the next position after POS where the console tags change.

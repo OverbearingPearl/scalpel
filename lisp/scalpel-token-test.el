@@ -9,6 +9,7 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'scalpel-token)
+(require 'scalpel-utils-test)
 
 (defmacro scalpel-token-test-with-clean-state (&rest body)
   "Run BODY with fresh accounting state and the token buffer cleaned up.
@@ -52,17 +53,22 @@ BODY, success or failure."
                    '(0 0)))))
 
 (ert-deftest scalpel-token-test-open-creates-buffer-with-header ()
-  "Opening shows the buffer and installs its header once."
+  "Opening shows the buffer and installs its header once.
+`scalpel-token-open' selects the token buffer in the current window;
+the excursion keeps an interactive ERT run from moving the user's
+display onto a buffer the test then kills."
   (scalpel-token-test-with-clean-state
-    (scalpel-token-open)
-    (should (get-buffer scalpel-token-buffer-name))
-    (with-current-buffer scalpel-token-buffer-name
-      (should (derived-mode-p 'special-mode))
-      (should (string-match-p "Scalpel token estimates" (buffer-string)))
-      ;; Opening twice must not duplicate the header.
+    (scalpel-utils-test-with-preserved-windows
       (scalpel-token-open)
-      (should (= (how-many "Scalpel token estimates" (point-min) (point-max))
-                 1)))))
+      (should (get-buffer scalpel-token-buffer-name))
+      (with-current-buffer scalpel-token-buffer-name
+        (should (derived-mode-p 'special-mode))
+        (should (string-match-p "Scalpel token estimates" (buffer-string)))
+        ;; Opening twice must not duplicate the header.
+        (scalpel-token-open)
+        (should (= (how-many "Scalpel token estimates"
+                             (point-min) (point-max))
+                   1))))))
 
 (ert-deftest scalpel-token-test-reset-clears-accounting-and-buffer ()
   "Reset zeroes the totals and reprints the header."
