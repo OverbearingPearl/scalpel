@@ -13,16 +13,33 @@
 ;;; Code:
 
 (defconst scalpel-locate-elisp--defining-forms
-  '(defun defmacro defvar defvar-local defcustom defconst)
+  '(defun defmacro defvar defvar-local defcustom defconst
+    cl-defun cl-defmacro cl-defmethod
+    ert-deftest)
   "Top-level defining forms recognised as one complete definition.
 Structural contract shared by the definition regexes below and by
-`scalpel-locate-elisp--single-definition-p'.")
+`scalpel-locate-elisp--single-definition-p'.  Beyond the core
+Elisp definers it carries the cl-lib and ERT aliases, because test
+files -- which an agent round edits most often -- define almost
+exclusively through `ert-deftest' and `cl-defun'.")
 
 (defconst scalpel-locate-elisp--definer-regexp
-  (regexp-opt (mapcar #'symbol-name scalpel-locate-elisp--defining-forms))
+  (concat "\\(?:" (regexp-opt
+                   (mapcar #'symbol-name
+                           scalpel-locate-elisp--defining-forms))
+          "\\)")
   "Regexp matching a single top-level Emacs Lisp definer keyword.
-Rendered as a non-capturing group, so inserting it does not shift
-any capture used by callers.")
+Rendered as one shy group -- wrapped explicitly here, not by
+passing a PAREN argument, because `regexp-opt's grouping for a
+non-nil PAREN is not something to bet on: the run that motivated
+the shy flag left the group capturing, which shifted every capture
+number in `--def-name-regex' and made `list-symbols' read the
+definer keyword instead of the name.  The embedding matters more
+than the matching: `--def-header-prefix' and `--def-name-regex'
+splice this into larger patterns between \"^(\" and \"[ \\t]+\", so
+an ungrouped alternation would tear the pattern apart, and a
+capturing one would shift the captures.  The explicit shy wrapper
+rules out both, whatever `regexp-opt' emits inside.")
 
 (defconst scalpel-locate-elisp--def-header-prefix
   (concat "^(" scalpel-locate-elisp--definer-regexp "[ \t]+")

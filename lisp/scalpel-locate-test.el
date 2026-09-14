@@ -91,10 +91,39 @@ behind Emacs reported a definition present on disk as missing."
           (with-current-buffer buf (set-buffer-modified-p nil))
           (kill-buffer buf))))))
 
+(ert-deftest scalpel-locate-test-elisp-locates-ert-deftest ()
+  "An `ert-deftest' is located like any other top-level definition.
+Regression: the defining-form whitelist held only the core Elisp
+definers, so a symbol inside a test file -- the file an agent round
+most often edits -- reported \"not found\" even though the deftest
+sat in the file; the same gap covered `cl-defun' and friends.
+The provider functions work on the current buffer, so the content
+is inserted here directly: calling them with a file path outside
+the dispatch layer would search the caller's own buffer."
+  (with-temp-buffer
+    (insert "(require 'ert)\n\n"
+            "(ert-deftest llm-pick-align-test-a-gap-is-not-ambiguous ()\n"
+            "  (should t))\n\n"
+            "(cl-defun cl-pick--helper (&key x)\n  x)\n")
+    (ert-info ((format "Symbols: %S"
+                       (scalpel-locate-elisp-list-symbols nil)))
+      (should (member "llm-pick-align-test-a-gap-is-not-ambiguous"
+                      (scalpel-locate-elisp-list-symbols nil)))
+      (should (member "cl-pick--helper"
+                      (scalpel-locate-elisp-list-symbols nil))))
+    (should (scalpel-locate-elisp--top-definition-range
+             "llm-pick-align-test-a-gap-is-not-ambiguous"))
+    (should (scalpel-locate-elisp--top-definition-range
+             "cl-pick--helper"))))
+
 (ert-deftest scalpel-locate-test-elisp-single-definition-p ()
   "One or more complete top-level defining forms are accepted."
   (should (scalpel-locate-elisp--single-definition-p
            "(defun foo (x) (+ x 1))"))
+  (should (scalpel-locate-elisp--single-definition-p
+           "(ert-deftest foo-test () (should t))"))
+  (should (scalpel-locate-elisp--single-definition-p
+           "(cl-defun foo (&key x) x)"))
   (should (scalpel-locate-elisp--single-definition-p
            "(defvar scalpel-execute-providers nil\n  \"Providers.\")\n(defun bar ())"))
   (should-not (scalpel-locate-elisp--single-definition-p
