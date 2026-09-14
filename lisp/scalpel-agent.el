@@ -899,30 +899,30 @@ unchanged so the caller's refusal path reports it."
          (candidate (string-join lines "\n")))
     (if (scalpel-locate-single-definition-p file candidate)
         candidate
+      ;; Longest prefix first: adding prose after a complete
+      ;; definition breaks the single-definition check, so the first
+      ;; passing prefix is the definition without the prose.
       (let ((found nil))
-        ;; Longest prefix first: adding prose after a complete
-        ;; definition breaks the single-definition check, so the first
-        ;; passing prefix is the definition without the prose.
         (cl-loop for n from (length lines) downto 2
                  until found
                  do (let ((prefix (string-join (cl-subseq lines 0 n) "\n")))
                       (when (scalpel-locate-single-definition-p file prefix)
                         (setq found prefix))))
-        (or found stripped))
-      ;; The definition can also sit at the end of the reply, under
-      ;; whole-file noise: take the longest passing suffix.  Suffixes
-      ;; are tried only after prefixes fail, so the existing
-      ;; trailing-prose case keeps its answer.
-      (let ((found nil))
-        (cl-loop for n from 1 upto (- (length lines) 2)
-                 until found
-                 do (let ((suffix (string-join (cl-subseq lines n) "\n")))
-                      (when (scalpel-locate-single-definition-p file suffix)
-                        ;; The split keeps the reply's trailing newline
-                        ;; as an empty final line; whitespace after the
-                        ;; validated definition is padding, not code.
-                        (setq found (string-trim-right suffix)))))
-        (or found stripped)))))
+        (if found
+            found
+          ;; The definition can also sit at the end of the reply, under
+          ;; whole-file noise: take the longest passing suffix.  Suffixes
+          ;; are tried only after prefixes fail, so the existing
+          ;; trailing-prose case keeps its answer.
+          (cl-loop for n from 1 upto (- (length lines) 2)
+                   until found
+                   do (let ((suffix (string-join (cl-subseq lines n) "\n")))
+                        (when (scalpel-locate-single-definition-p file suffix)
+                          ;; The split keeps the reply's trailing newline
+                          ;; as an empty final line; whitespace after the
+                          ;; validated definition is padding, not code.
+                          (setq found (string-trim-right suffix)))))
+          (or found stripped))))))
 
 (defun scalpel-agent--apply-if-unchanged (file symbol expected-body new-text)
   "Replace SYMBOL in FILE with NEW-TEXT only if EXPECTED-BODY is unchanged.

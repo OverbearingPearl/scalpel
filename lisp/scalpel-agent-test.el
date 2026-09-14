@@ -186,6 +186,25 @@ refused outright."
         (should (scalpel-locate-single-definition-p this-file usable))
         (should (string= usable "(defun foo (x)\n  (+ x 2))"))))))
 
+(ert-deftest scalpel-agent-test-usable-replacement-drops-trailing-prose ()
+  "A definition followed by prose keeps only the definition.
+Characterization: the model answered with the correct replacement
+and then explained it.  The prefix search must stop at the end of
+the definition; the whole reply fails
+`scalpel-locate-single-definition-p' and would otherwise be
+refused outright, which is the shape of the observed planner
+failure that surfaced as a prose-reply error."
+  (scalpel-utils-test-with-temp-file ".el"
+    (with-temp-file this-file
+      (insert "(defun foo (x)\n  (+ x 1))\n"))
+    (let* ((reply (concat "(defun foo (x)\n  (+ x 2))\n\n"
+                          "This increments x by 2 instead of 1. "
+                          "Let me know if you want a different step."))
+           (usable (scalpel-agent--usable-replacement this-file reply)))
+      (ert-info ((format "Usable:\n%S" usable))
+        (should (scalpel-locate-single-definition-p this-file usable))
+        (should (string= usable "(defun foo (x)\n  (+ x 2))"))))))
+
 (ert-deftest scalpel-agent-test-read-whole-file ()
   "A read without a symbol returns the file inside the output fence."
   (scalpel-utils-test-with-temp-file ".el"
