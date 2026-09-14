@@ -149,7 +149,12 @@ itself.  Do not read the same definition twice: nothing changes
 between rounds unless you changed it.
 Never invent commands the user did not ask for, and never use shell
 to change files: all file changes go through edit, create, delete,
-rename and delete-file.
+rename and delete-file.  When the best way to make a change is one
+mechanical batch command -- a bulk rename across many files, say --
+do not try to run it: the shell can only read.  Deliver the exact
+command through a confirm action whose \"text\" holds the command
+itself, so the user can copy and run it; never write such a command
+as prose, because a reply with no action array is refused whole.
 An edit replaces something that already exists, so its \"symbol\"
 must name a definition really present in that file: the definition
 is re-located before the replacement lands, and a name the file
@@ -182,6 +187,13 @@ unexpected conditions.  No news is good news: an empty or near-empty
 output means the command succeeded, and anything printed is what
 deserves attention.  Never end a command with a raw, unfiltered
 dump of everything.
+The environment may be macOS, whose BSD sed and grep differ from
+the GNU ones most examples assume.  When a text-transformation
+command is needed, first check for perl once with a cheap
+inspection command such as \"command -v perl\"; if it is present, prefer perl
+for in-place edits and regular-expression work (\"perl -pi -e ...\"),
+because its behavior is the same everywhere; if it is absent, fall
+back to the platform's sed, quoting its platform-specific flags.
 If the conversation already contains the output of a shell command
 you were asked to run, read that output and respond with the
 conclusion instead of running the same command again.  A continued
@@ -985,6 +997,7 @@ the edit."
           (scalpel-llm-request-async
            (format prompt signature body instruction)
            (lambda (new-text)
+             (message "Scalpel-debug: edit reply arrived for %s" symbol)
              (let ((new-text (scalpel-agent--usable-replacement file new-text)))
                (cond
                 ((string= new-text scalpel-agent--no-change-sentinel)
@@ -1486,15 +1499,18 @@ busy flag still gets a chance to release it."
          (in-session
            (let ((reports nil)
                  (shells nil)
-                 (reads nil))
+                 (reads nil)
+                 (edits nil))
              (cl-labels
                  ((finish ()
                     (funcall on-done
                              (list :report
                                    (string-join (nreverse reports) "\n")
                                    :shells (nreverse shells)
-                                   :reads (nreverse reads))))
+                                   :reads (nreverse reads)
+                                   :edits (nreverse edits))))
                   (step (rest)
+                    (message "Scalpel-debug: step, %d action(s) left" (length rest))
                     (if (null rest)
                         (finish)
                       (let ((action (car rest)))
@@ -1513,7 +1529,9 @@ busy flag still gets a chance to release it."
                              ((equal (plist-get action :tool) "read")
                               (push (list :file (plist-get action :file)
                                           :symbol (plist-get action :symbol))
-                                    reads)))
+                                    reads))
+                            ((member (plist-get action :tool) '("edit" "create"))
+                             (push report edits)))
                             (step (cdr rest))))
                          (lambda (err)
                            (in-session

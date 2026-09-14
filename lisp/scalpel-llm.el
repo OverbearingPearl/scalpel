@@ -22,13 +22,19 @@
 (require 'gptel)
 (require 'gptel-transient)
 
-(defvar scalpel-llm-timeout 30
+(defcustom scalpel-llm-timeout 90
   "Seconds of total callback silence before a request is abandoned.
 This is an *idle* budget, not a wall-clock deadline: every gptel
 callback -- content chunk, reasoning chunk, or completion -- resets the
 clock, so a slow but active stream is never killed.  Time spent queued
 inside gptel counts as idle, because no callback arrives during it.
-Raise this for backends that think before emitting their first chunk.")
+Raise this for backends that think before emitting their first chunk.
+A continued round re-sends the whole conversation, and a backend may
+queue that prompt far longer than a first-round one before the first
+token arrives, which is why the default leaves room above the older
+30-second value."
+  :type 'integer
+  :group 'scalpel-llm)
 
 (defcustom scalpel-llm-deadline 300
   "Seconds from the moment a request is sent until it is abandoned.
@@ -151,6 +157,7 @@ raised.  ON-ERROR is the request's terminal callback; a success
 callback which raises is re-delivered through ON-ERROR with :type
 `callback', and an error raised by ON-ERROR itself is only reported
 in the echo area rather than escaping into gptel's process filter."
+  (message "Scalpel-debug: llm request start")
   (let* ((cancelled nil)
          (accumulated "")
          (timer nil)
@@ -166,6 +173,7 @@ in the echo area rather than escaping into gptel's process filter."
            (when (eq scalpel-llm--cancel-current cancel-fn)
              (setq scalpel-llm--cancel-current nil)))
          (notify-error (payload)
+           (message "Scalpel-debug: llm notify-error %S" payload)
            ;; ON-ERROR runs after `abandon' has cancelled the idle timer
            ;; and the total deadline, so an error raised inside it can no
            ;; longer be rescued by either timer and would escape into
@@ -209,6 +217,7 @@ in the echo area rather than escaping into gptel's process filter."
          (finish (kind payload)
            (unless cancelled
              (abandon)
+             (message "Scalpel-debug: llm finish kind=%s" kind)
              (if (eq kind 'success)
                  (condition-case err
                      (funcall on-success payload)

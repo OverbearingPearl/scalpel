@@ -908,6 +908,19 @@ it."
           (should (= asked 1)))
         (should (= ran 2))))))
 
+(ert-deftest scalpel-agent-test-system-prompt-prefers-perl ()
+  "The prompt steers text-transformation commands toward perl.
+Nothing in the code can make the planner pick a portable tool, so
+the preference has to be stated in the prompt; this guards only
+that the live prompt still carries the rule, so a rewrite that
+drops it fails here instead of in a session against BSD sed."
+  (ert-info ((format "Prompt excerpt:\n%S"
+                     (substring scalpel-agent-system-prompt 0 0)))
+    (should (string-match-p "command -v perl"
+                            scalpel-agent-system-prompt))
+    (should (string-match-p "perl -pi -e"
+                            scalpel-agent-system-prompt))))
+
 (ert-deftest scalpel-agent-test-shell-contract-drops-read-only ()
   "The shell contract carries only fields the code still acts on.
 Regression: the planner declared \"read-only\", which gated the

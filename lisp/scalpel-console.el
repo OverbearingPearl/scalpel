@@ -1091,9 +1091,12 @@ data, or when the commands together produced more than
 (defun scalpel-console--continue-p (result)
   "Return non-nil when another round should follow RESULT.
 RESULT is a `scalpel-agent-run' result whose round ran shell
-commands or read files.  A read is always continued: the planner
-asked for it, so there is nothing to question.  Small shell output
-continues without a question too; only a
+commands, read files, or applied edits.  A read is always
+continued: the planner asked for it, so there is nothing to
+question.  An applied edit is continued too: the planner split the
+request across rounds, and stopping after one file would abandon
+the rest.  Small shell output continues without a question too;
+only a
 round `scalpel-console--noisy-round-p' rejects is put to the
 user, because its output may cost more in tokens than it is
 worth.  The question names every command together with its output
@@ -1148,7 +1151,8 @@ point, so a second RET during a round is refused."
                 (setq conversation (scalpel-console--history))
                 (cond
                  ((not (and result (or (plist-get result :shells)
-                                       (plist-get result :reads))))
+                                       (plist-get result :reads)
+                                       (plist-get result :edits))))
                   (setq scalpel-console--busy nil))
                  ((>= round scalpel-console-max-rounds)
                   ;; No round is left, so asking would throw the answer

@@ -39,7 +39,7 @@ Return nil when SYMBOL is absent."
   (save-excursion
     (goto-char (point-min))
     (let* ((case-fold-search nil)
-           (pattern (format "%s%s\\(?:[ \t\n\r]\\|\\'\\)"
+           (pattern (format "%s%s\\(?:[ \t\n\r()]\\|\\'\\)"
                             scalpel-locate-elisp--def-header-prefix
                             (regexp-quote symbol))))
       (when (re-search-forward pattern nil t)

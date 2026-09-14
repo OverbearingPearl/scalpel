@@ -157,7 +157,7 @@ The whole request lasts longer than `scalpel-llm-timeout', so a
 wall-clock deadline would kill it; every callback re-arms the idle
 timer, so the idle budget must not."
   (scalpel-llm-test-with-clean-reasoning-buffer
-    (let ((scalpel-llm-timeout 0.3)
+    (let ((scalpel-llm-timeout 1)
           (gptel-backend (scalpel-llm-test--mock-backend))
           saved-callback
           delivered
@@ -173,8 +173,12 @@ timer, so the idle budget must not."
         ;; Three chunks, each after a pause shorter than the budget, for a
         ;; total span longer than it.  `sit-for' drives the event loop,
         ;; so a timer that was not re-armed fires in the middle of this.
+        ;; The pause stays well under the budget on purpose: timer
+        ;; scheduling jitter on a loaded machine once ate the 0.1s
+        ;; margin a tighter pairing left, and the idle timer fired
+        ;; before the first chunk could re-arm it.
         (dotimes (_ 3)
-          (sit-for 0.2)
+          (sit-for 0.4)
           (funcall saved-callback "." nil))
         (funcall saved-callback t nil))
       (ert-info ((format "Delivered: %S, error: %S" delivered error))

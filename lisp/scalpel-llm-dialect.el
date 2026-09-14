@@ -133,36 +133,47 @@ by eye from one that did."
         (print-escape-multibyte t))
     (prin1-to-string raw)))
 
-(defun scalpel-llm-dialect--json-payload (raw)
-  "Return the JSON action payload embedded in RAW, or nil.
+(defun scalpel-llm-dialect--json-payloads (raw)
+  "Return every balanced JSON array or object span in RAW, in order.
 A planner reply is a container: the JSON array may be preceded by
-prose, wrapped in a markdown code fence, or both.  Return the first
-balanced JSON array or object in RAW, ignoring everything around it;
-return nil when RAW holds no complete JSON value.  Brackets inside
-JSON strings never count, so a command such as \"echo ']'\" does not
-end the payload early."
-  (let ((start (string-match "\\[\\|{" raw))
-        (i 0)
-        (depth 0)
-        (in-string nil)
-        (escaped nil)
-        end)
-    (when start
-      (setq i start)
-      (while (and (< i (length raw)) (null end))
-        (let ((char (aref raw i)))
-          (cond
-           (escaped (setq escaped nil))
-           (in-string
-            (cond ((eq char ?\\) (setq escaped t))
-                  ((eq char ?\") (setq in-string nil))))
-           ((eq char ?\") (setq in-string t))
-           ((memq char '(?\[ ?\{)) (setq depth (1+ depth)))
-           ((memq char '(?\] ?\})) (setq depth (1- depth))
-            (when (= depth 0) (setq end (1+ i))))))
-        (setq i (1+ i)))
-      (when end
-        (substring raw start end)))))
+prose, wrapped in a markdown code fence, or both -- and the prose or
+the code it quotes may carry brackets of its own (a sed character
+class, say).  A single first-span extraction would then hand back a
+code fragment as the payload and report the whole reply as invalid
+JSON, so every candidate span comes back and the caller picks the
+one that really parses.  Brackets inside JSON strings never count,
+so a command such as \"echo ']'\" does not end a span early."
+  (let ((spans nil)
+        (i 0))
+    (while (< i (length raw))
+      (let ((char (aref raw i)))
+        (if (memq char '(?\[ ?\{))
+            (let ((depth 0)
+                  (in-string nil)
+                  (escaped nil)
+                  end
+                  (j i))
+              (while (and (< j (length raw)) (null end))
+                (let ((c (aref raw j)))
+                  (cond
+                   (escaped (setq escaped nil))
+                   (in-string
+                    (cond ((eq c ?\\) (setq escaped t))
+                          ((eq c ?\") (setq in-string nil))))
+                   ((eq c ?\") (setq in-string t))
+                   ((memq c '(?\[ ?\{)) (setq depth (1+ depth)))
+                   ((memq c '(?\] ?\})) (setq depth (1- depth))
+                    (when (= depth 0) (setq end (1+ j)))))
+                  (setq j (1+ j))))
+              (if end
+                  (progn
+                    (push (substring raw i end) spans)
+                    (setq i end))
+                ;; An opener with no closer: nothing later can open a
+                ;; complete span either, so stop scanning.
+                (setq i (length raw))))
+          (setq i (1+ i)))))
+    (nreverse spans)))
 
 (defun scalpel-llm-dialect--json-unterminated-p (raw)
   "Return non-nil when RAW opens a JSON value that never closes.
@@ -351,42 +362,49 @@ from whatever prose or markdown fences surround it.  Signal
     (user-error
      "Scalpel: planner returned an empty reply; check the backend's \
 API key, quota and network, then retry"))
-  (let ((payload (scalpel-llm-dialect--json-payload raw)))
-    (unless payload
+  (let ((candidates (scalpel-llm-dialect--json-payloads raw))
+        (winner nil)
+        (parsed nil)
+        ;; Models emit \x2014-style escapes, which JSON forbids;
+        ;; normalize them to \uXXXX before parsing, then escape raw
+        ;; control characters inside string literals.
+        (normalize
+         (lambda (payload)
+           (scalpel-llm-dialect--escape-raw-controls
+            (replace-regexp-in-string
+             "\\\\x\\([0-9a-fA-F]\\{4\\}\\)" "\\\\u\\1" payload)))))
+    (unless candidates
       ;; `scalpel-llm-dialect--parse-error' signals, so a missing payload
       ;; and an unparsable one share a single explanation path.
       (scalpel-llm-dialect--parse-error raw))
-    (let ((parsed
-           (condition-case err
-               (json-parse-string
-                ;; Models emit \x2014-style escapes, which JSON forbids;
-                ;; normalize them to \uXXXX before parsing, then escape
-                ;; raw control characters inside string literals.
-                (scalpel-llm-dialect--escape-raw-controls
-                 (replace-regexp-in-string
-                  "\\\\x\\([0-9a-fA-F]\\{4\\}\\)" "\\\\u\\1" payload))
-                :object-type 'plist
-                :array-type 'list)
-             ;; The parser's own message names the offending construct;
-             ;; dropping it, as a bare `condition-case nil' would, makes
-             ;; every parse failure indistinguishable.
-             (error
-              (user-error
-               "Scalpel: planner returned invalid JSON (%s): %s"
-               (error-message-string err)
-               (scalpel-llm-dialect--visible-raw raw))))))
-      (when (and (plistp parsed) (plist-get parsed :tool))
-        (setq parsed (list parsed)))
-      (unless (and (listp parsed)
-                   (cl-every (lambda (item)
-                               (and (listp item)
-                                    (plist-get item :tool)))
-                             parsed))
-        (user-error
-         (concat "Scalpel: planner returned unexpected structure "
-                 "(expected a JSON array of action objects): %s")
-         (scalpel-llm-dialect--visible-raw raw)))
-      parsed)))
+    ;; The first bracket pair in a reply may belong to code the reply
+    ;; quotes rather than to the action array, so every candidate is
+    ;; tried and the first one that parses into action objects wins.
+    (dolist (payload candidates)
+      (unless winner
+        (let ((attempt
+               (condition-case nil
+                   (let ((value
+                          (json-parse-string (funcall normalize payload)
+                                             :object-type 'plist
+                                             :array-type 'list)))
+                     (when (and (plistp value) (plist-get value :tool))
+                       (setq value (list value)))
+                     (when (and (listp value)
+                                (cl-every (lambda (item)
+                                            (and (listp item)
+                                                 (plist-get item :tool)))
+                                          value))
+                       value))
+                 (error nil))))
+          (when attempt
+            (setq winner payload parsed attempt)))))
+    (unless parsed
+      ;; Nothing parsed: the failure is reported against the whole raw
+      ;; reply, not a bracket fragment of it, so the reader sees what
+      ;; the planner actually wrote.
+      (scalpel-llm-dialect--parse-error raw))
+    parsed))
 
 (defun scalpel-llm-dialect-parse (raw)
   "Parse the raw planner reply RAW through the active backend's dialect.

@@ -114,9 +114,9 @@ cause was the backend cutting the reply off."
 (ert-deftest scalpel-llm-dialect-test-json-payload-without-json ()
   "A reply holding no complete JSON value has no payload."
   (ert-info ("Input: prose and an unterminated array; expect nil both times")
-    (should-not (scalpel-llm-dialect--json-payload
+    (should-not (scalpel-llm-dialect--json-payloads
                  "There is nothing to change."))
-    (should-not (scalpel-llm-dialect--json-payload "[unterminated"))))
+    (should-not (scalpel-llm-dialect--json-payloads "[unterminated"))))
 
 (ert-deftest scalpel-llm-dialect-test-parse-error-names-tool-call-syntax ()
   "XML tool-call markup is named in the error, not reported as bad JSON.
@@ -225,6 +225,21 @@ literally, so the offending character could not be seen.  Moved from
       ;; error message is exactly as unreadable as the original.
       (should-not (string-match-p "[\t\u00A0]" shown))
       (should (string-match-p "\\\\" shown)))))
+
+(ert-deftest scalpel-llm-dialect-test-brackets-in-prose-do-not-hide-the-array ()
+  "Bracketed code in the prose cannot steal the payload from the array.
+Regression: only the first bracket span was extracted, so a reply
+of prose plus a shell snippet -- a sed character class, say -- had
+its `[a-z]` read as the JSON array, the parse failed on the code
+fragment, and a reply that held a usable plan was reported as
+invalid JSON."
+  (let ((raw (concat "Run this in your shell:\n"
+                     "sed -E 's/llm-pick-fetch([^a-zA-Z-]|$)/x/g' f.el\n"
+                     "[{\"tool\":\"reply\",\"text\":\"done\"}]")))
+    (let ((parsed (scalpel-llm-dialect--default-parse raw)))
+      (ert-info ((format "Parsed: %S" parsed))
+        (should (equal (plist-get (car parsed) :tool) "reply"))
+        (should (equal (plist-get (car parsed) :text) "done"))))))
 
 (ert-deftest scalpel-llm-dialect-test-register-replaces-same-regexp ()
   "Registering the same regexp replaces the previous provider."
