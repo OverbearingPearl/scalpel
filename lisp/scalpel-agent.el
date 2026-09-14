@@ -855,13 +855,15 @@ reject."
 
 (defun scalpel-agent--usable-replacement (file text)
   "Return the replacement TEXT usable for FILE, or TEXT itself.
-A replacement reply is one definition by contract, but models
-append self-review prose after the definition.  The fence is
-stripped first; if the whole text still fails
+A replacement reply is one definition by contract, but models pad
+the definition with surrounding text: self-review prose after it,
+or a whole-file echo -- headers, Commentary, requires -- before
+it.  The fence is stripped first; if the whole text still fails
 `scalpel-locate-single-definition-p', the longest line-bounded
-prefix that passes is returned, which drops trailing prose while
-keeping the definition whole.  When no prefix qualifies, TEXT is
-returned unchanged so the caller's refusal path reports it."
+prefix that passes is tried, then the longest suffix, which drops
+trailing prose and leading file noise respectively while keeping
+the definition whole.  When neither qualifies, TEXT is returned
+unchanged so the caller's refusal path reports it."
   (let* ((stripped (scalpel-agent--strip-code-fence text))
          (lines (split-string stripped "\n"))
          (candidate (string-join lines "\n")))
@@ -876,6 +878,20 @@ returned unchanged so the caller's refusal path reports it."
                  do (let ((prefix (string-join (cl-subseq lines 0 n) "\n")))
                       (when (scalpel-locate-single-definition-p file prefix)
                         (setq found prefix))))
+        (or found stripped))
+      ;; The definition can also sit at the end of the reply, under
+      ;; whole-file noise: take the longest passing suffix.  Suffixes
+      ;; are tried only after prefixes fail, so the existing
+      ;; trailing-prose case keeps its answer.
+      (let ((found nil))
+        (cl-loop for n from 1 upto (- (length lines) 2)
+                 until found
+                 do (let ((suffix (string-join (cl-subseq lines n) "\n")))
+                      (when (scalpel-locate-single-definition-p file suffix)
+                        ;; The split keeps the reply's trailing newline
+                        ;; as an empty final line; whitespace after the
+                        ;; validated definition is padding, not code.
+                        (setq found (string-trim-right suffix)))))
         (or found stripped)))))
 
 (defun scalpel-agent--apply-if-unchanged (file symbol expected-body new-text)

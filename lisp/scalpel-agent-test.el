@@ -164,6 +164,28 @@ the file on disk must already hold the result."
         (should (string= (buffer-string)
                          "(defun foo (x)\n  (+ x 1))\n"))))))
 
+(ert-deftest scalpel-agent-test-usable-replacement-extracts-suffix-definition ()
+  "A definition buried under leading non-code lines is still usable.
+Characterization: the model answered a block-replacement request
+with the whole file -- file header, Commentary and all -- with the
+defun at the end.  The prefix search cannot reach it, so the
+replacement search must also try suffixes, or such a reply is
+refused outright."
+  (scalpel-utils-test-with-temp-file ".el"
+    (with-temp-file this-file
+      (insert "(defun foo (x)\n  (+ x 1))\n"))
+    (let* ((reply (concat ";;; llm-pick.el --- demo -*- lexical-binding: t; -*-\n"
+                          ";; Author: someone\n"
+                          ";;; Commentary:\n"
+                          ";; Words.\n"
+                          ";;; Code:\n"
+                          "(require 'json)\n"
+                          "(defun foo (x)\n  (+ x 2))\n"))
+           (usable (scalpel-agent--usable-replacement this-file reply)))
+      (ert-info ((format "Usable:\n%S" usable))
+        (should (scalpel-locate-single-definition-p this-file usable))
+        (should (string= usable "(defun foo (x)\n  (+ x 2))"))))))
+
 (ert-deftest scalpel-agent-test-read-whole-file ()
   "A read without a symbol returns the file inside the output fence."
   (scalpel-utils-test-with-temp-file ".el"

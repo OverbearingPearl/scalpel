@@ -44,11 +44,33 @@ Registering the same REGEXP replaces the previous provider."
                            scalpel-locate-providers)))
     (and entry (cdr entry))))
 
+(defun scalpel-locate--sync-buffer (file)
+  "Return a buffer visiting FILE whose text matches the disk.
+A file changed behind Emacs -- a git checkout, another tool's
+write -- would otherwise be located in stale text and a definition
+present on disk reported missing.  An existing buffer is handled
+here rather than through `find-file-noselect': that function
+prompts to discard unsaved edits when the file changed, and the
+answer must never decide a locate.  A modified buffer is left
+alone, because reverting it would discard the user's work; an
+unmodified stale buffer is reverted without asking."
+  (let ((buffer (find-buffer-visiting file)))
+    (if buffer
+        (with-current-buffer buffer
+          ;; A modified buffer keeps the user's in-flight text; an
+          ;; unmodified one that fell behind the disk is refreshed,
+          ;; NOCONFIRM because there is nothing to lose.
+          (when (and (not (buffer-modified-p))
+                     (not (verify-visited-file-modtime buffer)))
+            (revert-buffer t t t))
+          buffer)
+      (find-file-noselect file))))
+
 (defun scalpel-locate-range (file symbol)
   "Return byte range (BEG . END) of SYMBOL in FILE.
 Open FILE if needed.  Signal `user-error' when no locator is
 registered for FILE or SYMBOL cannot be found."
-  (find-file-noselect file)
+  (scalpel-locate--sync-buffer file)
   (let* ((provider (scalpel-locate-provider-for-file file))
          (locate (and provider (plist-get provider :locate))))
     (unless locate
@@ -71,7 +93,7 @@ handles FILE or the provider does not validate replacements."
   "Return a list of top-level symbol names in FILE.
 Open FILE if needed.  Signal `user-error' when no locator is
 registered for FILE."
-  (find-file-noselect file)
+  (scalpel-locate--sync-buffer file)
   (let* ((provider (scalpel-locate-provider-for-file file))
          (list-symbols (and provider (plist-get provider :list-symbols))))
     (unless list-symbols
