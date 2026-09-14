@@ -47,6 +47,22 @@ name."
 FILE is a file name string.  Does nothing when FILE is absent."
   (when (file-exists-p file) (delete-file file)))
 
+(defun scalpel-utils-test-delete-backend (name)
+  "Remove the backend named NAME from gptel's global registry.
+`gptel-make-openai' registers every backend it builds into
+`gptel--known-backends', which is what gptel's backend menu lists;
+a stub created by a test must be removed again, or it shows up in
+the user's own backend choices forever.  Keys are compared as both
+symbols and strings, since gptel has stored both spellings across
+versions."
+  (setq gptel--known-backends
+        (cl-delete-if
+         (lambda (entry)
+           (let ((key (if (consp entry) (car entry) entry)))
+             (or (equal key name)
+                 (equal key (intern name)))))
+         gptel--known-backends)))
+
 (defmacro scalpel-utils-test-with-preserved-windows (&rest body)
   "Evaluate BODY and restore the window state afterwards.
 A command under test may select the buffer it opened --

@@ -209,7 +209,9 @@ rejected before dispatch is ever reached."
           (should-error (scalpel-llm-dialect-parse
                          scalpel-llm-laguna-test--read-call)
                         :type 'scalpel-llm-dialect-tool-call-error))
-      (setq gptel-backend saved))))
+      (setq gptel-backend saved)
+      (scalpel-utils-test-delete-backend "Laguna")
+      (scalpel-utils-test-delete-backend "Somewhere-Else"))))
 
 (ert-deftest scalpel-llm-laguna-test-plan-accepts-a-text-call ()
   "A text call reaches dispatch as a planned action, not a refusal.
@@ -234,7 +236,8 @@ planner report a tool-call failure and the round ran nothing."
                 (should (equal (plist-get (car actions) :tool) "read"))
                 (should (equal (plist-get (car actions) :file)
                                "/tmp/a.el"))))))
-      (setq gptel-backend saved))))
+      (setq gptel-backend saved)
+      (scalpel-utils-test-delete-backend "Laguna"))))
 
 (provide 'scalpel-llm-laguna-test)
 

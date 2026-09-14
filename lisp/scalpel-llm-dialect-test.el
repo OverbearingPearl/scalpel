@@ -10,6 +10,7 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'scalpel-llm-dialect)
+(require 'scalpel-utils-test)
 
 (ert-deftest scalpel-llm-dialect-test-default-parse-plain-array ()
   "A bare JSON action array parses to one plist per object."
@@ -258,7 +259,8 @@ literally, so the offending character could not be seen.  Moved from
             (should (equal (scalpel-llm-dialect-parse "anything")
                            (list (list :tool "reply"))))
             (should (equal seen "anything")))
-        (setq gptel-backend saved-backend)))))
+        (setq gptel-backend saved-backend)
+        (scalpel-utils-test-delete-backend "stub-backend")))))
 
 (ert-deftest scalpel-llm-dialect-test-parse-dispatches-on-the-model-name ()
   "A dialect registered for the model is found through a provider backend.
@@ -291,7 +293,8 @@ which refused the reply as tool-call syntax even though
             (should (equal (scalpel-llm-dialect-parse "anything")
                            (list (list :tool "reply"))))
             (should (equal seen "anything"))))
-      (setq gptel-backend saved-backend))))
+      (setq gptel-backend saved-backend)
+      (scalpel-utils-test-delete-backend "OpenRouter"))))
 
 (ert-deftest scalpel-llm-dialect-test-parse-leaves-unregistered-models-alone ()
   "A backend and model no provider matches keep the default parser.
@@ -313,7 +316,8 @@ not written for to a provider registered for a different one."
                            "[{\"tool\":\"reply\",\"text\":\"hi\"}]")))
               (ert-info ((format "Parsed: %S" parsed))
                 (should (equal (plist-get (car parsed) :tool) "reply"))))))
-      (setq gptel-backend saved-backend))))
+      (setq gptel-backend saved-backend)
+      (scalpel-utils-test-delete-backend "OpenRouter"))))
 
 (ert-deftest scalpel-llm-dialect-test-parse-ignores-a-model-the-backend-does-not-serve ()
   "A model name the active backend does not declare selects no dialect.
@@ -342,7 +346,8 @@ session was never configured for."
               (ert-info ((format "Parsed: %S" parsed))
                 (should (equal (plist-get (car parsed) :tool) "reply"))
                 (should-not seen)))))
-      (setq gptel-backend saved-backend))))
+      (setq gptel-backend saved-backend)
+      (scalpel-utils-test-delete-backend "OpenRouter"))))
 
 (ert-deftest scalpel-llm-dialect-test-parse-error-names-a-prose-reply ()
   "A reply holding no JSON at all is reported as prose, not bad JSON.

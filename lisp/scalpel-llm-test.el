@@ -9,21 +9,41 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'scalpel-llm)
+(require 'scalpel-utils-test)
 
 (defmacro scalpel-llm-test-with-clean-reasoning-buffer (&rest body)
-  "Run BODY, then kill the reasoning buffer it may have created.
+  "Run BODY, then kill the reasoning buffer and remove stub backends.
 Every request recreates `scalpel-llm-reasoning-buffer-name' through
 `get-buffer-create', so a test that does not clean it up leaves a
-buffer behind."
+buffer behind.  Backends registered by `gptel-make-openai' are
+removed too: they would otherwise appear in the user's backend menu."
   (declare (indent 0))
   `(unwind-protect
        (progn ,@body)
      (when (get-buffer scalpel-llm-reasoning-buffer-name)
-       (kill-buffer scalpel-llm-reasoning-buffer-name))))
+       (kill-buffer scalpel-llm-reasoning-buffer-name))
+     (dolist (name scalpel-llm-test--created-backends)
+       (scalpel-utils-test-delete-backend name))
+     (setq scalpel-llm-test--created-backends nil)))
+
+(defvar scalpel-llm-test--created-backends nil
+  "Backends this suite created, for cleanup after each test.")
 
 (defun scalpel-llm-test--mock-backend ()
-  "A backend that passes preflight without network access."
-  (gptel-make-openai "Scalpel-test" :key "test-key"))
+  "A backend that passes preflight without network access.
+The backend is remembered so the test macro can remove it from
+gptel's registry after the test."
+  (let ((backend (gptel-make-openai "Scalpel-test" :key "test-key")))
+    (push "Scalpel-test" scalpel-llm-test--created-backends)
+    backend))
+
+(defun scalpel-llm-test--mock-keyless-backend ()
+  "A backend with no API key, for the missing-key path test.
+The backend is remembered so the test macro can remove it from
+gptel's registry after the test."
+  (let ((backend (gptel-make-openai "Scalpel-test-keyless")))
+    (push "Scalpel-test-keyless" scalpel-llm-test--created-backends)
+    backend))
 
 (ert-deftest scalpel-llm-test-api-key-error-p ()
   "Recognize gptel's missing-API-key setup error."
@@ -351,7 +371,7 @@ caught by the synchronous error `gptel-request' raises for a
 missing key."
   (scalpel-llm-test-with-clean-reasoning-buffer
     (let ((scalpel-llm-timeout 5)
-          (gptel-backend (gptel-make-openai "Scalpel-test-keyless"))
+          (gptel-backend (scalpel-llm-test--mock-keyless-backend))
           error)
       (cl-letf (((symbol-function 'gptel-request)
                  (lambda (&rest _ignore)
