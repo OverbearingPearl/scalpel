@@ -174,6 +174,14 @@ to grep, use head or tail, and never dump a whole file or directory
 with cat, ls -R or find.  A command whose output could run to
 megabytes is the wrong command; ask the user with a confirm action
 instead.
+Every shell command must be built for silent success: pipe the
+output through a filter (grep -c, head, tail, redirection to a
+file, or similar) so that the happy path prints nothing at all and
+the command's visible output only surfaces errors, mismatches or
+unexpected conditions.  No news is good news: an empty or near-empty
+output means the command succeeded, and anything printed is what
+deserves attention.  Never end a command with a raw, unfiltered
+dump of everything.
 If the conversation already contains the output of a shell command
 you were asked to run, read that output and respond with the
 conclusion instead of running the same command again.  A continued
