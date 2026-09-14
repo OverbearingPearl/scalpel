@@ -822,6 +822,54 @@ region no longer holds it."
        symbol))
     current-range))
 
+(defun scalpel-agent--strip-code-fence (text)
+  "Return TEXT with a surrounding markdown code fence removed.
+Replacement replies are plain text by contract, but models wrap
+them in ```lang fences anyway; the fence is not part of the
+definition and fails `scalpel-locate-single-definition-p'.  Only a
+fence that wraps the whole trimmed text is stripped, so a fence
+inside a larger reply is left for the single-definition check to
+reject."
+  (let ((trimmed (string-trim text)))
+    (if (and (string-prefix-p "```" trimmed)
+             (string-suffix-p "```" trimmed)
+             (> (length trimmed) 6))
+        (let* ((body (substring trimmed 3))
+               ;; Drop an optional language tag on the opening line.
+               (body (if (string-match "\\`[^\n]*\n" body)
+                         (substring body (match-end 0))
+                       body)))
+          (string-trim (substring body 0
+                                  (if (string-suffix-p "```" body)
+                                      (- (length body) 3)
+                                    (length body)))))
+      trimmed)))
+
+(defun scalpel-agent--usable-replacement (file text)
+  "Return the replacement TEXT usable for FILE, or TEXT itself.
+A replacement reply is one definition by contract, but models
+append self-review prose after the definition.  The fence is
+stripped first; if the whole text still fails
+`scalpel-locate-single-definition-p', the longest line-bounded
+prefix that passes is returned, which drops trailing prose while
+keeping the definition whole.  When no prefix qualifies, TEXT is
+returned unchanged so the caller's refusal path reports it."
+  (let* ((stripped (scalpel-agent--strip-code-fence text))
+         (lines (split-string stripped "\n"))
+         (candidate (string-join lines "\n")))
+    (if (scalpel-locate-single-definition-p file candidate)
+        candidate
+      (let ((found nil))
+        ;; Longest prefix first: adding prose after a complete
+        ;; definition breaks the single-definition check, so the first
+        ;; passing prefix is the definition without the prose.
+        (cl-loop for n from (length lines) downto 2
+                 until found
+                 do (let ((prefix (string-join (cl-subseq lines 0 n) "\n")))
+                      (when (scalpel-locate-single-definition-p file prefix)
+                        (setq found prefix))))
+        (or found stripped)))))
+
 (defun scalpel-agent--apply-if-unchanged (file symbol expected-body new-text)
   "Replace SYMBOL in FILE with NEW-TEXT only if EXPECTED-BODY is unchanged.
 Return a human-readable report string.  Signal `user-error' if the target
@@ -880,7 +928,7 @@ the edit."
           (scalpel-llm-request-async
            (format prompt signature body instruction)
            (lambda (new-text)
-             (let ((new-text (string-trim new-text)))
+             (let ((new-text (scalpel-agent--usable-replacement file new-text)))
                (cond
                 ((string= new-text scalpel-agent--no-change-sentinel)
                  (funcall on-success
@@ -937,7 +985,7 @@ ON-SUCCESS receives the report string.  ON-ERROR receives a plist
                       (line-end-position)))
                    instruction)
            (lambda (new-text)
-             (let ((new-text (string-trim new-text)))
+             (let ((new-text (scalpel-agent--usable-replacement file new-text)))
                (cond
                 ((string= new-text scalpel-agent--no-change-sentinel)
                  (funcall on-success
