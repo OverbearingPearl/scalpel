@@ -853,6 +853,24 @@ reject."
                                     (length body)))))
       trimmed)))
 
+(defun scalpel-agent--replacement-name (text)
+  "Return the name defined by the first top-level form in TEXT, or nil.
+Only lisp-shaped text yields a name; other languages return nil and
+the report keeps the original symbol.  This closes the loop on a
+planner that renames while editing: the report is the only channel
+that tells the next round the old symbol no longer exists."
+  (condition-case nil
+      (let ((form (car (read-from-string text))))
+        (when (and (listp form)
+                   (symbolp (car form))
+                   ;; A definition needs a name and at least one body
+                   ;; form; a bare "(defun foo)" is a fragment, not a
+                   ;; rename, and must not report a new name.
+                   (> (length form) 2)
+                   (symbolp (cadr form)))
+          (symbol-name (cadr form))))
+    (error nil)))
+
 (defun scalpel-agent--usable-replacement (file text)
   "Return the replacement TEXT usable for FILE, or TEXT itself.
 A replacement reply is one definition by contract, but models pad
@@ -901,7 +919,11 @@ region was modified while an LLM request was in flight."
   (with-current-buffer (find-file-noselect file)
     (let ((range (scalpel-agent--verified-range file symbol expected-body)))
       (scalpel-execute-replace (car range) (cdr range) new-text)
-      (format "Edited %s in %s" symbol (buffer-name (current-buffer))))))
+      (let ((renamed (scalpel-agent--replacement-name new-text)))
+        (if (and renamed (not (string= renamed symbol)))
+            (format "Edited %s in %s; the definition is now named %s"
+                    symbol (buffer-name (current-buffer)) renamed)
+          (format "Edited %s in %s" symbol (buffer-name (current-buffer))))))))
 
 (defun scalpel-agent--create-after-anchor (file symbol after expected-body new-text)
   "Insert NEW-TEXT after the anchor AFTER in FILE, verified unchanged.
@@ -927,7 +949,18 @@ the edit."
       (funcall on-error (list :type 'malformed
                               :message "Scalpel: malformed edit action"))
       (cl-return-from scalpel-agent-edit))
-    (let ((range (scalpel-locate-range file symbol)))
+    (let ((range (condition-case err
+                     (scalpel-locate-range file symbol)
+                   (error
+                    ;; A symbol the planner names but the file does not
+                    ;; hold -- often one a previous round renamed -- must
+                    ;; settle through ON-ERROR like every other failure,
+                    ;; not escape as a raw `user-error' that would block
+                    ;; an unattended run on a prompt.
+                    (funcall on-error
+                             (list :type 'locate
+                                   :message (error-message-string err)))
+                    (cl-return-from scalpel-agent-edit)))))
       (unless range
         (funcall on-error
                  (list :type 'locate
@@ -958,9 +991,22 @@ the edit."
                  (funcall on-success
                           (format "No change needed: %s in %s" symbol file)))
                 ((scalpel-locate-single-definition-p file new-text)
-                 (funcall on-success
-                          (scalpel-agent--apply-if-unchanged
-                           file symbol body new-text)))
+                 ;; The re-verified range can also fail -- the region
+                 ;; changed in flight -- and it must settle through
+                 ;; ON-ERROR alone: wrapping the apply as ON-SUCCESS's
+                 ;; argument would still deliver a report after the
+                 ;; failure was reported.
+                 (let ((report (condition-case err
+                                   (scalpel-agent--apply-if-unchanged
+                                    file symbol body new-text)
+                                 (error
+                                  (funcall on-error
+                                           (list :type 'locate
+                                                 :message
+                                                 (error-message-string err)))
+                                  nil))))
+                   (when report
+                     (funcall on-success report))))
                 (t
                  (funcall on-error
                           (list :type 'no-replacement

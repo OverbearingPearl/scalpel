@@ -1135,6 +1135,82 @@ The report preserves the raw output size for continuation decisions."
   (should (string= (scalpel-agent--action-summary '(:tool "shell"))
                    "no reason")))
 
+(ert-deftest scalpel-agent-test-edit-missing-symbol-reports-through-on-error ()
+  "An edit naming a symbol the file does not hold settles via ON-ERROR.
+Regression: the initial locate ran outside the error guard, so the
+`user-error' escaped the callback contract and the console reported
+a raw error instead of a planner failure the history could read."
+  (scalpel-utils-test-with-temp-file ".el"
+    (with-temp-file this-file (insert "(defun foo (x)\n  (+ x 1))\n"))
+    (let (error)
+      (scalpel-agent-edit
+       this-file "gone" "do nothing"
+       (lambda (_r) (ert-fail "a missing symbol must not edit"))
+       (lambda (e) (setq error e)))
+      (ert-info ((format "Error: %S" error))
+        (should (eq (plist-get error :type) 'locate))
+        (should (string-match-p "not found"
+                                (plist-get error :message)))))))
+
+(ert-deftest scalpel-agent-test-edit-rename-announces-new-name ()
+  "An edit whose replacement renames the definition says so in the report.
+Regression: the replacement validator accepted a definition under a
+new name, the report still named the old symbol, and the next round
+located the old name and failed with `not found'.  The report is the
+only channel that tells the planner the old symbol no longer exists."
+  (scalpel-utils-test-with-temp-file ".el"
+    (with-temp-file this-file (insert "(defun foo (x)\n  (+ x 1))\n"))
+    (cl-letf (((symbol-function 'scalpel-llm-request-async)
+               (lambda (_prompt on-success _on-error &optional _system)
+                 (funcall on-success "(defun bar (x)\n  (+ x 2))"))))
+      (let (report)
+        (scalpel-agent-edit
+         this-file "foo" "rename to bar"
+         (lambda (r) (setq report r))
+         (lambda (err) (ert-fail (plist-get err :message))))
+        (ert-info ((format "Report: %S" report))
+          (should (string-match-p "Edited foo" report))
+          (should (string-match-p "now named bar" report)))))))
+
+(ert-deftest scalpel-agent-test-edit-changed-body-reports-through-on-error ()
+  "A region changed in flight settles via ON-ERROR, not a raw signal.
+Regression: the second locate, inside `--apply-if-unchanged', also
+ran outside the error guard and escaped the callback contract."
+  (scalpel-utils-test-with-temp-file ".el"
+    (with-temp-file this-file (insert "(defun foo (x)\n  (+ x 1))\n"))
+    (cl-letf (((symbol-function 'scalpel-llm-request-async)
+               (lambda (_prompt on-success _on-error &optional _system)
+                 ;; Change the file after the prompt captured its body,
+                 ;; so the re-verified range no longer matches.  Written
+                 ;; through the visiting buffer, never `with-temp-file':
+                 ;; an outside write desyncs the visiting buffer's
+                 ;; modtime and makes the run prompt to reread from
+                 ;; disk, blocking unattended tests.  Clearing the
+                 ;; modified flag keeps the change "on disk" in Emacs's
+                 ;; view without saving.
+                 (with-current-buffer (find-file-noselect this-file)
+                   (let ((inhibit-read-only t))
+                     (erase-buffer)
+                     (insert "(defun foo (x)\n  (+ x 99))\n"))
+                   (set-buffer-modified-p nil))
+                 (funcall on-success "(defun foo (x)\n  (+ x 2))"))))
+      (let (error)
+        (scalpel-agent-edit
+         this-file "foo" "increment x"
+         (lambda (_r) (ert-fail "a changed region must not edit"))
+         (lambda (e) (setq error e)))
+        (ert-info ((format "Error: %S" error))
+          (should (eq (plist-get error :type) 'locate)))))))
+
+(ert-deftest scalpel-agent-test-replacement-name-reads-the-defined-name ()
+  "The replacement name reader returns the first defined name, or nil."
+  (should (equal (scalpel-agent--replacement-name "(defun foo (x))")
+                 "foo"))
+  (should (equal (scalpel-agent--replacement-name "(defvar bar 1)")
+                 "bar"))
+  (should-not (scalpel-agent--replacement-name "(defun foo)"))
+  (should-not (scalpel-agent--replacement-name "not lisp (")))
+
 (ert-deftest scalpel-agent-test-path-components-relative-and-absolute ()
   "Absolute paths keep a root component; relative ones do not."
   (should (equal (scalpel-agent--path-components "/a/b.el")
