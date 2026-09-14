@@ -31,7 +31,7 @@
 (require 'scalpel-execute)
 (require 'scalpel-sandbox)
 
-(defconst scalpel-agent--tool-vocabulary '("edit" "reply" "create" "delete" "rename" "delete-file" "read" "shell" "confirm")
+(defconst scalpel-agent--tool-vocabulary '("edit" "reply" "create" "create-file" "delete" "rename" "delete-file" "read" "shell" "confirm")
   "Tool names the planner may emit.
 Structural contract, not user configuration: dispatch in
 `scalpel-agent-execute-action' must stay in sync with it.")
@@ -40,6 +40,7 @@ Structural contract, not user configuration: dispatch in
   '(("edit" . (:tool :file :symbol :instruction))
     ("reply" . (:tool :text))
     ("create" . (:tool :file :symbol :instruction :after))
+    ("create-file" . (:tool :file :text))
     ("delete" . (:tool :file :symbol))
     ("rename" . (:tool :file :to))
     ("delete-file" . (:tool :file))
@@ -118,6 +119,7 @@ Each action is one of:
 {\"tool\":\"edit\",\"file\":\"/abs/path.el\",\"symbol\":\"name\",\"instruction\":\"...\"}
 {\"tool\":\"reply\",\"text\":\"...\"}
 {\"tool\":\"create\",\"file\":\"/abs/path.el\",\"symbol\":\"new-name\",\"instruction\":\"...\",\"after\":\"existing-symbol\"}
+{\"tool\":\"create-file\",\"file\":\"/abs/new/path.el\",\"text\":\"...\"}
 {\"tool\":\"delete\",\"file\":\"/abs/path.el\",\"symbol\":\"name\"}
 {\"tool\":\"rename\",\"file\":\"/abs/old.el\",\"to\":\"/abs/new.el\"}
 {\"tool\":\"delete-file\",\"file\":\"/abs/path.el\"}
@@ -155,6 +157,12 @@ do not try to run it: the shell can only read.  Deliver the exact
 command through a confirm action whose \"text\" holds the command
 itself, so the user can copy and run it; never write such a command
 as prose, because a reply with no action array is refused whole.
+A create-file makes a new file: its \"text\" is the whole file
+content, headers and several definitions included, and its
+\"file\" must not name a file that already exists -- changing an
+existing file is edit and create work.  Missing parent
+directories are created.  It is confirmed with the user first,
+like every file-level action.
 An edit replaces something that already exists, so its \"symbol\"
 must name a definition really present in that file: the definition
 is re-located before the replacement lands, and a name the file
@@ -280,7 +288,13 @@ Raise it deliberately, or add a subdirectory instead."
   :type 'integer
   :group 'scalpel)
 
-(defcustom scalpel-agent-confirm-tools '("shell" "rename" "delete-file")
+(defconst scalpel-agent--file-level-tools '("rename" "delete-file" "create-file")
+  "Tools that decide which files exist.
+Their confirmation is not waivable: the boundary lock cannot
+predict a file-level action's reach, so the prompt must survive
+any setting of `scalpel-agent-confirm-tools'.")
+
+(defcustom scalpel-agent-confirm-tools '("shell")
   "Tools that require user confirmation before execution.
 Each entry is a tool name string.  When the planner emits an action
 whose :tool is in this list, the user is prompted to confirm before
@@ -291,11 +305,10 @@ prompt: the sandbox already bounds what a command may touch, so
 only the editor-freezing case needs an answer.  Removing \"shell\"
 from this list disables the prompt for every shell action,
 including a long-running one.
-\"rename\" and \"delete-file\" are confirmed because a file-level
-action changes which files exist rather than bytes inside a file,
-so the boundary lock cannot predict its reach and the user must
-approve it; a file the planner creates from scratch (no existing
-referents) does not need confirmation."
+The file-level tools (`rename', `delete-file', `create-file') are
+confirmed regardless of this list: a file-level action changes
+which files exist rather than bytes inside a file, so the boundary
+lock cannot predict its reach and the user must always approve it."
   :type '(repeat string)
   :group 'scalpel)
 
@@ -1105,6 +1118,24 @@ ON-SUCCESS receives the report string.  ON-ERROR receives a plist
                                         symbol new-text)))))))
            on-error))))))
 
+(defun scalpel-agent-create-file (file text)
+  "Create FILE with TEXT as its whole content.
+File-level and therefore always confirmed: like `rename' and
+`scalpel-agent-delete-file', it decides which files exist, which
+the boundary lock cannot predict.  Refuses an existing file --
+changing one is `scalpel-agent-edit' and `scalpel-agent-create'
+work -- and creates missing parent directories.  Return a
+human-readable report string.  Signal `user-error' on a malformed
+action or an existing file."
+  (unless (and file text)
+    (user-error "Scalpel: malformed create-file action"))
+  (when (file-exists-p file)
+    (user-error "Scalpel: can't create %s: already exists" file))
+  (let ((dir (file-name-directory (expand-file-name file))))
+    (when dir (make-directory dir t)))
+  (with-temp-file file (insert text))
+  (format "Created file %s" file))
+
 (defun scalpel-agent-delete (file symbol)
   "Delete SYMBOL in FILE through the boundary-locked deletion.
 The line the definition occupied goes with it, and the blank lines
@@ -1333,17 +1364,20 @@ The planner must emit this as its final action."
 
 (defun scalpel-agent--confirm-needed-p (action)
   "Return non-nil when ACTION must be confirmed before execution.
-Tools in `scalpel-agent-confirm-tools' are confirmed, except a
-shell action the planner did not flag as long-running: the
-sandbox already bounds what a command may touch, so only the
-editor-freezing case needs an answer.  JSON booleans arrive as t
-and :false; only t counts as true, so a missing or false flag
-still asks.  The flag gates the prompt only: it never relaxes the
-working directory or the environment the command runs in."
+A file-level tool is always confirmed: it decides which files
+exist, which no setting can waive.  A tool in
+`scalpel-agent-confirm-tools' is confirmed, except a shell action
+the planner did not flag as long-running: the sandbox already
+bounds what a command may touch, so only the editor-freezing case
+needs an answer.  JSON booleans arrive as t and :false; only t
+counts as true, so a missing or false flag still asks.  The flag
+gates the prompt only: it never relaxes the working directory or
+the environment the command runs in."
   (let ((tool (plist-get action :tool)))
-    (and (member tool scalpel-agent-confirm-tools)
-         (not (and (equal tool "shell")
-                   (not (eq (plist-get action :long-running) t)))))))
+    (or (member tool scalpel-agent--file-level-tools)
+        (and (member tool scalpel-agent-confirm-tools)
+             (not (and (equal tool "shell")
+                       (not (eq (plist-get action :long-running) t))))))))
 
 (defun scalpel-agent--action-summary (action)
   "Return a one-line description of ACTION for the confirmation prompt.
@@ -1367,8 +1401,9 @@ ON-SUCCESS receives the report string.  ON-ERROR receives a plist
 \(:type SYMBOL :message STRING); the type is `sandbox' when a shell
 action was refused by the sandbox, so a caller can keep the
 boundary out of the conversation.  Actions that issue no LLM
-request (`reply', `confirm', `delete', `rename', `delete-file',
-`read', `shell') settle synchronously; `edit' and `create' settle
+request (`reply', `confirm', `create-file', `delete', `rename',
+`delete-file', `read', `shell') settle synchronously; `edit' and
+`create' settle
 from their LLM's callback.  ON-SUCCESS and ON-ERROR run outside
 the internal error guard, so an error they raise escapes instead
 of being re-framed as an action failure."
@@ -1402,6 +1437,17 @@ of being re-framed as an action failure."
           (plist-get action :instruction)
           (plist-get action :after)
           on-success on-error))
+        ("create-file"
+         (let ((report (condition-case err
+                         (scalpel-agent-create-file
+                          (plist-get action :file)
+                          (plist-get action :text))
+                       (error
+                        (funcall on-error
+                                 (list :type 'action
+                                       :message (error-message-string err)))
+                        nil))))
+           (when report (funcall on-success report))))
         ("delete"
          (let ((report (condition-case err
                            (scalpel-agent-delete

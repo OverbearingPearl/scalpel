@@ -416,6 +416,10 @@ Scalpel is in active, deliberately small MVP stages.
 - Shell execution through `bubblewrap` on Linux, plus an experimental macOS
   backend through `sandbox-exec`; shell actions are refused when the sandbox is
   unavailable or fails its probe
+- New-file creation through the `create-file` action: the planner delivers a
+  finished whole-file draft, missing parent directories are created, and the
+  action is confirmed with the user first like every file-level action
+  (`rename`, `delete-file`), because it decides which files exist
 
 **Near-term**
 - Session diff and one-shot rollback: review everything a session changed as a

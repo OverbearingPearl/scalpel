@@ -1132,6 +1132,7 @@ The report preserves the raw output size for continuation decisions."
     (with-temp-file this-file (insert "x"))
     (let ((scalpel-agent-confirm-tools nil)
           report)
+      (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
       (scalpel-agent-execute-action
        (list :tool "rename" :file this-file
              :to (concat this-file "-moved.el"))
@@ -1141,7 +1142,7 @@ The report preserves the raw output size for continuation decisions."
       (scalpel-agent-execute-action
        (list :tool "delete-file" :file (concat this-file "-moved.el"))
        (lambda (r) (setq report r))
-       (lambda (err) (ert-fail (plist-get err :message))))
+       (lambda (err) (ert-fail (plist-get err :message)))))
       (should (string-match-p "Deleted file" report)))))
 
 (ert-deftest scalpel-agent-test-execute-action-confirm ()
@@ -1244,6 +1245,73 @@ ran outside the error guard and escaped the callback contract."
                  "bar"))
   (should-not (scalpel-agent--replacement-name "(defun foo)"))
   (should-not (scalpel-agent--replacement-name "not lisp (")))
+
+(ert-deftest scalpel-agent-test-create-file-writes-whole-content ()
+  "A create-file lands the whole content and missing parents.
+Regression: no tool could create a file, so a planner holding a
+finished new-file draft could only degrade to handing the user a
+shell command through confirm."
+  (let ((dir (make-temp-file "scalpel-test-new-" t))
+        report)
+    (unwind-protect
+        (let* ((target (expand-file-name "sub/new.el" dir))
+               (scalpel-agent-confirm-tools '("create-file")))
+          (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
+            (scalpel-agent-execute-action
+             (list :tool "create-file" :file target
+                   :text "(defun a ())\n(defun b ())\n")
+             (lambda (r) (setq report r))
+             (lambda (err) (ert-fail (plist-get err :message)))))
+          (ert-info ((format "Report: %S" report))
+            (should (string-match-p "Created file" report)))
+          (let ((on-disk (with-temp-buffer
+                           (insert-file-contents target)
+                           (buffer-string))))
+            (ert-info ((format "On disk:\n%S" on-disk))
+              (should (string= on-disk "(defun a ())\n(defun b ())\n"))))))
+      (delete-directory dir t)))
+
+(ert-deftest scalpel-agent-test-create-file-refuses-existing ()
+  "A create-file onto an existing file is refused, never overwritten.
+Changing an existing file is `edit' and `create' work; the refusal
+must leave the file exactly as it was."
+  (scalpel-utils-test-with-temp-file ".el"
+    (with-temp-file this-file (insert "keep\n"))
+    (let ((scalpel-agent-confirm-tools '("create-file")))
+      (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
+        (should-error
+         (scalpel-agent-create-file this-file "(defun a ())")
+         :type 'user-error))
+      (let ((on-disk (with-temp-buffer
+                       (insert-file-contents this-file)
+                       (buffer-string))))
+        (should (string= on-disk "keep\n"))))))
+
+(ert-deftest scalpel-agent-test-create-file-is-always-confirmed ()
+  "A create-file asks even when the confirm list was trimmed.
+File-level actions decide which files exist, which the boundary
+lock cannot predict, so the prompt is not waivable the way a
+quick shell action's is."
+  (let ((scalpel-agent-confirm-tools nil)
+        (asked 0)
+        (dir (make-temp-file "scalpel-test-new-" t)))
+    (unwind-protect
+        (cl-letf (((symbol-function 'yes-or-no-p)
+                   (lambda (&rest _) (setq asked (1+ asked)) t)))
+          (scalpel-agent-execute-action
+           (list :tool "create-file"
+                 :file (expand-file-name "new.el" dir)
+                 :text "x")
+           (lambda (_r) nil)
+           (lambda (err) (ert-fail (plist-get err :message))))
+          (should (= asked 1)))
+      (delete-directory dir t))))
+
+(ert-deftest scalpel-agent-test-create-file-refuses-malformed ()
+  "A create-file without a file or content signals `user-error'."
+  (should-error (scalpel-agent-create-file nil "x") :type 'user-error)
+  (should-error (scalpel-agent-create-file "/tmp/a.el" nil)
+                :type 'user-error))
 
 (ert-deftest scalpel-agent-test-path-components-relative-and-absolute ()
   "Absolute paths keep a root component; relative ones do not."
