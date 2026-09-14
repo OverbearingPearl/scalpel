@@ -693,11 +693,13 @@ followed three times without the reply changing."
           (should (string-match-p "tool-call syntax"
                                   (plist-get error :message))))))))
 
-(ert-deftest scalpel-agent-test-plan-reports-a-prose-reply-as-its-own-type ()
-  "A reply written as prose is reported as `prose', not `parse'.
-Regression: both arrived as `parse', so the console advised a retry
-for a failure that resending the same instruction does not fix --
-the same request gets the same shape back from the same backend."
+(ert-deftest scalpel-agent-test-plan-degrades-a-prose-reply-to-a-reply-action ()
+  "A reply written as prose is delivered as a reply action, not refused.
+Regression: a prose reply was reported as a planner error and the
+whole round was thrown away, so an answer the model had already
+written -- such as instructions it could not execute itself --
+never reached the user.  The prose now degrades to a reply action
+whose text keeps the original answer readable."
   ;; Dispatch reads the session's own backend and model, so a dialect
   ;; registered for them would decide this test's outcome.  None is
   ;; registered here: the subject is the parser's own report.
@@ -708,20 +710,20 @@ the same request gets the same shape back from the same backend."
                           (concat "The dependency lives in two layers.\n\n"
                                   "**The gateway** is the hard coupling: it\n"
                                   "calls gptel.\n")))))
-      (let (error)
+      (let (actions)
         (scalpel-agent-plan
          "analyse the dependency" nil
-         (lambda (_actions) (ert-fail "a prose reply must not plan"))
-         (lambda (err) (setq error err)))
-        (ert-info ((format "Error: %S" error))
-          (should (eq (plist-get error :type) 'prose))
-          (should (string-match-p "prose" (plist-get error :message)))
+         (lambda (a) (setq actions a))
+         (lambda (err) (ert-fail (plist-get err :message))))
+        (ert-info ((format "Actions: %S" actions))
+          (should (= (length actions) 1))
+          (should (equal (plist-get (car actions) :tool) "reply"))
           ;; The answer stays readable: it is the whole evidence the
           ;; user has of what the planner wrote instead of an array.
           (should (string-match-p "The gateway"
-                                  (plist-get error :message)))
+                                  (plist-get (car actions) :text)))
           (should-not (string-match-p "\\\\n"
-                                      (plist-get error :message))))))))
+                                      (plist-get (car actions) :text))))))))
 
 (ert-deftest scalpel-agent-test-system-prompt-declares-every-tool ()
   "Every dispatchable tool must be declared to the planner.

@@ -1594,11 +1594,13 @@ whatever backend and model the test session carries."
                                       scalpel-console--tool-call-advice)))))
       (scalpel-utils-test-kill-buffer (buffer-name buf)))))
 
-(ert-deftest scalpel-console-test-prose-advice-names-the-rephrase ()
-  "A reply written as prose is answered with rephrasing, not a retry.
-Regression: it arrived as an ordinary planner failure, so the
-console offered \\[scalpel-console-repeat] for a failure that
-resending the same instruction does not fix."
+(ert-deftest scalpel-console-test-prose-reply-is-delivered ()
+  "A reply written as prose is delivered as the answer, not refused.
+Regression: it arrived as a planner failure carrying the answer
+inside the error text, so the round was thrown away and the user
+was advised to rephrase -- advice that does not fix a model that
+keeps answering in the same shape.  The prose now degrades to a
+reply action, so the answer reaches the console like any reply."
   (let ((scalpel-agent--context-files nil)
         (scalpel-llm-dialect-providers nil)
         (buf (scalpel-console-test--new-console-buffer)))
@@ -1617,22 +1619,21 @@ resending the same instruction does not fix."
               (scalpel-console-send-line)))
           (with-current-buffer buf
             (ert-info ((format "Buffer:\n%S" (buffer-string)))
-              (should (string-match-p "Scalpel planner error"
-                                      (buffer-string)))
-              (should (string-match-p
-                       (regexp-quote scalpel-console--prose-advice)
-                       (buffer-string)))
-              ;; The retry advice would promise the fix the model's
-              ;; answer shape does not give.
+              ;; The answer is delivered verbatim as a reply report.
+              (should (string-match-p "The gateway" (buffer-string)))
+              (should (string-match-p "calls gptel" (buffer-string)))
+              (should-not (string-match-p "Scalpel planner error"
+                                          (buffer-string)))
+              (should-not (string-match-p
+                           (regexp-quote scalpel-console--prose-advice)
+                           (buffer-string)))
               (should-not (string-match-p
                            (regexp-quote scalpel-console--retry-advice)
                            (buffer-string)))
-              ;; The advice must name the binding that resends the
-              ;; instruction, and the remedy that does help.
-              (should (string-match-p "C-c C-e"
-                                      scalpel-console--prose-advice))
-              (should (string-match-p "rephrase"
-                                      scalpel-console--prose-advice)))))
+              ;; The answer joins the conversation, so a follow-up
+              ;; instruction keeps its referent.
+              (should (string-match-p "The gateway"
+                                      (scalpel-console--history))))))
       (scalpel-utils-test-kill-buffer (buffer-name buf)))))
 
 (ert-deftest scalpel-console-test-repeat-resends-last-instruction ()

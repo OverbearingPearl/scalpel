@@ -777,25 +777,26 @@ state of its own: everything the LLM may rely on arrives here."
 Both conditions carry their whole message as their single data
 element, so it is read through
 `scalpel-llm-dialect-error-message' rather than
-`error-message-string'.  The types stay apart because the console
-advises differently on each: which of them a retry can fix is not
-the same question for a malformed array and for a reply that
-followed no convention at all.")
+`error-message-string'.  The types stay apart because they degrade
+differently: a prose reply is delivered as a reply action, while a
+tool-call reply stays an error the console advises on.")
 
 (defun scalpel-agent-plan (instruction history on-success on-error)
   "Ask the LLM for a structured plan for INSTRUCTION, without blocking.
 HISTORY is the conversation text recorded before INSTRUCTION, or
 nil.  ON-SUCCESS receives the projected action list.  ON-ERROR
 receives a plist (:type SYMBOL :message STRING): `parse' when the
-reply does not yield a valid action array, `tool-call' or `prose'
-when it answered in another convention instead -- the conditions
-`scalpel-agent--dialect-error-types' names, whose messages are read
+reply does not yield a valid action array, `tool-call' when it
+answered in another convention -- the condition
+`scalpel-agent--dialect-error-types' names, whose message is read
 through `scalpel-llm-dialect-error-message' -- otherwise the type
-forwarded by `scalpel-llm-request-async'.  The parse types are
-separate because the console advises differently on each.  Only
-the parse step is guarded, so an error raised inside ON-SUCCESS
-escapes to the caller rather than being re-framed as a planner
-error."
+forwarded by `scalpel-llm-request-async'.  A reply that is pure
+prose is not an error: it degrades to a single reply action whose
+text is the dialect's message, so an answer the planner wrote in
+the wrong convention is still delivered instead of the round being
+refused whole.  Only the parse step is guarded, so an error raised
+inside ON-SUCCESS escapes to the caller rather than being re-framed
+as a planner error."
   (scalpel-llm-request-async
    (scalpel-agent--prompt instruction history)
    (lambda (raw)
@@ -814,10 +815,27 @@ error."
                              (text (if dialect
                                        (scalpel-llm-dialect-error-message err)
                                      (error-message-string err))))
-                        (funcall on-error
-                                 (list :type (or (cdr dialect) 'parse)
-                                       :message text)))
-                      nil))))
+                        (if (eq (cdr dialect) 'prose)
+                            ;; Pure prose is an answer in the wrong
+                            ;; convention, not a lost round: deliver it
+                            ;; as a reply action through the normal
+                            ;; report path instead of refusing whole.
+                            ;; ON-SUCCESS fires here exactly once, and
+                            ;; the outcome is forced to nil: the
+                            ;; handler's value is what `parsed' binds,
+                            ;; so a non-nil value from the callback --
+                            ;; the test's `setq' returns the list -- or
+                            ;; any relayed value would make the `(when
+                            ;; parsed ...)' after the guard deliver a
+                            ;; second, empty round on top of it.
+                            (progn
+                              (funcall on-success
+                                       (list (list :tool "reply" :text text)))
+                              nil)
+                          (funcall on-error
+                                   (list :type (or (cdr dialect) 'parse)
+                                         :message text))
+                          nil))))))
        (when parsed
          (funcall on-success (cdr parsed)))))
    on-error
