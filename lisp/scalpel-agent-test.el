@@ -1170,6 +1170,104 @@ The report preserves the raw output size for continuation decisions."
   (should (string= (scalpel-agent--action-summary '(:tool "shell"))
                    "no reason")))
 
+(ert-deftest scalpel-agent-test-delete-corrects-a-misnamed-file ()
+  "A symbol named with a hallucinated path is corrected, not refused.
+Regression: the planner repeatedly asked to edit symbols under a
+sibling file's path and the round died with \"symbol not found\";
+location is deterministic, so the context search fixes the path
+with zero LLM calls.  The correction is stated in the report, so
+the substitution is never silent."
+  ;; The asked file holds no `target'; the sibling one does, which is
+  ;; the shape the planner's hallucinated path really takes.
+  (scalpel-utils-test-with-temp-file ".el"
+    (with-temp-file this-file (insert "(defun other ())\n"))
+    (let* ((sibling (concat this-file "-sibling.el"))
+           (scalpel-agent--context-files
+            (list (file-truename (expand-file-name this-file))
+                  (file-truename (expand-file-name sibling)))))
+      (with-temp-file sibling (insert "(defun target ())\n"))
+      (unwind-protect
+          (let (report)
+            (scalpel-agent-execute-action
+             (list :tool "block-delete"
+                   :file (file-truename (expand-file-name this-file))
+                   :symbol "target")
+             (lambda (r) (setq report r))
+             (lambda (err) (ert-fail (plist-get err :message))))
+            (ert-info ((format "Report: %S" report))
+              (should (string-match-p "Deleted target" report))
+              (should (string-match-p "the definition lives in" report))
+              (should (string-match-p
+                       (regexp-quote
+                        (file-truename (expand-file-name sibling)))
+                       report)))
+            (let ((on-disk (with-temp-buffer
+                             (insert-file-contents sibling)
+                             (buffer-string))))
+              (ert-info ((format "On disk:\n%S" on-disk))
+                (should (string= on-disk "")))))
+        (scalpel-utils-test-kill-file-buffer sibling)
+        (scalpel-utils-test-delete-file sibling)))))
+
+(ert-deftest scalpel-agent-test-ambiguous-symbol-names-every-file ()
+  "A symbol defined in several context files is refused with the list.
+Auto-correcting on ambiguity would pick a file the planner never
+named, so the refusal hands back the facts instead."
+  ;; The asked file holds no `dup' -- a direct hit there is a plain
+  ;; success, not an ambiguity -- while two real context files define
+  ;; it.  A sibling whose file is missing would be skipped by the scan
+  ;; and read as a unique hit instead of an ambiguity.
+  (scalpel-utils-test-with-temp-file ".el"
+    (with-temp-file this-file (insert "(defun other ())\n"))
+    (let ((sibling (concat this-file "-sibling.el"))
+          (second (concat this-file "-second.el")))
+      (with-temp-file sibling (insert "(defun dup ())\n"))
+      (with-temp-file second (insert "(defun dup ())\n"))
+      (unwind-protect
+          (let ((scalpel-agent--context-files
+                 (list (file-truename (expand-file-name this-file))
+                       (file-truename (expand-file-name sibling))
+                       (file-truename (expand-file-name second)))))
+            (let ((err (condition-case e
+                           (progn (scalpel-agent--resolve-symbol
+                                   (car scalpel-agent--context-files) "dup")
+                                  nil)
+                         (user-error e))))
+              (ert-info ((format "Error: %S" err))
+                (should err)
+                (should (string-match-p "several context files"
+                                        (error-message-string err)))
+                (should (string-match-p
+                         (regexp-quote (cadr scalpel-agent--context-files))
+                         (error-message-string err)))
+                (should (string-match-p
+                         (regexp-quote (cl-caddr scalpel-agent--context-files))
+                         (error-message-string err))))))
+        (dolist (file (list sibling second))
+          (scalpel-utils-test-kill-file-buffer file)
+          (scalpel-utils-test-delete-file file))))))
+
+(ert-deftest scalpel-agent-test-absent-symbol-names-the-context ()
+  "A symbol defined nowhere lists the context files in the error.
+The message is the planner's only feedback for picking the right
+file next round, so \"not found\" alone is a dead end."
+  (scalpel-utils-test-with-temp-file ".el"
+    (with-temp-file this-file (insert "(defun other ())\n"))
+    (let ((scalpel-agent--context-files
+           (list (file-truename (expand-file-name this-file)))))
+      (let ((err (condition-case e
+                     (progn (scalpel-agent--resolve-symbol
+                             (car scalpel-agent--context-files) "gone")
+                            nil)
+                   (user-error e))))
+        (ert-info ((format "Error: %S" err))
+          (should err)
+          (should (string-match-p "nor anywhere in the context"
+                                  (error-message-string err)))
+          (should (string-match-p
+                   (regexp-quote (car scalpel-agent--context-files))
+                   (error-message-string err))))))))
+
 (ert-deftest scalpel-agent-test-edit-missing-symbol-reports-through-on-error ()
   "An edit naming a symbol the file does not hold settles via ON-ERROR.
 Regression: the initial locate ran outside the error guard, so the

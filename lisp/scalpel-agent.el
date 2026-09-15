@@ -874,6 +874,53 @@ as a planner error."
        (concat scalpel-agent-system-prompt "\n\n" scalpel-agent-cod-prompt)
      scalpel-agent-system-prompt)))
 
+(defun scalpel-agent--locate-candidates (symbol)
+  "Return one (FILE . RANGE) per context file that define SYMBOL.
+Files without a locator provider, and files where SYMBOL is absent,
+are skipped: `scalpel-locate-range' signals rather than returning
+nil, so every lookup runs inside its own guard."
+  (let (hits)
+    (dolist (file scalpel-agent--context-files)
+      (let ((hit (condition-case nil
+                     (cons file (scalpel-locate-range file symbol))
+                   (error nil))))
+        (when hit (push hit hits))))
+    (nreverse hits)))
+
+(defun scalpel-agent--resolve-symbol (file symbol)
+  "Return (FILE . RANGE) for SYMBOL, falling back to a context search.
+FILE is tried first.  A planner that hallucinated the path -- the
+observed failure: a symbol named with a sibling file's name -- gets a
+deterministic correction instead of a dead end.  When SYMBOL is
+absent from FILE, every context file is scanned: a unique hit is
+returned with the file it really lives in, and the caller reports the
+correction; zero or several hits signal `user-error' naming the
+facts, so the next round can act on them instead of guessing again."
+  (let ((direct (condition-case nil
+                    (cons file (scalpel-locate-range file symbol))
+                  (error nil))))
+    (or direct
+        (let ((hits (scalpel-agent--locate-candidates symbol)))
+          (pcase (length hits)
+            (1
+             (message "Scalpel: %s is not in %s; it is defined in %s"
+                      symbol file (caar hits))
+             (car hits))
+            (0
+             (user-error
+              (concat "Scalpel: symbol %s not found in %s nor anywhere in "
+                      "the context (%s); add its file to the context first")
+              symbol file
+              (if scalpel-agent--context-files
+                  (string-join scalpel-agent--context-files ", ")
+                "the context is empty")))
+            (_
+             (user-error
+              (concat "Scalpel: symbol %s is defined in several context "
+                      "files (%s); name one of them explicitly")
+              symbol
+              (string-join (mapcar #'car hits) ", "))))))))
+
 (defun scalpel-agent--verified-range (file symbol expected-body)
   "Return (BEG . END) of SYMBOL in FILE, verified as unchanged.
 SYMBOL is re-located here, in the caller's current buffer, so a
@@ -1010,24 +1057,20 @@ the edit."
       (funcall on-error (list :type 'malformed
                               :message "Scalpel: malformed block-edit action"))
       (cl-return-from scalpel-agent-block-edit))
-    (let ((range (condition-case err
-                     (scalpel-locate-range file symbol)
-                   (error
-                    ;; A symbol the planner names but the file does not
-                    ;; hold -- often one a previous round renamed -- must
-                    ;; settle through ON-ERROR like every other failure,
-                    ;; not escape as a raw `user-error' that would block
-                    ;; an unattended run on a prompt.
-                    (funcall on-error
-                             (list :type 'locate
-                                   :message (error-message-string err)))
-                    (cl-return-from scalpel-agent-block-edit)))))
-      (unless range
-        (funcall on-error
-                 (list :type 'locate
-                       :message (format "Scalpel: can't locate %s in %s"
-                                        symbol file)))
-        (cl-return-from scalpel-agent-block-edit))
+    ;; A symbol the planner names but names in the wrong file -- often
+    ;; a hallucinated sibling path -- is corrected here, and a real
+    ;; failure must still settle through ON-ERROR like every other
+    ;; failure, not escape as a raw `user-error' that would block an
+    ;; unattended run on a prompt.
+    (let* ((resolved (condition-case err
+                         (scalpel-agent--resolve-symbol file symbol)
+                       (error
+                        (funcall on-error
+                                 (list :type 'locate
+                                       :message (error-message-string err)))
+                        (cl-return-from scalpel-agent-block-edit))))
+           (file (car resolved))
+           (range (cdr resolved)))
       (with-current-buffer (find-file-noselect file)
         (let* ((beg (car range))
                (end (cdr range))
@@ -1089,13 +1132,9 @@ ON-SUCCESS receives the report string.  ON-ERROR receives a plist
       (funcall on-error (list :type 'malformed
                               :message "Scalpel: malformed block-insert action"))
       (cl-return-from scalpel-agent-block-insert))
-    (let ((anchor-range (scalpel-locate-range file after)))
-      (unless anchor-range
-        (funcall on-error
-                 (list :type 'locate
-                       :message (format "Scalpel: can't locate anchor %s in %s"
-                                        after file)))
-        (cl-return-from scalpel-agent-block-insert))
+    (let* ((anchor-resolved (scalpel-agent--resolve-symbol file after))
+           (file (car anchor-resolved))
+           (anchor-range (cdr anchor-resolved)))
       (with-current-buffer (find-file-noselect file)
         (let* ((anchor-end (cdr anchor-range))
                (anchor-body (buffer-substring-no-properties
@@ -1160,17 +1199,25 @@ does not leave an extra blank line where it stood.  The file is
 saved before this returns.  Return a human-readable report string."
   (unless (and file symbol)
     (user-error "Scalpel: malformed block-delete action"))
-  (let ((range (scalpel-locate-range file symbol)))
-    (unless range
-      (user-error "Scalpel: can't locate %s in %s" symbol file))
+  (let* ((asked file)
+         (resolved (scalpel-agent--resolve-symbol file symbol))
+         (file (car resolved))
+         (range (cdr resolved)))
     (with-current-buffer (find-file-noselect file)
       (let* ((beg (car range))
              (end (cdr range))
              (body (buffer-substring-no-properties beg end))
-             (verified (scalpel-agent--verified-range file symbol body)))
+             (verified (scalpel-agent--verified-range file symbol body))
+             (report (format "Deleted %s in %s" symbol
+                             (buffer-name (current-buffer)))))
         (scalpel-execute-delete (car verified) (cdr verified))
-        (format "Deleted %s in %s" symbol
-                (buffer-name (current-buffer)))))))
+        ;; The correction must be visible, not silent: the report is
+        ;; what the planner and the user read back.
+        (if (string= asked file)
+            report
+          (concat report
+                  (format "\nNote: the planner named %s; the definition lives in %s"
+                          asked file)))))))
 
 (defun scalpel-agent-file-delete (file)
   "Delete FILE.
@@ -1335,7 +1382,9 @@ states the true size.  Output holding a NUL byte is withheld."
      file))
   (let ((resolved (file-truename (expand-file-name file))))
     (if symbol
-        (let* ((range (scalpel-locate-range resolved symbol))
+        (let* ((hit (scalpel-agent--resolve-symbol resolved symbol))
+               (resolved (car hit))
+               (range (cdr hit))
                (body (with-current-buffer (find-file-noselect resolved)
                        (buffer-substring-no-properties
                         (car range) (cdr range))))
