@@ -1474,20 +1474,38 @@ while the planner already saw the error as the newest turn."
 
 (ert-deftest scalpel-console-test-abort-cancels-in-flight-request ()
   "\\[scalpel-console-abort] cancels the request currently in flight."
-  (let ((cancelled 0))
-    (let ((scalpel-llm--cancel-current (lambda () (setq cancelled (1+ cancelled)))))
-      (scalpel-console-abort)
-      (should (= cancelled 1)))))
+  (let ((buf (scalpel-console-test--new-console-buffer))
+        (cancelled 0))
+    (unwind-protect
+        (let ((scalpel-llm--cancel-current
+               (lambda () (setq cancelled (1+ cancelled)))))
+          (with-current-buffer buf
+            (setq scalpel-console--busy t)
+            (let ((generation scalpel-console--operation-generation))
+              (scalpel-console-abort)
+              (ert-info ((format "cancelled=%S busy=%S generation=%S"
+                                 cancelled
+                                 scalpel-console--busy
+                                 scalpel-console--operation-generation))
+                (should (= cancelled 1))
+                (should-not scalpel-console--busy)
+                (should (= scalpel-console--operation-generation
+                           (1+ generation)))))))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
 
 (ert-deftest scalpel-console-test-abort-without-request-dings ()
   "With no request in flight, abort says so instead of failing."
-  (let ((scalpel-llm--cancel-current nil)
+  (let ((buf (scalpel-console-test--new-console-buffer))
         (notices nil))
-    (cl-letf (((symbol-function 'message)
-               (lambda (fmt &rest args)
-                 (push (apply #'format fmt args) notices))))
-      (scalpel-console-abort)
-      (should (cl-some (lambda (m) (string-match-p "no request" m)) notices)))))
+    (unwind-protect
+        (with-current-buffer buf
+          (setq scalpel-console--busy nil)
+          (cl-letf (((symbol-function 'message)
+                     (lambda (fmt &rest args)
+                       (push (apply #'format fmt args) notices))))
+            (scalpel-console-abort)
+            (should (cl-some (lambda (m) (string-match-p "no request" m)) notices))))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
 
 (ert-deftest scalpel-console-test-remove-file-removes-from-context ()
   "Removing a context file updates the context and the tree display."
@@ -1744,6 +1762,126 @@ token buffer's later lines stopped agreeing with its earlier ones."
               (should (equal (gethash (buffer-name buf)
                                       scalpel-token--console-totals)
                              '(10 20))))))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
+
+(ert-deftest scalpel-console-test-settle-failure-releases-busy ()
+  "A failure in the settle path still releases the busy guard.
+Regression: `scalpel-console--run-round' wrapped accounting,
+status cleanup and `on-complete' in one `condition-case', so a
+failure in the non-critical accounting step skipped
+`on-complete' and left `scalpel-console--busy' set forever."
+  (let ((scalpel-agent--context-files nil)
+        (buf (scalpel-console-test--new-console-buffer))
+        (notices nil))
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'scalpel-llm-request-async)
+                     (lambda (_prompt on-success _on-error &optional _system)
+                       (funcall on-success
+                                "[{\"tool\":\"reply\",\"text\":\"done\"}]")))
+                     ((symbol-function 'scalpel-token-record)
+                     (lambda (_name _up _down _breakdown)
+                       (error "Accounting failed")))
+                     ((symbol-function 'message)
+                     (lambda (fmt &rest args)
+                       (push (apply #'format fmt args) notices))))
+            (with-current-buffer buf
+              (erase-buffer)
+              (insert "trigger settle failure\n")
+              (goto-char (point-min))
+              (let ((err (condition-case e
+                             (progn
+                               (scalpel-console-send-line)
+                               nil)
+                           (error e))))
+                (ert-info ((format "Unexpected send-line error: %S" err))
+                  (should-not err))))
+            (with-current-buffer buf
+              (ert-info ((format "Buffer:\n%S" (buffer-string)))
+                (should (string-match-p "Scalpel: done" (buffer-string)))
+                (should (string-match-p "User: trigger settle failure"
+                                        (buffer-string))))
+              (ert-info ((format "busy=%S progress=%S"
+                                 scalpel-console--busy
+                                 scalpel-llm--progress-callback))
+                (should-not scalpel-console--busy)
+                (should-not scalpel-llm--progress-callback)))
+            (ert-info ((format "Messages: %S" notices))
+              (should
+               (cl-some
+                (lambda (notice)
+                  (string-match-p "token accounting failed.*Accounting failed"
+                                  notice))
+                notices)))))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
+
+(ert-deftest scalpel-console-test-abort-clears-busy-without-llm-request ()
+  "Abort clears busy even when no LLM request is in flight.
+Regression: `scalpel-console-abort' only cancelled the LLM request,
+so a console busy with a synchronous action that had no current
+LLM request could not be aborted."
+  (let ((scalpel-agent--context-files nil)
+        (buf (scalpel-console-test--new-console-buffer))
+        pending
+        (run-count 0))
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'scalpel-agent-run)
+                     (lambda (_instruction _history on-done _on-error)
+                       (setq pending on-done)
+                       (cl-incf run-count))))
+            (with-current-buffer buf
+              (erase-buffer)
+              (insert "start operation\n")
+              (goto-char (point-min))
+              (scalpel-console-send-line))
+            (with-current-buffer buf
+              (ert-info ("busy must hold once send-line has returned")
+                (should scalpel-console--busy)
+                (should-not scalpel-llm--cancel-current))
+              (scalpel-console-abort)
+              (ert-info ((format "busy=%S after abort"
+                                 scalpel-console--busy))
+                (should-not scalpel-console--busy)))
+            ;; A late callback from the aborted operation must not write.
+            (funcall pending
+                     '(:report "late result"
+                       :shells ((:command "late" :bytes 0))
+                       :reads nil
+                       :edits nil))
+            (with-current-buffer buf
+              (ert-info ((format "Buffer:\n%S" (buffer-string)))
+                (should-not (string-match-p "late result" (buffer-string)))
+                (should-not scalpel-console--busy))
+              (ert-info ((format "run-count=%d" run-count))
+                (should (= run-count 1))))))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
+
+(ert-deftest scalpel-console-test-quit-during-dispatch-releases-busy ()
+  "A `quit' during dispatch still releases the busy guard.
+Regression: a synchronous `quit' during `scalpel-agent-run' left
+`scalpel-console--busy' set and the status line in place."
+  (let ((scalpel-agent--context-files nil)
+        (buf (scalpel-console-test--new-console-buffer)))
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'scalpel-agent-run)
+                     (lambda (_instruction _history _on-done _on-error)
+                       (signal 'quit nil))))
+            (with-current-buffer buf
+              (erase-buffer)
+              (insert "interrupt me\n")
+              (goto-char (point-min))
+              (let ((err (condition-case e
+                             (scalpel-console-send-line)
+                           (quit e))))
+                (ert-info ((format "send-line quit: %S" err))
+                  (should err)))
+              (ert-info ((format "busy=%S progress=%S"
+                                 scalpel-console--busy
+                                 scalpel-llm--progress-callback))
+                (should-not scalpel-console--busy)
+                (should-not scalpel-llm--progress-callback)))))
       (scalpel-utils-test-kill-buffer (buffer-name buf)))))
 
 (provide 'scalpel-console-test)

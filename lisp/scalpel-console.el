@@ -244,8 +244,9 @@ variable belongs in this list; nothing else enumerates them, so
 forgetting to add it here is the only way to lose one.
 
 Transient state is deliberately left out.  `scalpel-console--busy'
-must not survive a reload, and the reload is refused while it is set,
-so restoring it would only risk resurrecting a dead round.
+and `scalpel-console--operation-generation' must not survive a reload,
+and the reload is refused while busy is set, so restoring them would
+only risk resurrecting a dead round.
 `scalpel-agent--shell-output' is reset before and read within a
 single action, so its value belongs to no session.")
 
@@ -421,6 +422,12 @@ Buffer-local: each console session repeats its own last instruction.")
   "Non-nil while an agent request is in flight for this console.
 Buffer-local: a busy console must not refuse instructions in
 another console.")
+
+(defvar-local scalpel-console--operation-generation 0
+  "Generation identifying the current console operation.
+Incremented when an operation starts or is aborted, so callbacks
+from an older operation can settle their private resources without
+writing reports or continuing rounds.")
 
 (defun scalpel-console--status-start (breakdown)
   "Insert a one-line status display at point-max.
@@ -981,86 +988,99 @@ ON-COMPLETE, so it is never left pointing at a dead buffer."
          (up0 scalpel-llm--total-uploaded)
          (down0 scalpel-llm--total-received)
          (settled nil)
-         (settle (lambda (result)
+         (settle (lambda (round-result)
                    (unless settled
                      (setq settled t)
                      (setq scalpel-llm--progress-callback nil)
                      (condition-case err
-                         (progn
-                           (scalpel-token-record
-                            (buffer-name target)
-                            (- scalpel-llm--total-uploaded up0)
-                            (- scalpel-llm--total-received down0)
-                            breakdown)
-                           (when (buffer-live-p target)
-                             (with-current-buffer target
-                               (funcall stop)))
-                           (if (buffer-live-p target)
-                               (funcall on-complete result)
-                             ;; The round callback re-selects the console
-                             ;; buffer, so with the console gone it cannot
-                             ;; run at all.  Nothing needs releasing here:
-                             ;; the busy guard is buffer-local and died with
-                             ;; the buffer.
-                             nil))
+                         (scalpel-token-record
+                          (buffer-name target)
+                          (- scalpel-llm--total-uploaded up0)
+                          (- scalpel-llm--total-received down0)
+                          breakdown)
                        (error
-                        (message "Scalpel: settle failed: %S" err)))))))
-    (setq scalpel-llm--progress-callback refresh)
-    (with-current-buffer target
-      (scalpel-agent-run
-       instruction history
-       (lambda (result)
-         (when (buffer-live-p target)
-           (with-current-buffer target
-             ;; Point belongs to the user now that the status refresh is
-             ;; wrapped in `save-excursion'; a bare insert would land at
-             ;; the cursor.  `--append' goes to point-max and is the same
-             ;; conversation-tagged writer the rest of the console uses.
-             (scalpel-console--append
-              (format "Scalpel: %s" (plist-get result :report))
-              'assistant)))
-         (funcall settle result))
-       (lambda (err)
-         (condition-case handler-err
-             (when (buffer-live-p target)
-               (with-current-buffer target
-                 (goto-char (point-max))
-                 (if (eq (plist-get err :type) 'sandbox)
-                     ;; A sandbox failure is infrastructure, not
-                     ;; conversation.  Its message names the backend, so it
-                     ;; is shown to the user but never recorded as an
-                     ;; assistant turn: sending it back would hand the
-                     ;; planner the very boundary the prompt omits.  Only a
-                     ;; round failure that says something about the planner
-                     ;; -- malformed JSON, for one -- stays in the history.
-                     (scalpel-console--append
-                      (format "Scalpel error: %s" (plist-get err :message)))
-                   (let ((inhibit-read-only t))
-                     (scalpel-console--insert-tagged
-                      (if (scalpel-console--planner-error-p err)
-                          ;; A planner-output failure ran nothing, so
-                          ;; the header names the model as the part that
-                          ;; failed and the advice says what helps: a
-                          ;; retry for a malformed reply, a backend
-                          ;; switch for one written as a tool call, a
-                          ;; rephrasing for one written as prose.
-                          (format "Scalpel planner error: %s\n%s\n\n"
-                                  (plist-get err :message)
-                                  (pcase (plist-get err :type)
-                                    ('tool-call scalpel-console--tool-call-advice)
-                                    ('prose scalpel-console--prose-advice)
-                                    (_ scalpel-console--retry-advice)))
-                        (format "Scalpel error: %s\n\n"
-                                (plist-get err :message)))
-                      'assistant))
-                   ;; An error turn is a conversation turn too: it becomes the
-                   ;; newest assistant turn, so the report before it has to be
-                   ;; marked.  The insertion stays direct rather than going
-                   ;; through `--append', to leave point placement as it was.
-                   (scalpel-console--refresh-consumed-body-markers))))
-           (error
-            (message "Scalpel: error handler failed: %S" handler-err)))
-         (funcall settle nil))))))
+                        (message "Scalpel: token accounting failed: %S" err)))
+                     (condition-case err
+                         (when (buffer-live-p target)
+                           (with-current-buffer target
+                             (funcall stop)))
+                       (error
+                        (message "Scalpel: status cleanup failed: %S" err)))
+                     (when (buffer-live-p target)
+                       (funcall on-complete round-result))))))
+    (let ((operation
+           (buffer-local-value
+            'scalpel-console--operation-generation target)))
+      (setq scalpel-llm--progress-callback refresh)
+      (with-current-buffer target
+        (condition-case err
+            (scalpel-agent-run
+             instruction history
+             (lambda (round-result)
+               (when (and (buffer-live-p target)
+                          (= operation
+                             (buffer-local-value
+                              'scalpel-console--operation-generation target)))
+                 (condition-case err
+                     (with-current-buffer target
+                       ;; Point belongs to the user now that the status refresh is
+                       ;; wrapped in `save-excursion'; a bare insert would land at
+                       ;; the cursor.  `--append' goes to point-max and is the same
+                       ;; conversation-tagged writer the rest of the console uses.
+                       (scalpel-console--append
+                        (format "Scalpel: %s" (plist-get round-result :report))
+                        'assistant))
+                   ((error quit)
+                    (funcall settle nil)
+                    (signal (car err) (cdr err)))))
+               (funcall settle round-result))
+             (lambda (err)
+               (condition-case handler-err
+                   (when (and (buffer-live-p target)
+                              (= operation
+                                 (buffer-local-value
+                                  'scalpel-console--operation-generation target)))
+                     (with-current-buffer target
+                       (goto-char (point-max))
+                       (if (eq (plist-get err :type) 'sandbox)
+                           ;; A sandbox failure is infrastructure, not
+                           ;; conversation.  Its message names the backend, so it
+                           ;; is shown to the user but never recorded as an
+                           ;; assistant turn: sending it back would hand the
+                           ;; planner the very boundary the prompt omits.  Only a
+                           ;; round failure that says something about the planner
+                           ;; -- malformed JSON, for one -- stays in the history.
+                           (scalpel-console--append
+                            (format "Scalpel error: %s" (plist-get err :message)))
+                         (let ((inhibit-read-only t))
+                           (scalpel-console--insert-tagged
+                            (if (scalpel-console--planner-error-p err)
+                                ;; A planner-output failure ran nothing, so
+                                ;; the header names the model as the part that
+                                ;; failed and the advice says what helps: a
+                                ;; retry for a malformed reply, a backend
+                                ;; switch for one written as a tool call, a
+                                ;; rephrasing for one written as prose.
+                                (format "Scalpel planner error: %s\n%s\n\n"
+                                        (plist-get err :message)
+                                        (pcase (plist-get err :type)
+                                          ('tool-call scalpel-console--tool-call-advice)
+                                          ('prose scalpel-console--prose-advice)
+                                          (_ scalpel-console--retry-advice)))
+                              (format "Scalpel error: %s\n\n"
+                                      (plist-get err :message)))
+                            'assistant))
+                       ;; An error turn is a conversation turn too: it becomes the
+                       ;; newest assistant turn, so the report before it has to be
+                       ;; marked.  The insertion stays direct rather than going
+                       ;; through `--append', to leave point placement as it was.
+                       (scalpel-console--refresh-consumed-body-markers))))
+                 (error
+                  (message "Scalpel: error handler failed: %S" handler-err)))
+               (funcall settle nil)))
+          ((error quit)
+           (funcall settle nil)
+           (signal (car err) (cdr err))))))))
 
 (defun scalpel-console--shell-description (shell)
   "Describe one entry of the :shells list for a confirmation prompt.
@@ -1136,47 +1156,60 @@ the original instruction is already inside the history, and
 re-sending it makes the planner run the same shell command again.
 `scalpel-console--busy' is set here and cleared at every terminal
 point, so a second RET during a round is refused."
-  (setq scalpel-console--busy t)
-  (let ((target (scalpel-console--target-buffer))
-        (round 0)
-        (conversation history)
-        (next-instruction instruction))
-    (cl-labels
-        ((run-next ()
-           (setq round (1+ round))
-           (scalpel-console--run-round
-            next-instruction conversation
-            (lambda (result)
-              (with-current-buffer target
-                (setq conversation (scalpel-console--history))
-                (cond
-                 ((not (and result (or (plist-get result :shells)
-                                       (plist-get result :reads)
-                                       (plist-get result :edits))))
-                  (setq scalpel-console--busy nil))
-                 ((>= round scalpel-console-max-rounds)
-                  ;; No round is left, so asking would throw the answer
-                  ;; away and the console would look hung.  Report the
-                  ;; limit instead.  Echo it as well as append it: the
-                  ;; user may not be looking at the end of the console
-                  ;; buffer when the loop stops.
-                  (setq scalpel-console--busy nil)
-                  (let ((notice
-                         (format "Scalpel: round limit (%d) reached; send the next instruction when ready"
-                                 scalpel-console-max-rounds)))
-                    (scalpel-console--append notice)
-                    (message "%s" notice)))
-                 ((scalpel-console--continue-p result)
-                  ;; A continued round must not re-send the user's
-                  ;; original instruction: it is already in the history
-                  ;; above, and repeating it makes the planner re-issue
-                  ;; the same shell action in a loop.
-                  (setq next-instruction
-                        scalpel-console--continuation-instruction)
-                  (run-next))
-                 (t
-                  (setq scalpel-console--busy nil))))))))
-      (run-next))))
+  (let ((operation (cl-incf scalpel-console--operation-generation)))
+    (setq scalpel-console--busy t)
+    (let ((target (scalpel-console--target-buffer))
+          (round 0)
+          (conversation history)
+          (next-instruction instruction))
+      (cl-labels
+          ((finish-operation ()
+             (when (and (buffer-live-p target)
+                        (= operation
+                           (buffer-local-value
+                            'scalpel-console--operation-generation target)))
+               (with-current-buffer target
+                 (setq scalpel-console--busy nil))))
+           (run-next ()
+             (setq round (1+ round))
+             (scalpel-console--run-round
+              next-instruction conversation
+              (lambda (round-result)
+                (when (and (buffer-live-p target)
+                           (= operation
+                              (buffer-local-value
+                               'scalpel-console--operation-generation
+                               target)))
+                  (condition-case err
+                      (with-current-buffer target
+                        (setq conversation (scalpel-console--history))
+                        (cond
+                         ((not
+                           (and round-result
+                                (or (plist-get round-result :shells)
+                                    (plist-get round-result :reads)
+                                    (plist-get round-result :edits))))
+                          (finish-operation))
+                         ((>= round scalpel-console-max-rounds)
+                          (finish-operation)
+                          (let ((notice
+                                 (format
+                                  (concat
+                                   "Scalpel: round limit (%d) reached; "
+                                   "send the next instruction when ready")
+                                  scalpel-console-max-rounds)))
+                            (scalpel-console--append notice)
+                            (message "%s" notice)))
+                         ((scalpel-console--continue-p round-result)
+                          (setq next-instruction
+                                scalpel-console--continuation-instruction)
+                          (run-next))
+                         (t
+                          (finish-operation))))
+                    ((error quit)
+                     (finish-operation)
+                     (signal (car err) (cdr err)))))))))
+        (run-next)))))
 
 (defun scalpel-console--planner-error-p (err)
   "Return non-nil when ERR names a planner-output failure.
@@ -1248,12 +1281,24 @@ the agent can access its own earlier replies and shell output."
             (goto-char (point-max))
             (message "Scalpel: instruction sent.")))))))
 (defun scalpel-console-abort ()
-  "Cancel the request currently in flight for this console, if any."
+  "Cancel the operation currently in flight for this console, if any.
+This cancels the whole console operation -- not only the current
+LLM request -- so a console busy with a synchronous action that has
+no current LLM request can still be aborted.  The operation's
+generation is advanced, so any callback from the aborted operation
+is dropped instead of writing a report or continuing a round."
   (interactive)
-  (if scalpel-llm--cancel-current
-      (funcall scalpel-llm--cancel-current)
-    (ding)
-    (message "Scalpel: no request in flight to cancel.")))
+  (let ((target (scalpel-console--target-buffer)))
+    (with-current-buffer target
+      (if scalpel-console--busy
+          (let ((cancel (prog1 scalpel-llm--cancel-current
+                          (cl-incf scalpel-console--operation-generation))))
+            (setq scalpel-console--busy nil)
+            (when cancel
+              (funcall cancel))
+            (message "Scalpel: current operation aborted."))
+        (ding)
+        (message "Scalpel: no request in flight to cancel.")))))
 
 (defun scalpel-console-unload-function ()
   "Suppress `unload-feature's default cleanup for this module.
