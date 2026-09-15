@@ -1254,14 +1254,12 @@ shell command through confirm."
   (let ((dir (make-temp-file "scalpel-test-new-" t))
         report)
     (unwind-protect
-        (let* ((target (expand-file-name "sub/new.el" dir))
-               (scalpel-agent-confirm-tools '("create-file")))
-          (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
-            (scalpel-agent-execute-action
-             (list :tool "create-file" :file target
-                   :text "(defun a ())\n(defun b ())\n")
-             (lambda (r) (setq report r))
-             (lambda (err) (ert-fail (plist-get err :message)))))
+        (let ((target (expand-file-name "sub/new.el" dir)))
+          (scalpel-agent-execute-action
+           (list :tool "create-file" :file target
+                 :text "(defun a ())\n(defun b ())\n")
+           (lambda (r) (setq report r))
+           (lambda (err) (ert-fail (plist-get err :message))))
           (ert-info ((format "Report: %S" report))
             (should (string-match-p "Created file" report)))
           (let ((on-disk (with-temp-buffer
@@ -1277,34 +1275,36 @@ Changing an existing file is `edit' and `create' work; the refusal
 must leave the file exactly as it was."
   (scalpel-utils-test-with-temp-file ".el"
     (with-temp-file this-file (insert "keep\n"))
-    (let ((scalpel-agent-confirm-tools '("create-file")))
-      (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
-        (should-error
-         (scalpel-agent-create-file this-file "(defun a ())")
-         :type 'user-error))
+    (progn
+      (should-error
+       (scalpel-agent-create-file this-file "(defun a ())")
+       :type 'user-error)
       (let ((on-disk (with-temp-buffer
                        (insert-file-contents this-file)
                        (buffer-string))))
         (should (string= on-disk "keep\n"))))))
 
-(ert-deftest scalpel-agent-test-create-file-is-always-confirmed ()
-  "A create-file asks even when the confirm list was trimmed.
-File-level actions decide which files exist, which the boundary
-lock cannot predict, so the prompt is not waivable the way a
-quick shell action's is."
-  (let ((scalpel-agent-confirm-tools nil)
+(ert-deftest scalpel-agent-test-create-file-runs-without-confirmation ()
+  "A create-file runs without asking, whatever the confirm list says.
+Regression: it was a file-level tool and always prompted, so
+every new-file creation cost a keystroke although the report
+names the created path in full."
+  (let ((scalpel-agent-confirm-tools '("create-file"))
         (asked 0)
         (dir (make-temp-file "scalpel-test-new-" t)))
     (unwind-protect
-        (cl-letf (((symbol-function 'yes-or-no-p)
-                   (lambda (&rest _) (setq asked (1+ asked)) t)))
-          (scalpel-agent-execute-action
-           (list :tool "create-file"
-                 :file (expand-file-name "new.el" dir)
-                 :text "x")
-           (lambda (_r) nil)
-           (lambda (err) (ert-fail (plist-get err :message))))
-          (should (= asked 1)))
+        (progn
+          (cl-letf (((symbol-function 'yes-or-no-p)
+                     (lambda (&rest _) (setq asked (1+ asked)) t)))
+            (scalpel-agent-execute-action
+             (list :tool "create-file"
+                   :file (expand-file-name "new.el" dir)
+                   :text "x")
+             (lambda (_r) nil)
+             (lambda (err) (ert-fail (plist-get err :message)))))
+          (should (file-exists-p (expand-file-name "new.el" dir)))
+          (ert-info ((format "asked=%d" asked))
+            (should (= asked 0))))
       (delete-directory dir t))))
 
 (ert-deftest scalpel-agent-test-create-file-refuses-malformed ()

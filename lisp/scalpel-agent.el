@@ -161,8 +161,7 @@ A create-file makes a new file: its \"text\" is the whole file
 content, headers and several definitions included, and its
 \"file\" must not name a file that already exists -- changing an
 existing file is edit and create work.  Missing parent
-directories are created.  It is confirmed with the user first,
-like every file-level action.
+directories are created.
 An edit replaces something that already exists, so its \"symbol\"
 must name a definition really present in that file: the definition
 is re-located before the replacement lands, and a name the file
@@ -288,11 +287,14 @@ Raise it deliberately, or add a subdirectory instead."
   :type 'integer
   :group 'scalpel)
 
-(defconst scalpel-agent--file-level-tools '("rename" "delete-file" "create-file")
+(defconst scalpel-agent--file-level-tools '("rename" "delete-file")
   "Tools that decide which files exist.
 Their confirmation is not waivable: the boundary lock cannot
 predict a file-level action's reach, so the prompt must survive
-any setting of `scalpel-agent-confirm-tools'.")
+any setting of `scalpel-agent-confirm-tools'.  `create-file' is
+deliberately absent: the planner delivers a finished whole-file
+draft and the report names the path, so the creation is visible
+without a prompt.")
 
 (defcustom scalpel-agent-confirm-tools '("shell")
   "Tools that require user confirmation before execution.
@@ -305,10 +307,10 @@ prompt: the sandbox already bounds what a command may touch, so
 only the editor-freezing case needs an answer.  Removing \"shell\"
 from this list disables the prompt for every shell action,
 including a long-running one.
-The file-level tools (`rename', `delete-file', `create-file') are
-confirmed regardless of this list: a file-level action changes
-which files exist rather than bytes inside a file, so the boundary
-lock cannot predict its reach and the user must always approve it."
+The file-level tools (`rename', `delete-file') are confirmed
+regardless of this list: a file-level action changes which files
+exist rather than bytes inside a file, so the boundary lock cannot
+predict its reach and the user must always approve it."
   :type '(repeat string)
   :group 'scalpel)
 
@@ -1120,9 +1122,7 @@ ON-SUCCESS receives the report string.  ON-ERROR receives a plist
 
 (defun scalpel-agent-create-file (file text)
   "Create FILE with TEXT as its whole content.
-File-level and therefore always confirmed: like `rename' and
-`scalpel-agent-delete-file', it decides which files exist, which
-the boundary lock cannot predict.  Refuses an existing file --
+Refuses an existing file --
 changing one is `scalpel-agent-edit' and `scalpel-agent-create'
 work -- and creates missing parent directories.  Return a
 human-readable report string.  Signal `user-error' on a malformed
@@ -1365,7 +1365,10 @@ The planner must emit this as its final action."
 (defun scalpel-agent--confirm-needed-p (action)
   "Return non-nil when ACTION must be confirmed before execution.
 A file-level tool is always confirmed: it decides which files
-exist, which no setting can waive.  A tool in
+exist, which no setting can waive.  `create-file' is deliberately
+excluded here and from the confirm gate altogether: the creation is
+reported in full, so it never runs with a prompt, whatever this
+list holds.  A tool in
 `scalpel-agent-confirm-tools' is confirmed, except a shell action
 the planner did not flag as long-running: the sandbox already
 bounds what a command may touch, so only the editor-freezing case
@@ -1374,10 +1377,11 @@ counts as true, so a missing or false flag still asks.  The flag
 gates the prompt only: it never relaxes the working directory or
 the environment the command runs in."
   (let ((tool (plist-get action :tool)))
-    (or (member tool scalpel-agent--file-level-tools)
-        (and (member tool scalpel-agent-confirm-tools)
-             (not (and (equal tool "shell")
-                       (not (eq (plist-get action :long-running) t))))))))
+    (and (not (equal tool "create-file"))
+         (or (member tool scalpel-agent--file-level-tools)
+             (and (member tool scalpel-agent-confirm-tools)
+                  (not (and (equal tool "shell")
+                            (not (eq (plist-get action :long-running) t)))))))))
 
 (defun scalpel-agent--action-summary (action)
   "Return a one-line description of ACTION for the confirmation prompt.
