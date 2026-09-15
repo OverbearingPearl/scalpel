@@ -129,7 +129,14 @@ spelling: to match the brackets in
   ;; Package-Requires: ((emacs \"28.1\") (transient \"0.3.0\"))
 the pattern is written
   ;; Package-Requires: ((emacs \"28\\.1\") (transient \"0\\.3\\.0\"))
--- brackets unescaped, the dot of each version escaped."
+-- brackets unescaped, the dot of each version escaped.
+\"&\" is a replacement convention rather than a pattern construct:
+in a \"replacement\", \"\\&\" stands for the whole match and \"\\1\"
+for a group, while in a \"pattern\" an ampersand is the literal
+ampersand, so a pattern written with one matches only text that
+really holds one.  To match the same run of text twice inside one
+pattern, name it once inside \"\\(\" and \"\\)\" and write \"\\1\"
+for the second occurrence."
   "Statement of the regular-expression dialect a pattern is read in.
 Structural contract shared by `scalpel-agent-system-prompt', which
 embeds it, and the test that guards it.  The trap it closes is not
@@ -138,7 +145,13 @@ bracket, which in Emacs syntax is a group, so the brackets it aimed
 at were absent from the pattern and the rewrite refused with zero
 matches in a file that held the text it meant.  Nothing in the code
 can read that intent back out of a pattern without guessing at it,
-so the dialect has to be stated to the model.")
+so the dialect has to be stated to the model.
+
+The second trap is the other borrowing.  \"\\&\" is the whole-match
+placeholder of a *replacement*, and a pattern that writes it asks
+for a literal ampersand: nothing in the code can read the wanted
+backreference back out of it, so the writing rule has to be stated
+to the model as well.")
 
 (defcustom scalpel-agent-system-prompt
   (concat
@@ -1785,6 +1798,77 @@ fails for the same reason the original did, so the refusal says the
 correction does not land and leaves the file's own lines above as the
 text to compare against.")
 
+(defconst scalpel-agent--substitute-regexp-construct-escapes
+  '(?| ?\( ?\) ?< ?> ?b ?B ?w ?W ?s ?S ?_ ?` ?' ?= ?{ ?} ?? ?+ ?* ?c ?C
+    ?0 ?1 ?2 ?3 ?4 ?5 ?6 ?7 ?8 ?9)
+  "Characters a backslash turns into a regexp construct, not a literal.
+`\\|' alternates, `\\(' opens a group, `\\s' names a syntax class,
+`\\1' is a backreference: after each character here the backslash
+carries meaning of its own.  After any other character -- a \"\\&\" or
+a \"\\.\", say -- the backslash only makes that character literal,
+which is what lets
+`scalpel-agent--substitute-escaped-literal-note' name the character a
+pattern demands.
+
+The list errs toward including a character, because the two mistakes
+do not cost the same: a literal left on the list only silences the
+note, while a construct left off it would make the note report a
+reading of the pattern that is not true.  A refusal may stay silent
+about why a pattern matched nothing; it must never state a reason
+that is wrong.  Digits are included because \"\\1\" is a
+backreference rather than a literal \"1\".")
+
+(defun scalpel-agent--substitute-escaped-literals (pattern)
+  "Return the characters PATTERN demands through a backslash escape.
+A backslash before a character that is no regexp construct means that
+character literally, so \"\\&\" in a pattern matches only text holding
+a real ampersand.  Characters whose escape is a construct are left
+out -- see `scalpel-agent--substitute-regexp-construct-escapes' -- and
+each character comes back once, in the order first written."
+  (let ((pos 0)
+        (chars nil))
+    (while (string-match "\\\\\\(.\\)" pattern pos)
+      (let ((char (aref pattern (1+ (match-beginning 0)))))
+        (unless (memq char scalpel-agent--substitute-regexp-construct-escapes)
+          (cl-pushnew char chars)))
+      (setq pos (match-end 0)))
+    (nreverse chars)))
+
+(defun scalpel-agent--substitute-escaped-literal-note (staged pattern)
+  "Return a note naming escaped literals absent from every STAGED file.
+STAGED is the list of (RESOLVED OLD NEW) the rewrite was built from,
+so OLD is each file's text as it was read before anything was
+written.  The note names every character PATTERN demands through a
+backslash escape and that appears in none of those texts.  Return the
+empty string when every such character is present somewhere.
+
+The quoted near-miss lines cannot carry this: they show the file's
+nearest text, so a character absent from the whole file -- the
+placeholder a planner borrowed from a replacement, say -- looks
+present to a reader comparing line against pattern.  A zero match
+then has a cause the refusal can state as a fact about the files
+rather than as a guess about what was meant."
+  (let ((missing
+         (cl-remove-if
+          (lambda (char)
+            (cl-some (lambda (entry)
+                       (cl-position char (nth 1 entry)))
+                     staged))
+          (scalpel-agent--substitute-escaped-literals pattern))))
+    (when missing
+      (let* ((escaped (string-join
+                       (mapcar (lambda (char) (format "\"\\%c\"" char))
+                               missing)
+                       ", "))
+             (plain (string-join
+                     (mapcar (lambda (char) (format "\"%c\"" char))
+                             missing)
+                     ", ")))
+        (format (concat "\nNote: the pattern writes %s, which Emacs regexp "
+                        "syntax reads as the literal character%s %s; no file "
+                        "in the list holds %s.")
+                escaped (if (cdr missing) "s" "") plain plain)))))
+
 (defun scalpel-agent--substitute-correction-matches-p (staged corrected)
   "Return non-nil when CORRECTED matches some text in STAGED.
 STAGED is the list of (RESOLVED OLD NEW) the rewrite was built from,
@@ -1961,7 +2045,12 @@ context, a bad replacement, no matches, or an unbalanced result."
                "the %d file(s) (%s); refusing%s")
        pattern (length staged)
        (string-join (mapcar (lambda (entry) (nth 0 entry)) staged) ", ")
-       (scalpel-agent--substitute-near-miss-note staged pattern)))
+       (concat (scalpel-agent--substitute-near-miss-note staged pattern)
+               ;; The lines quoted above are the file's nearest text, so a
+               ;; character the pattern demands and the file never holds
+               ;; cannot be read off them; the note states it.
+               (scalpel-agent--substitute-escaped-literal-note
+                staged pattern))))
     ;; Second pass: apply through the visiting buffers and save, the
     ;; way `scalpel-execute' writes.
     (let ((lines nil))
@@ -2012,8 +2101,8 @@ The planner must emit this as its final action."
 A file-level tool is always confirmed: it decides which files
 exist, which no setting can waive.  `file-create' is deliberately
 excluded here and from the confirm gate altogether: the creation is
-reported in full, so it never runs with a prompt, whatever this
-list holds.  A tool in
+reported in full, so it never runs with a prompt, regardless of that
+list.  A tool in
 `scalpel-agent-confirm-tools' is confirmed, except a shell action
 the planner did not flag as long-running: the sandbox already
 bounds what a command may touch, so only the editor-freezing case

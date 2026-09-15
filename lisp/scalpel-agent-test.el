@@ -1017,7 +1017,15 @@ the way the brevity rule and the perl preference are guarded."
     ;; example is the part a model can copy.
     (should (string-match-p
              (regexp-quote "((emacs \"28\\.1\") (transient \"0\\.3\\.0\"))")
-             scalpel-agent--substitute-pattern-rule))))
+             scalpel-agent--substitute-pattern-rule))
+    ;; The rule covers the other borrowed convention too: a replacement's
+    ;; whole-match placeholder is not a pattern construct, and a run of
+    ;; text that repeats inside one pattern is named by a group and a
+    ;; backreference.
+    (should (string-match-p "replacement convention"
+                            scalpel-agent--substitute-pattern-rule))
+    (should (string-match-p (regexp-quote "\\1")
+                            scalpel-agent--substitute-pattern-rule))))
 
 (ert-deftest scalpel-agent-test-system-prompt-prefers-perl ()
   "The prompt steers text-transformation commands toward perl.
@@ -1930,6 +1938,59 @@ never rewritten: only the refusal's account of the file changes."
                               "(transient \"0\\.3\\.0\"))"))
                      message))
             (should-not (string-match-p "invalid JSON" message))))))))
+
+(ert-deftest scalpel-agent-test-rewrite-names-an-escaped-literal-no-file-holds ()
+  "A zero-match refusal names an escaped literal the files never hold.
+Regression: the pattern wrote an ampersand meaning \"whatever text is
+already there\" -- the whole-match placeholder of a replacement --
+and the refusal quoted the file's lines without saying that no file
+holds an ampersand at all, so a pattern that cannot match looked like
+a near miss, and the next attempt was spent on it."
+  (scalpel-utils-test-with-temp-file ".md"
+    (with-temp-file this-file
+      (insert "| `some-report-marginal-threshold-ofmarginal-threshold`"
+              " | `2.0` |\n"))
+    (let* ((resolved (file-truename (expand-file-name this-file)))
+           (scalpel-agent--context-files (list resolved))
+           (err (condition-case e
+                    (progn
+                      (scalpel-agent-file-substitute
+                       (list resolved)
+                       "some-report-\\(&-of\\&-of\\&\\)"
+                       "x")
+                      nil)
+                  (user-error e))))
+      (ert-info ((format "Error: %S" err))
+        (should err)
+        (let ((message (error-message-string err)))
+          (ert-info ((format "Message:\n%S" message))
+            (should (string-match-p "matched nothing" message))
+            (should (string-match-p "literal character \"&\"" message))
+            (should (string-match-p "no file in the list holds \"&\""
+                                    message))))))))
+
+(ert-deftest scalpel-agent-test-rewrite-keeps-quiet-about-a-literal-the-file-holds ()
+  "No escape note when the files really hold the escaped character.
+The note is evidence, not a reflex: a file that holds an ampersand
+must not be reported as lacking one merely because the pattern
+escaped it, or the refusal would send the planner after a difference
+that is not there."
+  (scalpel-utils-test-with-temp-file ".txt"
+    (with-temp-file this-file (insert "keep & safe\n"))
+    (let* ((resolved (file-truename (expand-file-name this-file)))
+           (scalpel-agent--context-files (list resolved))
+           (err (condition-case e
+                    (progn
+                      (scalpel-agent-file-substitute
+                       (list resolved) "zzz\\&zzz" "x")
+                      nil)
+                  (user-error e))))
+      (ert-info ((format "Error: %S" err))
+        (should err)
+        (let ((message (error-message-string err)))
+          (ert-info ((format "Message:\n%S" message))
+            (should (string-match-p "matched nothing" message))
+            (should-not (string-match-p "literal character" message))))))))
 
 (ert-deftest scalpel-agent-test-rewrite-malformed-signals ()
   "A rewrite without files, pattern or replacement signals."
