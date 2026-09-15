@@ -28,7 +28,47 @@
 
 ;;; Code:
 
+(require 'cl-lib)
 (require 'subr-x)
+(require 'scalpel-execute-elisp)
+
+(defvar scalpel-execute-providers nil
+  "Alist of (REGEXP . PROVIDER-PLIST) for registered execute providers.
+
+PROVIDER-PLIST keys:
+:deletion-start -- function (BEG), returns the position a deletion of
+a definition whose own range begins at BEG should start at.  Most
+providers return BEG; one extends it upward to carry language syntax
+that belongs to the definition without being part of its range.")
+
+(defun scalpel-execute-register (regexp provider)
+  "Register PROVIDER for file names matching REGEXP.
+PROVIDER is a plist with a :deletion-start entry.  Registering the
+same REGEXP replaces the previous provider."
+  (setq scalpel-execute-providers
+        (cons (cons regexp provider)
+              (cl-remove-if (lambda (entry)
+                              (string= (car entry) regexp))
+                            scalpel-execute-providers))))
+
+(defun scalpel-execute-provider-for-file (file)
+  "Return provider plist for FILE, or nil."
+  (when file
+    (let ((entry (cl-find-if (lambda (entry)
+                               (string-match-p (car entry) file))
+                             scalpel-execute-providers)))
+      (and entry (cdr entry)))))
+
+(defun scalpel-execute--extended-deletion-start (beg)
+  "Return the position a deletion of the block at BEG should start at.
+BEG is the start of the block's own range.  A provider registered for
+the buffer's file may extend it upward, so language syntax that belongs
+to the block without being part of its range -- an Emacs Lisp autoload
+cookie line, say -- is carried out with it.  With no file, or no
+provider for it, BEG comes back unchanged."
+  (let* ((provider (scalpel-execute-provider-for-file buffer-file-name))
+         (extend (and provider (plist-get provider :deletion-start))))
+    (if extend (funcall extend beg) beg)))
 
 (defun scalpel-execute--brackets-balanced-p (text)
   "Return non-nil when TEXT has balanced parentheses."
@@ -108,6 +148,15 @@ the survivor from.  Return nil."
            (keep (if boundary 0 (min blanks 1))))
       (unless (= keep blanks)
         (let ((inhibit-read-only t))
+          ;; The run is found by looking at whole lines, so POS must begin
+          ;; its own line for the run to really touch it.  A POS inside a
+          ;; line makes BEFORE-START land on the blank line above that line,
+          ;; and the deletion below would then take the line POS sits in
+          ;; down with it.  Refuse instead of trusting the caller.
+          (unless (string-blank-p
+                   (buffer-substring-no-properties before-start after-end))
+            (error "Scalpel: refusing to collapse %d..%d; it holds non-blank text"
+                   before-start after-end))
           (delete-region before-start after-end)
           (goto-char before-start)
           (when (= keep 1)
@@ -170,12 +219,24 @@ deletion brings together are collapsed to a single one when there
 was more than one, so a block with a blank line on each side leaves
 one blank line behind and not two.  A block with no blank line
 around it leaves none: deleting it puts its neighbours on adjacent
-lines.  The buffer is saved when it visits a file."
-  (let ((inhibit-read-only t))
-    (delete-region beg (scalpel-execute--block-deletion-end beg end)))
-  (goto-char beg)
-  (scalpel-execute--collapse-blank-lines (point))
+lines.  The start may be carried upward by the provider registered
+for the buffer's file, so syntax that belongs to the block without
+being part of its range goes with it.  The buffer is saved when it
+visits a file."
+  (let* ((start (scalpel-execute--extended-deletion-start beg))
+         (inhibit-read-only t))
+    (delete-region start (scalpel-execute--block-deletion-end start end))
+    ;; The join sits where the deletion stitched the neighbours together:
+    ;; the start the deletion really used, not the block's own one.  Read
+    ;; from the outer BEG here and the collapse reconciles a position
+    ;; inside the *next* definition instead.
+    (goto-char start)
+    (scalpel-execute--collapse-blank-lines (point)))
   (scalpel-execute--save))
+
+(scalpel-execute-register
+ "\\.el\\'"
+ (list :deletion-start #'scalpel-execute-elisp--deletion-start))
 
 (provide 'scalpel-execute)
 

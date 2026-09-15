@@ -146,6 +146,38 @@ terminated line."
        (scalpel-execute-insert-after end "(defun b (")
        :type 'user-error))))
 
+(ert-deftest scalpel-execute-test-delete-takes-the-autoload-cookie ()
+  "Deleting a definition takes its autoload cookie with it.
+Regression: `block-delete' removed the form the locator reported and
+left the `;;;###autoload' line standing alone, where it autoloads a
+symbol the file no longer defines.  The cookie is a separate line, so
+the locator never covered it; only the execute provider can carry it
+out.  The buffer must visit a `.el' file for the provider to apply,
+which is why this test does not use a bare `with-temp-buffer'."
+  (scalpel-utils-test-with-temp-file ".el"
+    (with-temp-file this-file
+      (insert ";;;###autoload\n(defun foo ())\n\n(defun bar ())\n"))
+    (with-current-buffer (find-file-noselect this-file)
+      (goto-char (point-min))
+      (search-forward "(defun foo ())")
+      (scalpel-execute-delete (line-beginning-position) (line-end-position))
+      (ert-info ((format "Buffer:\n%S" (buffer-string)))
+        (should (string= (buffer-string) "(defun bar ())\n"))))))
+
+(ert-deftest scalpel-execute-test-collapse-refuses-to-eat-a-definition ()
+  "A collapse position inside a definition refuses instead of deleting it.
+Regression: `block-delete' collapsed at the block's own start rather
+than the start the deletion used; with the autoload cookie carried up,
+that position sat at the end of the *next* definition's line, the blank
+run found above it reached the buffer start, and the whole remaining
+buffer -- definition and all -- was deleted."
+  (with-temp-buffer
+    (insert "\n(defun bar ())\n")
+    (ert-info ("POS 16 is the trailing newline, not the join at 1")
+      (should-error (scalpel-execute--collapse-blank-lines 16) :type 'error)
+      (ert-info ((format "Buffer:\n%S" (buffer-string)))
+        (should (string= (buffer-string) "\n(defun bar ())\n"))))))
+
 (provide 'scalpel-execute-test)
 
 ;;; scalpel-execute-test.el ends here
