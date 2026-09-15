@@ -116,6 +116,62 @@ the dispatch layer would search the caller's own buffer."
     (should (scalpel-locate-elisp--top-definition-range
              "cl-pick--helper"))))
 
+(ert-deftest scalpel-locate-test-elisp-locates-a-package-definer ()
+  "A name defined by a mode or package macro is listed and located.
+Regression: the list held only the core definers and their cl-lib
+and ERT aliases, so `llm-pick-view-mode' -- present in the file at
+its own `define-derived-mode' form -- was reported \"not found in ...
+nor anywhere in the context\", and every round naming it died
+before it could be edited; `llm-pick-menu' at its
+`transient-define-prefix' form failed the same way.  The reader and
+the locator share one list, so both have to know the spelling the
+file was written with; the two forms below are those shapes, name
+unquoted, which is the membership rule the list documents."
+  (with-temp-buffer
+    (insert "(define-derived-mode llm-pick-view-mode special-mode"
+            " \"llm-pick-view\")\n\n"
+            "(transient-define-prefix llm-pick-menu ()\n"
+            "  [\"Actions\" (\"q\" \"quit\" llm-pick-quit)])\n")
+    (ert-info ((format "Symbols: %S"
+                       (scalpel-locate-elisp-list-symbols nil)))
+      (should (member "llm-pick-view-mode"
+                      (scalpel-locate-elisp-list-symbols nil)))
+      (should (member "llm-pick-menu"
+                      (scalpel-locate-elisp-list-symbols nil))))
+    (let ((range (scalpel-locate-elisp--top-definition-range
+                  "llm-pick-view-mode")))
+      (ert-info ((format "Range: %S" range))
+        (should range)
+        (should (string-match-p
+                 "\\`(define-derived-mode llm-pick-view-mode"
+                 (buffer-substring-no-properties (car range) (cdr range))))))
+    (let ((range (scalpel-locate-elisp--top-definition-range
+                  "llm-pick-menu")))
+      (ert-info ((format "Range: %S" range))
+        (should range)
+        (should (string-match-p
+                 "\\`(transient-define-prefix llm-pick-menu"
+                 (buffer-substring-no-properties (car range) (cdr range))))))
+    ;; The same list backs the replacement check, so a round that
+    ;; hands such a definition back must be accepted as a whole block;
+    ;; otherwise the definition could be located but never edited.
+    (should (scalpel-locate-elisp--single-definition-p
+             (concat "(define-derived-mode llm-pick-view-mode special-mode"
+                     " \"llm-pick-view\")")))))
+
+(ert-deftest scalpel-locate-test-elisp-rejects-quoted-name-definers ()
+  "A definer that takes a quoted name stays out of the list.
+Regression risk: adding `defalias', `defvaralias' or `define-error'
+looks like widening the vocabulary, but their names are read as
+`(quote name)', so `list-symbols' would report `'foo' -- a spelling
+the locator, which searches for the bare word, can never match --
+and a name that used to be found by another form would be reported
+with a quote instead.  The exclusion is the same rule that admits
+the mode and transient spellings."
+  (dolist (definer '(defalias defvaralias define-error define-widget))
+    (ert-info ((format "Definer: %S" definer))
+      (should-not (memq definer scalpel-locate-elisp--defining-forms)))))
+
 (ert-deftest scalpel-locate-test-elisp-single-definition-p ()
   "One or more complete top-level defining forms are accepted."
   (should (scalpel-locate-elisp--single-definition-p

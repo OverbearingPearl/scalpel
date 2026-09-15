@@ -13,15 +13,41 @@
 ;;; Code:
 
 (defconst scalpel-locate-elisp--defining-forms
-  '(defun defmacro defvar defvar-local defcustom defconst
-    cl-defun cl-defmacro cl-defmethod
+  '(defun defsubst defmacro defvar defvar-local defcustom defconst
+    defgroup defface
+    cl-defun cl-defmacro cl-defmethod cl-defgeneric cl-defstruct
+    define-derived-mode define-minor-mode define-globalized-minor-mode
+    define-generic-mode define-skeleton define-inline
+    transient-define-prefix transient-define-suffix
+    transient-define-argument
     ert-deftest)
   "Top-level defining forms recognised as one complete definition.
 Structural contract shared by the definition regexes below and by
-`scalpel-locate-elisp--single-definition-p'.  Beyond the core
-Elisp definers it carries the cl-lib and ERT aliases, because test
-files -- which an agent round edits most often -- define almost
-exclusively through `ert-deftest' and `cl-defun'.")
+`scalpel-locate-elisp--single-definition-p'.
+
+A form belongs here when its second element is the unquoted name
+the form defines, which is what lets `--def-name-regex' read that
+name and `--top-definition-range' find the form again from it.  The
+core Emacs Lisp definers come first, then the mode and group
+spellings, then the cl-lib ones, then the transient spellings this
+package's menus are written with, then ERT.
+
+Membership is a contract of spellings, not of one package's
+vocabulary, so a macro from a package belongs here when the files a
+session edits are written with it.  Leaving one out costs more than
+a convenience: a name the list misses is reported \"not found\" by
+`scalpel-locate-range' even though the file plainly holds it, and
+every round that names it dies before it can be edited --
+`llm-pick-view-mode' at its `define-derived-mode' form was, and
+`llm-pick-menu' at its `transient-define-prefix' one was too.  Such
+a name is also absent from `list-symbols', so the planner is never
+told it exists.
+
+A definer whose name is *quoted* stays out.  `defalias',
+`defvaralias' and `define-error' are the common shapes: the reader
+hands back the form `(quote name)', and the locator -- which
+searches for the symbol as a bare word -- could never match that
+spelling, turning one not-found failure into a permanent one.")
 
 (defconst scalpel-locate-elisp--definer-regexp
   (concat "\\(?:" (regexp-opt
