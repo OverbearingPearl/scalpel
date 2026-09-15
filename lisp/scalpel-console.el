@@ -177,6 +177,17 @@ display only: the text, the conversation and the pending-input
 scanner are all unchanged."
   :group 'scalpel)
 
+(defface scalpel-console-planner-error-face
+  '((t :inherit shadow))
+  "Face for a non-sandbox error turn in the console.
+The turn is dimmed for reading, not for trimming: unlike
+`scalpel-console-consumed-body-face' -- which marks a body the
+planner no longer reads -- an error turn still joins the
+conversation and is read by the planner on the next round.  A
+sandbox failure never gets this face: it stays out of the
+conversation entirely and must stay loud."
+  :group 'scalpel)
+
 (defun scalpel-console--buffer-name (root)
   "Return the Scalpel console buffer name for ROOT.
 ROOT is expanded, normalized with `file-name-as-directory' and
@@ -1059,7 +1070,8 @@ ON-COMPLETE, so it is never left pointing at a dead buffer."
                            ;; -- malformed JSON, for one -- stays in the history.
                            (scalpel-console--append
                             (format "Scalpel error: %s" (plist-get err :message)))
-                         (let ((inhibit-read-only t))
+                         (let* ((inhibit-read-only t)
+                                (err-beg (point)))
                            (scalpel-console--insert-tagged
                             (if (scalpel-console--planner-error-p err)
                                 ;; A planner-output failure ran nothing, so
@@ -1076,7 +1088,17 @@ ON-COMPLETE, so it is never left pointing at a dead buffer."
                                           (_ scalpel-console--retry-advice)))
                               (format "Scalpel error: %s\n\n"
                                       (plist-get err :message)))
-                            'assistant))
+                            'assistant)
+                           ;; The failure is dimmed for reading only: the
+                           ;; turn still joins the conversation, so this
+                           ;; must not read as a trimmed body.  Declaring
+                           ;; the face `rear-nonsticky' keeps keyboard
+                           ;; input typed after the turn from inheriting
+                           ;; it.
+                           (put-text-property err-beg (point) 'face
+                                              'scalpel-console-planner-error-face)
+                           (scalpel-console--make-nonsticky
+                            err-beg (point) '(face)))
                        ;; An error turn is a conversation turn too: it becomes the
                        ;; newest assistant turn, so the report before it has to be
                        ;; marked.  The insertion stays direct rather than going

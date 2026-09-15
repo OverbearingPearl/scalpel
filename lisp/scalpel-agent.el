@@ -861,7 +861,16 @@ as a planner error."
                             ;; second, empty round on top of it.
                             (progn
                               (funcall on-success
-                                       (list (list :tool "reply" :text text)))
+                                       (list (list :tool "reply"
+                                                   ;; The condition's second
+                                                   ;; data element is the
+                                                   ;; prose itself; the error
+                                                   ;; narrative must not ride
+                                                   ;; along as the answer, or
+                                                   ;; the planner reads it back
+                                                   ;; and repeats it as
+                                                   ;; content.
+                                                   :text (or (caddr err) text))))
                               nil)
                           (funcall on-error
                                    (list :type (or (cdr dialect) 'parse)

@@ -352,7 +352,11 @@ plain `user-error'."
                              "reply is shown below as it was written, so the "
                              "answer it holds can still be read.  "
                              "Reply was:\n%s")
-                     (scalpel-llm-dialect--readable-raw raw)))))
+                     (scalpel-llm-dialect--readable-raw raw))
+             ;; The prose rides along as a second data element, so a
+             ;; caller that degrades prose into a reply action delivers
+             ;; the answer itself, not the error narrative above.
+             (scalpel-llm-dialect--readable-raw raw))))
    (t
     (user-error "Scalpel: planner returned invalid JSON: %s"
                 (scalpel-llm-dialect--visible-raw raw)))))

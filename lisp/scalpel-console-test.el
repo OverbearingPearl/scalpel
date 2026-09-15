@@ -1477,8 +1477,14 @@ while the planner already saw the error as the newest turn."
               (goto-char (point-min))
               (should (search-forward "Scalpel planner error: Bad JSON" nil t))
               ;; The error turn holds no fenced body, so nothing is
-              ;; dropped from it and it stays unmarked.
-              (should-not (get-text-property (match-beginning 0) 'face)))))
+              ;; dropped from it: the consumed-body mark must not land
+              ;; on it.  Its face is the planner-error dim, which is a
+              ;; reading aid, not a trimming mark.
+              (should (eq (get-text-property (match-beginning 0) 'face)
+                          'scalpel-console-planner-error-face))
+              (should-not (get-text-property
+                           (match-beginning 0)
+                           'scalpel-console-consumed-body)))))
       (scalpel-utils-test-kill-buffer (buffer-name buf)))))
 
 (ert-deftest scalpel-console-test-abort-cancels-in-flight-request ()
@@ -1577,6 +1583,12 @@ not tell that resending the instruction was the whole fix."
               (should (string-match-p
                        (regexp-quote scalpel-console--retry-advice)
                        (buffer-string)))
+              ;; The failure header is dimmed for reading, while the
+              ;; turn still joins the conversation.
+              (goto-char (point-min))
+              (should (search-forward "Scalpel planner error" nil t))
+              (should (eq (get-text-property (match-beginning 0) 'face)
+                          'scalpel-console-planner-error-face))
               ;; The failure stays in the conversation: it is about the
               ;; planner, not about Scalpel's own boundary.
               (should (string-match-p

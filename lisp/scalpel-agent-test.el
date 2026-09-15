@@ -723,6 +723,11 @@ whose text keeps the original answer readable."
           (should (string-match-p "The gateway"
                                   (plist-get (car actions) :text)))
           (should-not (string-match-p "\\\\n"
+                                      (plist-get (car actions) :text)))
+          ;; The answer is the prose itself, not the error narrative:
+          ;; shipping "nothing was executed" as the reply is what made
+          ;; the planner read it back and repeat it as content.
+          (should-not (string-match-p "nothing was executed"
                                       (plist-get (car actions) :text))))))))
 
 (ert-deftest scalpel-agent-test-system-prompt-declares-every-tool ()
