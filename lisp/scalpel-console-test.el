@@ -228,6 +228,44 @@ branch."
                                         nil t))))
           (when (buffer-live-p buf) (kill-buffer buf)))))))
 
+(ert-deftest scalpel-console-test-file-level-round-continues ()
+  "A round that changed a file is followed by another round.
+Regression: the continuation test read :shells, :reads and :edits, so
+a round whose only action created, renamed or deleted a file ended
+the loop -- the context tree was drawn for the file the planner had
+just created, and then the console stopped without ever giving the
+planner the round that would have finished the request."
+  (let ((scalpel-agent--context-files nil)
+        (scalpel-console-max-rounds 5)
+        (buf (scalpel-console-test--new-console-buffer))
+        (rounds 0))
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'scalpel-agent-run)
+                     (lambda (_instruction _history on-done _on-error)
+                       (setq rounds (1+ rounds))
+                       (funcall on-done
+                                (if (= rounds 1)
+                                    '(:report "Created file /tmp/a.el"
+                                      :shells nil :reads nil
+                                      :changes ("Created file /tmp/a.el"))
+                                  '(:report "done" :shells nil
+                                            :reads nil :changes nil))))))
+            (with-current-buffer buf
+              (erase-buffer)
+              (insert "create the file\n")
+              (goto-char (point-min))
+              (scalpel-console-send-line)))
+          (with-current-buffer buf
+            (ert-info ((format "rounds=%d buffer:\n%S"
+                               rounds (buffer-string)))
+              (should (= rounds 2))
+              (should (string-match-p "Scalpel: Created file /tmp/a.el"
+                                      (buffer-string)))
+              (should (string-match-p "Scalpel: done"
+                                      (buffer-string))))))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
+
 (ert-deftest scalpel-console-test-context-change-is-shown-as-a-tree ()
   "A round that changes the context file list draws the context tree.
 Regression: `file-create', `file-rename' and `file-delete' changed which
@@ -253,7 +291,7 @@ console had drawn described a session that no longer existed."
                        (setq scalpel-agent--context-files (list added))
                        (funcall on-done
                                 '(:report "Created file x" :shells nil
-                                          :reads nil :edits nil)))))
+                                          :reads nil :changes nil)))))
             (with-current-buffer buf
               (scalpel-console--run-round
                "make the file" "User: make the file\n" #'ignore)))
@@ -1951,7 +1989,7 @@ LLM request could not be aborted."
                      '(:report "late result"
                        :shells ((:command "late" :bytes 0))
                        :reads nil
-                       :edits nil))
+                       :changes nil))
             (with-current-buffer buf
               (ert-info ((format "Buffer:\n%S" (buffer-string)))
                 (should-not (string-match-p "late result" (buffer-string)))

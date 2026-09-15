@@ -68,6 +68,22 @@ checks the required list only, while `scalpel-agent--project-actions'
 keeps required and optional fields alike; a field listed here may
 therefore be omitted by the planner and still survive projection.")
 
+(defconst scalpel-agent--change-tools
+  '("block-edit" "block-insert" "block-delete" "file-create" "file-rename"
+    "file-delete" "file-substitute")
+  "Tools whose action changes the files on disk.
+Structural contract shared by `scalpel-agent-run', which records one
+entry per such action in the round's :changes, and
+`scalpel-console--run-rounds', which continues the loop while a round
+has changes to read back.  Every writing tool belongs here: a round
+that wrote something is a round whose report the planner still has to
+act on, and a caller that stopped after it would abandon the rest of a
+request the planner split across rounds -- three files created one per
+round is the same shape as three edits.  Reading tools stay out: their
+output is already the round's report, which the caller reads through
+:shells and :reads.  A new writing tool belongs in this list, or the
+loop ends after it without ever telling the planner what landed.")
+
 (defconst scalpel-agent--no-change-sentinel "NO_CHANGE"
   "Literal the LLM returns when the requested edit is unnecessary.
 Structural contract shared by the replacement prompt in
@@ -97,6 +113,32 @@ bound what the model writes, so the bound has to be stated to the
 model.  The failure it prevents is a reply cut off mid-JSON by the
 backend's output limit, which loses the whole round, and the suite
 cannot see it because every reply there is mocked.")
+
+(defconst scalpel-agent--substitute-pattern-rule
+  "The regular-expression dialect a file-substitute pattern is read in.
+A file-substitute \"pattern\" is an Emacs regular expression, not a
+sed or grep one, and the dialects disagree about escaped brackets:
+in Emacs syntax \"(\" and \")\" match a literal bracket, while
+\"\\(\" and \"\\)\" only open and close a group, so a pattern written
+as \"\\(Name\\)\" matches the text \"Name\" and never the brackets it
+was aimed at -- it usually matches nothing at all.  Escape only what
+Emacs regexp syntax treats as special -- \".\", \"*\", \"+\", \"?\",
+\"[\", \"]\", \"^\", \"$\" -- and the backslash itself.
+Worked example, because the rule alone did not stop the escaped
+spelling: to match the brackets in
+  ;; Package-Requires: ((emacs \"28.1\") (transient \"0.3.0\"))
+the pattern is written
+  ;; Package-Requires: ((emacs \"28\\.1\") (transient \"0\\.3\\.0\"))
+-- brackets unescaped, the dot of each version escaped."
+  "Statement of the regular-expression dialect a pattern is read in.
+Structural contract shared by `scalpel-agent-system-prompt', which
+embeds it, and the test that guards it.  The trap it closes is not
+hypothetical: a planner wrote \"\\(emacs ...\\)\" for a literal
+bracket, which in Emacs syntax is a group, so the brackets it aimed
+at were absent from the pattern and the rewrite refused with zero
+matches in a file that held the text it meant.  Nothing in the code
+can read that intent back out of a pattern without guessing at it,
+so the dialect has to be stated to the model.")
 
 (defcustom scalpel-agent-system-prompt
   (concat
@@ -167,6 +209,10 @@ the user confirms it, and it refuses entirely when it matches
 nothing or would leave an Emacs Lisp file unbalanced: prefer
 file-substitute for mechanical batch changes, shell only for
 reading.
+
+"
+   scalpel-agent--substitute-pattern-rule
+   "
 Never invent commands the user did not ask for, and never use shell
 to change files: all file changes go through block-edit,
 block-insert, block-delete, file-rename, file-delete and
@@ -1535,6 +1581,310 @@ states the true size.  Output holding a NUL byte is withheld."
                         "--- output ---\n%s\n--- end output ---")
                 resolved bytes body)))))
 
+(defun scalpel-agent--definitions-in-text (file text)
+  "Return the top-level definition names TEXT would give FILE.
+FILE selects the locator provider, so the names are read in the
+language the file is written in; TEXT is read in a temporary buffer,
+because the providers work on the current buffer and the question
+here is about text that is not on disk yet.  Return nil for a file no
+provider handles, or one whose provider cannot list definitions: a
+caller must read nil as \"cannot tell\", never as \"defines nothing\"."
+  (let* ((provider (scalpel-locate-provider-for-file file))
+         (list-symbols (and provider (plist-get provider :list-symbols))))
+    (when list-symbols
+      (with-temp-buffer
+        (insert text)
+        (delete-dups (funcall list-symbols file))))))
+
+(defun scalpel-agent--rewrite-definition-note (file before after)
+  "Return a report line naming the definitions a rewrite changed in FILE.
+BEFORE and AFTER are the definition names FILE's text held before and
+after the rewrite, as `scalpel-agent--definitions-in-text' reads them.
+Return nil when the two agree.
+
+The removals are named first because they are what a later round trips
+over: a definition renamed by a bulk rewrite leaves its old name in
+the planner's hands, and the locate failure that follows says only
+\"not found\", which explains nothing about where the name went.  This
+is report text, not a refusal: dropping a name is what a rename is,
+and refusing it would refuse the bulk rename the tool exists for."
+  (let ((gone (cl-set-difference before after :test #'string=))
+        (fresh (cl-set-difference after before :test #'string=)))
+    (when (or gone fresh)
+      (concat (format "Note: definitions changed in %s:" file)
+              (when gone
+                (format " no longer defined: %s" (string-join gone ", ")))
+              (when fresh
+                (format "%snow defined: %s"
+                        (if gone "; " " ")
+                        (string-join fresh ", ")))))))
+
+(defconst scalpel-agent--substitute-hint-max-lines 5
+  "Maximum number of near-miss lines a zero-match refusal shows.
+The lines are evidence, not the answer, and a refusal that pasted a
+whole file would cost the planner the tokens the rewrite was meant
+to save.")
+
+(defconst scalpel-agent--substitute-hint-min-prefix 12
+  "Shortest pattern prefix a near-miss search will look for.
+Below this length a hit says nothing: a pattern's opening
+characters are punctuation shared by most lines of a file.  Twelve
+characters is about one identifier, the shortest run that can still
+be about the text the planner was aiming at.")
+
+(defconst scalpel-agent--substitute-hint-attempts 100
+  "Maximum number of prefix lengths a near-miss search tries.
+One character is dropped per step, so a pattern no longer than this
+many characters is walked one length at a time; a longer one steps
+further, because the walk runs only on a zero-match refusal and only
+over text already in memory, and a hundred lengths cover far more of
+a line than any pattern a rewrite is built from.")
+
+(defconst scalpel-agent--substitute-bracket-reading-note
+  (concat "Note: in Emacs regexp syntax \"\\(\" and \"\\)\" open and close "
+          "a group and match no brackets, while a literal bracket is written "
+          "\"(\" and \")\"; the lines above are the file's own text.")
+  "Sentence naming the reading the refusal's quoted lines came from.
+Structural contract shared by
+`scalpel-agent--substitute-near-miss-note', which appends it, and the
+test that pins it.  It is appended when the lines quoted above it were
+placed by reading the pattern's bracket escapes as literal brackets,
+which is the fact the planner needs for its next attempt: it wrote the
+escaped form of a bracket it wanted to match.
+
+The sentence states the syntax rule and where the quoted lines come
+from -- both true whenever it is printed -- instead of claiming that no
+other reading could reach them.  That stronger claim is not decidable
+here: an escape both readings share is searched for as a backslash the
+file does not hold, so it truncates both walks at the same point, and
+the earlier wording was withheld on exactly that account while the
+quoted line held no reason the planner could act on.
+
+The worked example in `scalpel-agent--substitute-pattern-rule' is the
+prevention this sentence is the fallback for: the prose rule alone did
+not stop the escaped spelling, which came back three rounds running,
+each time refusing for matching nothing.")
+
+(defun scalpel-agent--substitute-literal-brackets (pattern)
+  "Return PATTERN read with its bracket escapes as literal brackets.
+Emacs regexp syntax spells a group \"\\(\" and \"\\)\" and a literal
+bracket \"(\" and \")\", so a pattern that writes the escaped form
+where a bracket was meant matches the text between them and never
+the brackets themselves -- which usually matches nothing at all.
+Return nil when PATTERN escapes no bracket: then both readings are
+the same text, and there is nothing to tell apart."
+  (when (string-match-p "\\\\[()]" pattern)
+    (replace-regexp-in-string "\\\\\\([()]\\)" "\\1" pattern)))
+
+(defun scalpel-agent--lines-holding (text literal)
+  "Return the lines of TEXT that hold LITERAL, up to a cap.
+LITERAL is searched for as text, never as a regular expression, so
+a line carrying the same characters as the pattern's opening run is
+found however the pattern would have read them.  Lines come back
+trimmed, deduplicated and in file order, so the caller can print
+them as the file's own text rather than as an analysis of it.  The
+cap is `scalpel-agent--substitute-hint-max-lines': the lines are
+evidence, and a refusal that pasted a whole file would cost the
+planner the tokens the rewrite was meant to save."
+  (let ((pattern (regexp-quote literal))
+        lines)
+    (dolist (line (split-string text "\n"))
+      (when (and (< (length lines) scalpel-agent--substitute-hint-max-lines)
+                 (string-match-p pattern line))
+        (let ((trimmed (string-trim line)))
+          (unless (or (string-empty-p trimmed)
+                      (member trimmed lines))
+            (push trimmed lines)))))
+    (nreverse lines)))
+
+(defun scalpel-agent--substitute-prefix-lines (text pattern)
+  "Return the lines of TEXT holding the longest prefix of PATTERN.
+Return nil when no prefix of at least
+`scalpel-agent--substitute-hint-min-prefix' characters is found.
+Successively shorter prefixes are looked for, longest first, so a
+stub that matches the file's first characters by coincidence cannot
+displace a longer near miss.  Prefixes are taken exactly as PATTERN
+spells them, so a \"\\.\" is searched for as a backslash and a dot.
+That can only shorten the run the search finds; it never rewrites the
+pattern, because the intent behind a regular expression cannot be
+read back out of it without guessing.
+
+Each step drops one character, not half the remainder.  Halving
+skips lengths, and the length it skips is exactly where a near miss
+lives: a pattern of 23 characters was halved -- and lost -- to 11,
+under the minimum of twelve, so the twelve-character run its opening
+shares with the file was never looked for and the refusal quoted
+nothing.  A pattern longer than `scalpel-agent--substitute-hint-attempts'
+characters steps further, so the number of searches stays bounded."
+  (let* ((length (length pattern))
+         (limit scalpel-agent--substitute-hint-min-prefix)
+         (attempts scalpel-agent--substitute-hint-attempts)
+         (step (max 1 (ceiling (/ length (float attempts)))))
+         found)
+    (while (and (not found) (>= length limit))
+      (let ((lines (scalpel-agent--lines-holding
+                    text (substring pattern 0 length))))
+        (if lines
+            (setq found lines)
+          (setq length (- length step)))))
+    found))
+
+(defun scalpel-agent--substitute-hint-lines (text pattern)
+  "Return (LINES . BRACKET-READING) for TEXT against PATTERN.
+LINES are the lines of TEXT holding the longest run PATTERN shares
+with the file, or nil.  BRACKET-READING is non-nil when LINES were
+placed by reading PATTERN's bracket escapes as literal brackets.
+
+The reading that takes the brackets as characters is preferred and
+is asked first, because it is the one that reaches furthest into the
+line the planner was aiming at.  How much of PATTERN each reading
+places is deliberately not what decides the sentence: an escape both
+readings share -- a \"\\.\" earlier in the same line, say -- is
+searched for as a backslash the file does not hold, so it truncates
+the walk at the same point either way, and a refusal that compared
+lengths stayed silent on that account.  The observed failure quoted
+the file's line with no reason attached, leaving the planner with
+nothing to change.  What is decidable is whether the bracket-literal
+reading places a run at all, and a pattern that matches no brackets
+while the file's text holds them is the shape the sentence exists
+for.
+
+The second reading is reported, never applied: what runs is the
+pattern the planner wrote, so a pattern whose brackets really are
+groups still refuses, and this only says which reading would have
+landed.  Both answers are nil when neither reading places a run of
+`scalpel-agent--substitute-hint-min-prefix' characters."
+  (let* ((literal (scalpel-agent--substitute-literal-brackets pattern))
+         (by-brackets (and literal
+                           (scalpel-agent--substitute-prefix-lines
+                            text literal))))
+    (if by-brackets
+        (cons by-brackets t)
+      (cons (scalpel-agent--substitute-prefix-lines text pattern) nil))))
+
+(defconst scalpel-agent--substitute-bracket-correction-matches
+  "\nThe same pattern, with its brackets written as literal brackets, is: %s"
+  "Sentence handing over the bracket-literal spelling of a pattern.
+Structural contract shared by `scalpel-agent--substitute-near-miss-note',
+which prints it, and the test that pins it.  The `%s' is the corrected
+pattern.  It is printed only after that spelling was matched against
+the file's text, so the pattern it names is one the next attempt can
+really use; when the spelling matches nothing either, the refusal
+prints `scalpel-agent--substitute-bracket-correction-fails' instead.")
+
+(defconst scalpel-agent--substitute-bracket-correction-fails
+  (concat "\nThe same pattern read with its brackets as literal brackets "
+          "matches nothing in the file either, so the brackets are not "
+          "the only difference between it and the text; compare the "
+          "pattern with the lines above.")
+  "Sentence printed when the bracket-literal spelling matches nothing.
+Structural contract shared by the same two places as
+`scalpel-agent--substitute-bracket-correction-matches'.  Offering a
+corrected pattern here would send the next attempt after one that
+fails for the same reason the original did, so the refusal says the
+correction does not land and leaves the file's own lines above as the
+text to compare against.")
+
+(defun scalpel-agent--substitute-correction-matches-p (staged corrected)
+  "Return non-nil when CORRECTED matches some text in STAGED.
+STAGED is the list of (RESOLVED OLD NEW) the rewrite was built from,
+so OLD is the file's text as it was read before anything was written.
+CORRECTED is the pattern read with its bracket escapes as literal
+brackets, and the caller offers it to the planner as the pattern to
+use next; it is therefore matched against the bytes on disk first.  A
+rewrite refused for matching nothing would otherwise hand over a
+spelling that fails for the same reason its predecessor did, and the
+next attempt would spend itself on that pattern.
+
+The match runs with case folding off, the way the rewrite itself ran,
+so the answer describes the same matching.  A CORRECTED the matcher
+refuses -- dropping an escape can leave a regexp that no longer parses
+-- reads as \"does not match\": the sentence it replaces exists to say
+the correction does not land, which is true of one that cannot be
+tried."
+  (let ((case-fold-search nil))
+    (cl-some (lambda (entry)
+               (condition-case nil
+                   (and (string-match corrected (nth 1 entry)) t)
+                 (error nil)))
+             staged)))
+
+(defun scalpel-agent--substitute-near-miss-note (staged pattern)
+  "Return a note naming the near-miss lines of STAGED for PATTERN.
+STAGED is the list of (RESOLVED OLD NEW) the rewrite was built from,
+so OLD is the file's text as it was read before anything was
+written, and the note needs no second read.  Return the empty string
+when no such line is found in any of them.
+
+The note belongs to the refusal for a pattern that matched nothing.
+That refusal is correct and stays -- a rewrite that matched nothing
+is a planner mistake, never a success -- but it cannot say why on
+its own, and the planner wrote the pattern it expected to find.  The
+file's actual text around that expectation is the one fact the
+refusal lacks: it is what separates a pattern aimed at a line the
+file does not hold from one written as the text the rewrite was
+meant to produce.  The lines are quoted, never inferred.
+
+When those lines were placed by reading the pattern's bracket escapes
+as literal brackets, the note says so, because that reading is the
+fact the planner needs for its next attempt: it wrote the escaped
+form of a bracket it wanted to match.  The sentence is evidence like
+the lines are -- it appears only when the file really holds them
+under that reading -- and the pattern itself is never rewritten.
+The corrected spelling is handed over with it, so the next attempt
+can be copied rather than translated: turning \"\\(\" back into \"(\"
+one escape at a time is the step that was observed to fail, and a
+refusal that leaves it to the reader is a refusal that repeats.
+
+That spelling is checked against the file's text before it is
+offered, because a correction derived from the pattern alone can
+still fail: the brackets may not be the only difference, and a
+refusal that presents the next pattern to use would then send the
+planner after one that fails the way the last one did.  When the
+bracket-literal reading matches nothing either, the refusal says
+that instead, and the file's lines quoted above are what the planner
+compares against."
+  (let (blocks
+        bracket-reading)
+    (dolist (entry staged)
+      (let* ((resolved (nth 0 entry))
+             (hint (scalpel-agent--substitute-hint-lines
+                    (nth 1 entry) pattern))
+             (lines (car hint)))
+        (when lines
+          (setq bracket-reading (or bracket-reading (cdr hint)))
+          (push (format "\nThe closest lines in %s are:\n%s"
+                        resolved
+                        (string-join
+                         (mapcar (lambda (line) (format "  %s" line))
+                                 lines)
+                         "\n"))
+                blocks))))
+    (concat (string-join (nreverse blocks) "")
+            (when bracket-reading
+              (concat "\n"
+                      scalpel-agent--substitute-bracket-reading-note
+                      ;; The corrected spelling, spelled for the
+                      ;; reading that placed the lines: dots stay
+                      ;; escaped, because a dot is special to Emacs
+                      ;; regexp syntax, and the brackets do not,
+                      ;; because they are not.  Nothing is applied
+                      ;; under it -- the user confirmed the pattern
+                      ;; they were shown, and running another one
+                      ;; would be running something they never saw --
+                      ;; and it is offered only after being matched
+                      ;; against the file's text, so the pattern the
+                      ;; planner copies is one that really lands.
+                      (let ((corrected
+                             (scalpel-agent--substitute-literal-brackets
+                              pattern)))
+                        (if (scalpel-agent--substitute-correction-matches-p
+                             staged corrected)
+                            (format
+                             scalpel-agent--substitute-bracket-correction-matches
+                             corrected)
+                          scalpel-agent--substitute-bracket-correction-fails)))))))
+
 (defun scalpel-agent-file-substitute (files pattern replacement)
   "Apply the mechanical replacement PATTERN -> REPLACEMENT across FILES.
 This is the planner's channel for one mechanical batch
@@ -1551,10 +1901,15 @@ The whole transformation is computed and validated before anything
 reaches disk: new contents are built in memory, an `.el' file whose
 new content has unbalanced brackets refuses the whole rewrite, and
 zero occurrences anywhere refuses it too -- a rewrite that matched
-nothing is a planner mistake, not a success.  Return a
-human-readable report.  Signal `user-error' on malformed input, a
-file outside the context, a bad replacement, no matches, or an
-unbalanced result."
+nothing is a planner mistake, not a success.  The report also names
+the definitions the rewrite changed in each file, because a bulk
+rename leaves the old name in the planner's hands and the next
+round's locate failure explains nothing on its own.  A zero-match
+refusal quotes the lines that begin like the pattern, so the planner
+can correct the pattern it wrote rather than spend a round reading
+the text it had already misremembered.  Return a human-readable
+report.  Signal `user-error' on malformed input, a file outside the
+context, a bad replacement, no matches, or an unbalanced result."
   (unless (and files pattern (stringp replacement))
     (user-error
      (concat "Scalpel: malformed file-substitute action (files=%S pattern=%S "
@@ -1603,25 +1958,44 @@ unbalanced result."
                      staged)
       (user-error
        (concat "Scalpel: file-substitute pattern %S matched nothing in any of "
-               "the %d file(s) (%s); refusing")
+               "the %d file(s) (%s); refusing%s")
        pattern (length staged)
-       (string-join (mapcar (lambda (entry) (nth 0 entry)) staged) ", ")))
+       (string-join (mapcar (lambda (entry) (nth 0 entry)) staged) ", ")
+       (scalpel-agent--substitute-near-miss-note staged pattern)))
     ;; Second pass: apply through the visiting buffers and save, the
     ;; way `scalpel-execute' writes.
     (let ((lines nil))
       (pcase-dolist (`(,resolved ,old ,new) staged)
         (let ((count 0)
-              (pos 0))
+              (pos 0)
+              ;; The count has to read the pattern exactly as the
+              ;; replacement did.  The replacement above runs with case
+              ;; folding off, so counting with the buffer's default would
+              ;; report occurrences the rewrite never made -- and the
+              ;; planner reads that number to decide whether the batch is
+              ;; complete.
+              (case-fold-search nil))
           (while (string-match pattern old pos)
             (setq count (1+ count)
                   pos (match-end 0)))
-          (with-current-buffer (find-file-noselect resolved)
-            (let ((inhibit-read-only t))
-              (erase-buffer)
-              (insert new))
-            (save-buffer))
-          (push (format "Rewrote %d occurrence(s) in %s" count resolved)
-                lines)))
+          ;; The definition listing is taken from the two texts before
+          ;; anything is written: it is the only record of what the
+          ;; rewrite did to the definitions, and the next round has no
+          ;; other way to learn that a name it is about to use is gone.
+          ;; It is read from the texts rather than from the buffer, so
+          ;; the answer does not depend on which file was written first.
+          (let ((before (scalpel-agent--definitions-in-text resolved old))
+                (after (scalpel-agent--definitions-in-text resolved new)))
+            (with-current-buffer (find-file-noselect resolved)
+              (let ((inhibit-read-only t))
+                (erase-buffer)
+                (insert new))
+              (save-buffer))
+            (push (format "Rewrote %d occurrence(s) in %s" count resolved)
+                  lines)
+            (let ((note (scalpel-agent--rewrite-definition-note
+                         resolved before after)))
+              (when note (push note lines))))))
       (string-join (nreverse lines) "\n"))))
 
 (defun scalpel-agent-confirm (text)
@@ -1816,7 +2190,8 @@ of being re-framed as an action failure."
 (defun scalpel-agent-run (instruction history on-done on-error)
   "Run one agent round for INSTRUCTION, without blocking.
 HISTORY is the conversation text recorded before INSTRUCTION, or
-nil.  ON-DONE receives a plist (:report STRING :shells SHELLS :reads READS);
+nil.  ON-DONE receives a plist (:report STRING :shells SHELLS :reads
+READS :changes CHANGES);
 SHELLS holds one entry per shell action the round executed, as a
 plist with :command plus the output metadata recorded by
 `scalpel-agent-shell' \(:bytes, :truncated, :binary), so a caller
@@ -1826,6 +2201,12 @@ READS holds one entry per file-peek action, with :file and
 and is a separate list because a read report is not subject to the
 shell rules: there is no size gate, and no binary downgrade beyond
 withholding the contents.
+CHANGES holds one report per action in
+`scalpel-agent--change-tools' -- every action that wrote to a file --
+so a caller can tell a round that changed something from one that
+only looked, and continue the loop so the planner can read its own
+change back.  A round whose only action created, renamed or deleted
+a file reports it here, and nothing else.
 ON-ERROR receives a plist (:type SYMBOL :message STRING).
 
 Actions are executed in array order; a `block-edit' or
@@ -1861,7 +2242,7 @@ busy flag still gets a chance to release it."
            (let ((reports nil)
                  (shells nil)
                  (reads nil)
-                 (edits nil))
+                 (changes nil))
              (cl-labels
                  ((finish ()
                     (funcall on-done
@@ -1869,7 +2250,7 @@ busy flag still gets a chance to release it."
                                    (string-join (nreverse reports) "\n")
                                    :shells (nreverse shells)
                                    :reads (nreverse reads)
-                                   :edits (nreverse edits))))
+                                   :changes (nreverse changes))))
                   (step (rest)
                     (message "Scalpel-debug: step, %d action(s) left" (length rest))
                     (if (null rest)
@@ -1892,8 +2273,8 @@ busy flag still gets a chance to release it."
                                           :symbol (plist-get action :symbol))
                                     reads))
                             ((member (plist-get action :tool)
-                                     '("block-edit" "block-insert" "file-substitute"))
-                             (push report edits)))
+                                     scalpel-agent--change-tools)
+                             (push report changes)))
                             (step (cdr rest))))
                          (lambda (err)
                            (in-session

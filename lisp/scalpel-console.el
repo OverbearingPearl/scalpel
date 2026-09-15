@@ -1189,11 +1189,13 @@ data, or when the commands together produced more than
 (defun scalpel-console--continue-p (result)
   "Return non-nil when another round should follow RESULT.
 RESULT is a `scalpel-agent-run' result whose round ran shell
-commands, read files, or applied edits.  A read is always
+commands, read files, or changed files.  A read is always
 continued: the planner asked for it, so there is nothing to
-question.  An applied edit is continued too: the planner split the
-request across rounds, and stopping after one file would abandon
-the rest.  Small shell output continues without a question too;
+question.  A round that changed a file is continued too -- an
+edit, an insert, a delete, a rewrite, a created, renamed or
+deleted file: the planner split the request across rounds, and
+stopping after one file would abandon the rest, the file it just
+made included.  Small shell output continues without a question too;
 only a
 round `scalpel-console--noisy-round-p' rejects is put to the
 user, because its output may cost more in tokens than it is
@@ -1266,7 +1268,7 @@ point, so a second RET during a round is refused."
                            (and round-result
                                 (or (plist-get round-result :shells)
                                     (plist-get round-result :reads)
-                                    (plist-get round-result :edits))))
+                                    (plist-get round-result :changes))))
                           (finish-operation))
                          ((>= round scalpel-console-max-rounds)
                           (finish-operation)
