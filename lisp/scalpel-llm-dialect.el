@@ -133,6 +133,38 @@ by eye from one that did."
         (print-escape-multibyte t))
     (prin1-to-string raw)))
 
+(defun scalpel-llm-dialect--json-container-start-p (raw pos)
+  "Return non-nil when RAW at POS plausibly start a JSON container.
+An array may begin with any JSON value or close immediately; an
+object may begin with a quoted key or close immediately.  End of
+input is plausible too, because it represents a truncated container."
+  (let ((opener (aref raw pos))
+        (next-pos (1+ pos)))
+    (while (and (< next-pos (length raw))
+                (memq (aref raw next-pos) '(?\s ?\t ?\n ?\r)))
+      (setq next-pos (1+ next-pos)))
+    (let ((next (and (< next-pos (length raw))
+                     (aref raw next-pos))))
+      (or (null next)
+          (pcase opener
+            (?\[
+             (or (memq next '(?\" ?\[ ?\{ ?\] ?- ?t ?f ?n))
+                 (and (<= ?0 next) (<= next ?9))))
+            (?\{
+             (memq next '(?\" ?\})))
+            (_ nil))))))
+
+(defun scalpel-llm-dialect--json-start (raw &optional from)
+  "Return the next plausible JSON container start in RAW after FROM."
+  (let ((pos (or from 0))
+        found)
+    (while (and (not found)
+                (setq pos (string-match "\\[\\|{" raw pos)))
+      (if (scalpel-llm-dialect--json-container-start-p raw pos)
+          (setq found pos)
+        (setq pos (1+ pos))))
+    found))
+
 (defun scalpel-llm-dialect--json-payloads (raw)
   "Return every balanced JSON array or object span in RAW, in order.
 A planner reply is a container: the JSON array may be preceded by
@@ -147,7 +179,8 @@ so a command such as \"echo ']'\" does not end a span early."
         (i 0))
     (while (< i (length raw))
       (let ((char (aref raw i)))
-        (if (memq char '(?\[ ?\{))
+        (if (and (memq char '(?\[ ?\{))
+                 (scalpel-llm-dialect--json-container-start-p raw i))
             (let ((depth 0)
                   (in-string nil)
                   (escaped nil)
@@ -177,17 +210,20 @@ so a command such as \"echo ']'\" does not end a span early."
 
 (defun scalpel-llm-dialect--json-unterminated-p (raw)
   "Return non-nil when RAW opens a JSON value that never closes.
-The scanner mirrors `scalpel-llm-dialect--json-payload': brackets
+The scanner mirrors `scalpel-llm-dialect--json-payloads': brackets
 inside string literals never count, and a backslash escapes the
-next character."
-  (let* ((start (string-match "\\[\\|{" raw))
+next character.  Unlike the previous version, it scans the whole
+string from the first opener, so a balanced bracket in prose --
+such as \"grok-3-[beta]\" -- is not mistaken for an unterminated
+JSON value."
+  (let* ((start (scalpel-llm-dialect--json-start raw))
          (depth 0)
          (in-string nil)
          (escaped nil)
          (i start))
     (and start
          (progn
-           (while (and i (< i (length raw)) (zerop depth))
+           (while (and i (< i (length raw)))
              (let ((char (aref raw i)))
                (cond
                 (escaped (setq escaped nil))
@@ -308,7 +344,7 @@ plain `user-error'."
    ;; already exists to avoid.  This branch is reached only on the
    ;; console's path, where a reply with an opener is either parsed or
    ;; reported as truncated above.
-   ((not (string-match-p "\\[\\|{" raw))
+   ((null (scalpel-llm-dialect--json-start raw))
     (signal 'scalpel-llm-dialect-prose-reply-error
             (list
              (format (concat "Scalpel: planner replied in prose and sent no "

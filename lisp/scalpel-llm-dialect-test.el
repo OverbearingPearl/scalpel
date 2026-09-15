@@ -111,12 +111,43 @@ cause was the backend cutting the reply off."
         (should err)
         (should (string-match-p "cut off" (error-message-string err)))))))
 
+(ert-deftest scalpel-llm-dialect-test-prose-with-brackets-is-not-truncated ()
+  "Prose containing balanced brackets is not mistaken for unterminated JSON.
+Regression: `grok-3-[beta]' in a prose reply opened a bracket that
+`--json-unterminated-p' never closed, so the reply was reported as
+cut off instead of as prose, and the round was thrown away."
+  (let ((raw (concat "grok-3-[beta] is the model name. "
+                     "It lives in two layers.")))
+    (let ((err (condition-case e
+                   (progn (scalpel-llm-dialect--default-parse raw) nil)
+                 (user-error e))))
+      (ert-info ((format "Raw:\n%S" raw))
+        (should err)
+        (should (eq (car err) 'scalpel-llm-dialect-prose-reply-error))
+        (should (string-match-p "prose" (error-message-string err)))
+        (should-not (string-match-p "cut off"
+                                    (error-message-string err)))))))
+
 (ert-deftest scalpel-llm-dialect-test-json-payload-without-json ()
   "A reply holding no complete JSON value has no payload."
   (ert-info ("Input: prose and an unterminated array; expect nil both times")
     (should-not (scalpel-llm-dialect--json-payloads
                  "There is nothing to change."))
     (should-not (scalpel-llm-dialect--json-payloads "[unterminated"))))
+
+(ert-deftest scalpel-llm-dialect-test-malformed-json-looking-array-is-not-prose ()
+  "A plausible but malformed JSON array remains a parse error."
+  (let* ((raw "[{\"tool\":}]")
+         (err (condition-case e
+                  (progn (scalpel-llm-dialect--default-parse raw) nil)
+                (user-error e))))
+    (ert-info ((format "Raw: %S Error: %S" raw err))
+      (should err)
+      (should (eq (car err) 'user-error))
+      (should (string-match-p "invalid JSON"
+                              (error-message-string err)))
+      (should-not (string-match-p "prose"
+                                  (error-message-string err))))))
 
 (ert-deftest scalpel-llm-dialect-test-parse-error-names-tool-call-syntax ()
   "XML tool-call markup is named in the error, not reported as bad JSON.
