@@ -87,6 +87,67 @@ prompt."
                                      "(defun baz ()\n  t)\n\n"
                                      "(defun bar ()\n  nil)\n")))))))))
 
+(ert-deftest scalpel-agent-test-create-reports-a-full-context ()
+  "A create the context limit cannot take is reported, not silent.
+The file exists on disk either way, so a refusal nobody mentions would
+leave the planner unable to read a file the user can see."
+  (let ((dir (make-temp-file "scalpel-test-new-" t)))
+    (unwind-protect
+        (with-temp-buffer
+          (let* ((scalpel-agent--context-files '("/tmp/scalpel-test-held.el"))
+                 (scalpel-agent-context-max-files 1)
+                 (target (expand-file-name "new.el" dir))
+                 (report (scalpel-agent-file-create target "(defun a ())\n")))
+            (ert-info ((format "Report: %S Context: %S"
+                               report scalpel-agent--context-files))
+              (should (file-exists-p target))
+              (should (equal scalpel-agent--context-files
+                             '("/tmp/scalpel-test-held.el")))
+              (should (string-match-p "not added to the context" report)))))
+      (delete-directory dir t))))
+
+(ert-deftest scalpel-agent-test-create-file-joins-the-context ()
+  "A created file joins the session context.
+Regression: `file-create' wrote the file and left the context alone, so
+the file existed on disk while every later round -- which reads and
+edits through the context alone -- could not name it."
+  (let ((dir (make-temp-file "scalpel-test-new-" t)))
+    (unwind-protect
+        (with-temp-buffer
+          (let* ((scalpel-agent--context-files nil)
+                 (target (expand-file-name "sub/new.el" dir))
+                 (report (scalpel-agent-file-create target "(defun a ())\n")))
+            (ert-info ((format "Report: %S Context: %S"
+                               report scalpel-agent--context-files))
+              (should (string-match-p "Created file" report))
+              (should (member (file-truename target)
+                              scalpel-agent--context-files)))))
+      (delete-directory dir t))))
+
+(ert-deftest scalpel-agent-test-create-reports-the-name-that-landed ()
+  "The create report names the definition the file really holds.
+Regression: it repeated the symbol the planner asked for, so a planner
+whose definition landed under another name was told the create produced
+it; the next round then located that name and failed with \"not found\",
+with nothing in the record saying why."
+  (scalpel-utils-test-with-temp-file ".el"
+    (with-temp-file this-file (insert "(defun anchor ())\n"))
+    (cl-letf (((symbol-function 'scalpel-llm-request-async)
+               (lambda (_prompt on-success _on-error &optional _system)
+                 (funcall on-success "(defun other ()\n  t)"))))
+      (let (report)
+        (scalpel-agent-execute-action
+         (list :tool "block-insert" :file this-file :symbol "wanted"
+               :instruction "add wanted" :after "anchor")
+         (lambda (r) (setq report r))
+         (lambda (err) (ert-fail (plist-get err :message))))
+        (ert-info ((format "Report: %S On disk: %S" report
+                           (with-temp-buffer
+                             (insert-file-contents this-file)
+                             (buffer-string))))
+          (should (string-match-p "Created wanted" report))
+          (should (string-match-p "named other" report)))))))
+
 (ert-deftest scalpel-agent-test-execute-action-delete ()
   "A delete action drops the block, its blank line, and the buffer's state.
 The action settles synchronously -- no LLM request is involved -- and
@@ -1130,6 +1191,60 @@ The report preserves the raw output size for continuation decisions."
   (should-error (scalpel-agent-file-delete "/nonexistent/x.el")
                 :type 'user-error)
   (should-error (scalpel-agent-file-delete nil) :type 'user-error))
+
+(ert-deftest scalpel-agent-test-delete-file-drops-the-context-entry ()
+  "A deleted file leaves the session context with the disk.
+Regression: the entry stayed, so every later prompt listed a file that
+no longer exists and the sandbox policy carried a read-only bind for a
+path nothing can open."
+  (scalpel-utils-test-with-temp-file ".el"
+    (with-temp-file this-file (insert "(defun foo ())\n"))
+    (let ((entry (file-truename (expand-file-name this-file))))
+      (with-temp-buffer
+        (let* ((scalpel-agent--context-files (list entry))
+               (report (scalpel-agent-file-delete this-file)))
+          (ert-info ((format "Report: %S Context: %S"
+                             report scalpel-agent--context-files))
+            (should (string-match-p "Deleted file" report))
+            (should-not (file-exists-p this-file))
+            (should (null scalpel-agent--context-files))))))))
+
+(ert-deftest scalpel-agent-test-rename-moves-the-context-entry ()
+  "A renamed file keeps its place in the context under its new path.
+Regression: the context kept the old path, which no longer exists, and
+did not hold the new one, which does: the next round read a file that is
+gone and could not name the file that replaced it."
+  (scalpel-utils-test-with-temp-file ".el"
+    (with-temp-file this-file (insert "(defun foo ())\n"))
+    (let* ((to (concat this-file "-renamed.el"))
+           (entry (file-truename (expand-file-name this-file))))
+      (unwind-protect
+          (with-temp-buffer
+            (let* ((scalpel-agent--context-files (list entry))
+                   (report (scalpel-agent-file-rename this-file to)))
+              (ert-info ((format "Report: %S Context: %S"
+                                 report scalpel-agent--context-files))
+                (should (string-match-p "Renamed" report))
+                (should-not (member entry scalpel-agent--context-files))
+                (should (member (file-truename (expand-file-name to))
+                                scalpel-agent--context-files)))))
+        (scalpel-utils-test-kill-file-buffer to)
+        (scalpel-utils-test-delete-file to)))))
+
+(ert-deftest scalpel-agent-test-rename-adds-no-file-to-the-context ()
+  "A rename of a file the session never held leaves the context alone.
+The context is the user's list of readable files; a rename moves what is
+already in it and is not a way into it."
+  (scalpel-utils-test-with-temp-file ".el"
+    (with-temp-file this-file (insert "(defun foo ())\n"))
+    (let ((to (concat this-file "-moved.el")))
+      (unwind-protect
+          (with-temp-buffer
+            (let ((scalpel-agent--context-files nil))
+              (scalpel-agent-file-rename this-file to)
+              (should (null scalpel-agent--context-files))))
+        (scalpel-utils-test-kill-file-buffer to)
+        (scalpel-utils-test-delete-file to)))))
 
 (ert-deftest scalpel-agent-test-execute-action-rename-and-delete-file ()
   "Rename and `delete-file' actions settle synchronously through reports."

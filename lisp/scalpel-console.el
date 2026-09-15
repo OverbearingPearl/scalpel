@@ -1005,7 +1005,10 @@ round can read it instead of losing it.  The console buffer is
 captured up front: if the user kills it while the request is in
 flight, writes are skipped but the round still settles.  The
 progress callback is installed for the duration and cleared before
-ON-COMPLETE, so it is never left pointing at a dead buffer."
+ON-COMPLETE, so it is never left pointing at a dead buffer.  A round
+that changed the session's context file list redraws the context tree
+before ON-COMPLETE, so the file list on screen still describes the
+session the next round will run against."
   (let* ((target (scalpel-console--target-buffer))
          (breakdown
           (with-current-buffer target
@@ -1016,6 +1019,14 @@ ON-COMPLETE, so it is never left pointing at a dead buffer."
                   :history (scalpel-llm--count-tokens (or history ""))
                   :instruction (scalpel-llm--count-tokens
                                 (or instruction "")))))
+         ;; The round can change which files the session holds:
+         ;; `file-create' adds the new one, `file-rename' moves its entry
+         ;; and `file-delete' drops it.  This is the before-image the
+         ;; settle path compares against, copied because the tools replace
+         ;; the list rather than mutate it and the comparison must not
+         ;; depend on that staying true.
+         (context-before (with-current-buffer target
+                           (copy-sequence scalpel-agent--context-files)))
          (status (with-current-buffer target
                    (scalpel-console--status-start breakdown)))
          (refresh (car status))
@@ -1044,6 +1055,24 @@ ON-COMPLETE, so it is never left pointing at a dead buffer."
                              (funcall stop)))
                        (error
                         (message "Scalpel: status cleanup failed: %S" err)))
+                     ;; A round that changed the context file list says so
+                     ;; in the console, in the tree the context already
+                     ;; uses: the baseline is what the previous refresh
+                     ;; left, so the files this round added or dropped are
+                     ;; the ones marked.  Before ON-COMPLETE, because a
+                     ;; continued round appends its own output from there;
+                     ;; the tree belongs to the round that changed the
+                     ;; list.  Display only, so neither the conversation
+                     ;; nor the next prompt is touched by it.
+                     (condition-case err
+                         (when (and (buffer-live-p target)
+                                    (with-current-buffer target
+                                      (not (equal context-before
+                                                  scalpel-agent--context-files))))
+                           (with-current-buffer target
+                             (scalpel-console--show-context)))
+                       (error
+                        (message "Scalpel: context display failed: %S" err)))
                      (when (buffer-live-p target)
                        (funcall on-complete round-result))))))
     (let ((operation

@@ -228,6 +228,57 @@ branch."
                                         nil t))))
           (when (buffer-live-p buf) (kill-buffer buf)))))))
 
+(ert-deftest scalpel-console-test-context-change-is-shown-as-a-tree ()
+  "A round that changes the context file list draws the context tree.
+Regression: `file-create', `file-rename' and `file-delete' changed which
+files the session holds, and nothing on screen said so, so the tree the
+console had drawn described a session that no longer existed."
+  (let ((scalpel-agent--context-files nil)
+        (buf (scalpel-console-test--new-console-buffer))
+        (added "/tmp/scalpel-context-added.el"))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (erase-buffer)
+            (setq scalpel-console--context-baseline 'none-yet)
+            ;; The baseline the next refresh measures against is the one
+            ;; `scalpel-console-open' establishes: a refresh of its own,
+            ;; with the context still empty.
+            (scalpel-console--show-context)
+            (scalpel-console--insert-tagged "User: make the file\n" 'user))
+          (cl-letf (((symbol-function 'scalpel-agent-run)
+                     (lambda (_instruction _history on-done _on-error)
+                       ;; What `file-create' does inside a round: the file
+                       ;; exists on disk and the session now holds it.
+                       (setq scalpel-agent--context-files (list added))
+                       (funcall on-done
+                                '(:report "Created file x" :shells nil
+                                          :reads nil :edits nil)))))
+            (with-current-buffer buf
+              (scalpel-console--run-round
+               "make the file" "User: make the file\n" #'ignore)))
+          (with-current-buffer buf
+            (let ((report-pos (progn (goto-char (point-min))
+                                     (search-forward
+                                      "Scalpel: Created file x" nil t)))
+                  (tree-pos (progn (goto-char (point-min))
+                                   (search-forward
+                                    "scalpel-context-added.el" nil t)
+                                   (match-beginning 0))))
+              (ert-info ((format "Buffer:\n%S" (buffer-string)))
+                ;; The tree lands after the round's own report...
+                (should report-pos)
+                (should tree-pos)
+                (should (< report-pos tree-pos))
+                ;; ...and the file this round added is the marked one, so
+                ;; the tree is the delta display and not a bare listing.
+                (should (eq (get-text-property tree-pos 'face)
+                            'scalpel-console-context-added-face)))
+              ;; Display only: the tree never joins the conversation.
+              (should-not (string-match-p "Context:"
+                                          (scalpel-console--history))))))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
+
 (ert-deftest scalpel-console-test-context-diff-face-covers-name-only ()
   "The change face starts at the file name, never at the tree graphics."
   (let ((buf (scalpel-console-test--new-console-buffer)))

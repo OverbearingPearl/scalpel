@@ -10,6 +10,11 @@
 
 ;; Provides context, structured-plan parsing, and action dispatch.
 ;;
+;; The context is a list of files, and it is this module's own state: the
+;; file-level tools keep it true to the disk, so a created file joins it, a
+;; renamed file's entry moves with it, and a deleted file's entry goes.  The
+;; console draws that list, so it redraws whenever a round changes it.
+;;
 ;; Dispatch applies each action as it is parsed: edits are not queued for
 ;; approval, since `scalpel-execute' pins each replacement to a verified range.
 ;; Every action returns a human-readable report instead, which is the trace the
@@ -475,6 +480,46 @@ it.  No-op with a message when nothing matched."
             (cl-remove-if match-p scalpel-agent--context-files))
       (message "Scalpel: removed %d file(s)" (length removed)))))
 
+(defun scalpel-agent--context-track (file)
+  "Add FILE to the session context, as a file-level tool's own change.
+Return nil when FILE was added or the context already held it, and a
+report suffix when `scalpel-agent-context-max-files' refused it.
+FILE enters the context as its truename, the spelling
+`scalpel-agent-context-add' stores, so both ways in agree on identity:
+two spellings of one path must not put one file in the context twice.
+
+A refusal is a note rather than the `user-error'
+`scalpel-agent-context-add' signals, because the tool that produced
+FILE has already run and a create reported as a failure would be a lie.
+What must not happen is silence: FILE exists on disk, so a limit that
+keeps it out of the context keeps it out of the planner's reach, and
+the note names the file and the limit that did it."
+  (let ((resolved (file-truename (expand-file-name file))))
+    (cond
+     ((member resolved scalpel-agent--context-files) nil)
+     ((< (length scalpel-agent--context-files)
+         scalpel-agent-context-max-files)
+      (setq scalpel-agent--context-files
+            (cons resolved scalpel-agent--context-files))
+      nil)
+     (t
+      (format (concat "\nNote: %s was not added to the context; it already "
+                      "holds %d file(s), its limit "
+                      "`scalpel-agent-context-max-files'")
+              resolved (length scalpel-agent--context-files))))))
+
+(defun scalpel-agent--context-untrack (file)
+  "Drop FILE from the session context when it is there.
+FILE is matched by its truename, the spelling the context stores, so a
+file the session does not hold is a no-op.  Only the exact entry goes:
+unlike `scalpel-agent-context-remove', a directory's contents are not
+implied, because the caller acts on one file whose identity it has
+already resolved."
+  (let ((resolved (file-truename (expand-file-name file))))
+    (setq scalpel-agent--context-files
+          (cl-remove-if (lambda (entry) (string= entry resolved))
+                        scalpel-agent--context-files))))
+
 (defun scalpel-agent--path-components (path)
   "Split PATH into tree components for the context tree.
 Split on \"/\" with empty components dropped.  Absolute paths keep
@@ -930,6 +975,18 @@ facts, so the next round can act on them instead of guessing again."
               symbol
               (string-join (mapcar #'car hits) ", "))))))))
 
+(defun scalpel-agent--locatable-p (file symbol)
+  "Return non-nil when SYMBOL can be located in FILE.
+The question is the one the next round asks: locate is how a symbol is
+found again, so a definition the locator cannot see is one the planner
+will report missing.  Asking it here answers while the action that
+created SYMBOL is still on screen.  The locator signals `user-error'
+for a file it has no provider for; that is a nil answer, not a failure
+of this probe."
+  (condition-case nil
+      (and (scalpel-locate-range file symbol) t)
+    (user-error nil)))
+
 (defun scalpel-agent--verified-range (file symbol expected-body)
   "Return (BEG . END) of SYMBOL in FILE, verified as unchanged.
 SYMBOL is re-located here, in the caller's current buffer, so a
@@ -1044,15 +1101,35 @@ region was modified while an LLM request was in flight."
 
 (defun scalpel-agent--create-after-anchor (file symbol after expected-body new-text)
   "Insert NEW-TEXT after the anchor AFTER in FILE, verified unchanged.
-SYMBOL names the definition being created and appears in the report
-only.  EXPECTED-BODY is the anchor text last seen; the region is
-re-verified before anything is applied.  The layout between the
-anchor, the new definition and what follows is reconciled by
-`scalpel-execute-insert-after', not by the planner."
+SYMBOL names the definition being created and appears in the report.
+EXPECTED-BODY is the anchor text last seen; the region is re-verified
+before anything is applied.  The layout between the anchor, the new
+definition and what follows is reconciled by
+`scalpel-execute-insert-after', not by the planner.
+
+The report names what the file really holds afterwards.  The definition
+NEW-TEXT writes may not be the one SYMBOL names, and a report repeating
+SYMBOL would then send the next round after a definition that is not
+there -- the failure is not the insert, it is the silence about it."
   (with-current-buffer (find-file-noselect file)
     (let ((range (scalpel-agent--verified-range file after expected-body)))
       (scalpel-execute-insert-after (cdr range) new-text)
-      (format "Created %s in %s" symbol (buffer-name (current-buffer))))))
+      (let* ((created (scalpel-agent--replacement-name new-text))
+             (other (and created (not (string= created symbol)) created))
+             (locatable (scalpel-agent--locatable-p file symbol))
+             (note (cond
+                    ((and other (not locatable))
+                     (format (concat "; the definition that landed is named "
+                                     "%s, so %s cannot be located here")
+                             other symbol))
+                    (other
+                     (format "; the definition that landed is named %s" other))
+                    ((not locatable)
+                     (concat "; it cannot be located by that name, so the "
+                             "next round will not find it"))
+                    (t ""))))
+        (format "Created %s in %s%s" symbol (buffer-name (current-buffer))
+                note)))))
 
 (defun scalpel-agent-block-edit (file symbol instruction on-success on-error)
   "Edit SYMBOL in FILE per INSTRUCTION, without blocking.
@@ -1134,7 +1211,8 @@ the edit."
 (defun scalpel-agent-block-insert (file symbol instruction after
                                   on-success on-error)
   "Create SYMBOL in FILE per INSTRUCTION, inserted after AFTER.
-ON-SUCCESS receives the report string.  ON-ERROR receives a plist
+ON-SUCCESS receives the report string, which names the definition the
+file really holds when that is not SYMBOL.  ON-ERROR receives a plist
 \(:type SYMBOL :message STRING)."
   (cl-block scalpel-agent-block-insert
     (unless (and file symbol instruction after)
@@ -1188,9 +1266,12 @@ ON-SUCCESS receives the report string.  ON-ERROR receives a plist
   "Create FILE with TEXT as its whole content.
 Refuses an existing file --
 changing one is `scalpel-agent-block-edit' and `scalpel-agent-block-insert'
-work -- and creates missing parent directories.  Return a
-human-readable report string.  Signal `user-error' on a malformed
-action or an existing file."
+work -- and creates missing parent directories.  The new file joins the
+session context, because the planner made it and will want to read and
+edit it next round; a context already at
+`scalpel-agent-context-max-files' leaves it out and the report says so.
+Return a human-readable report string.  Signal `user-error' on a
+malformed action or an existing file."
   (unless (and file text)
     (user-error "Scalpel: malformed file-create action"))
   (when (file-exists-p file)
@@ -1198,7 +1279,10 @@ action or an existing file."
   (let ((dir (file-name-directory (expand-file-name file))))
     (when dir (make-directory dir t)))
   (with-temp-file file (insert text))
-  (format "Created file %s" file))
+  ;; The context follows the disk: FILE exists now, and nothing else would
+  ;; ever put it in reach of a read, an edit or the sandbox.
+  (concat (format "Created file %s" file)
+          (or (scalpel-agent--context-track file) "")))
 
 (defun scalpel-agent-block-delete (file symbol)
   "Delete SYMBOL in FILE through the boundary-locked deletion.
@@ -1230,10 +1314,11 @@ saved before this returns.  Return a human-readable report string."
 
 (defun scalpel-agent-file-delete (file)
   "Delete FILE.
-The file is removed from disk.  A buffer visiting it is killed when
-it has no unsaved changes; when it does, this refuses rather than
-discard them.  Return a human-readable report string.  Signal
-`user-error' on a malformed action or a missing file."
+The file is removed from disk, and its entry leaves the session context
+with it.  A buffer visiting it is killed when it has no unsaved
+changes; when it does, this refuses rather than discard them.  Return
+a human-readable report string.  Signal `user-error' on a malformed
+action or a missing file."
   (unless file
     (user-error "Scalpel: malformed file-delete action"))
   (unless (file-exists-p file)
@@ -1244,6 +1329,11 @@ discard them.  Return a human-readable report string.  Signal
     (when (and buffer (buffer-live-p buffer))
       (kill-buffer buffer))
     (delete-file file)
+    ;; A dead path must not stay in the context: it costs a line in every
+    ;; prompt and a read-only bind in the sandbox, and opening it reports
+    ;; a file with no symbols rather than the absence the session should
+    ;; have recorded.
+    (scalpel-agent--context-untrack file)
     (format "Deleted file %s" file)))
 
 (defun scalpel-agent-file-rename (file to)
@@ -1251,16 +1341,22 @@ discard them.  Return a human-readable report string.  Signal
 Only the file is moved: the definitions inside it are untouched,
 and no other file's require, import or path string is updated.
 The destination must not already exist.  A buffer visiting FILE
-is saved first and then follows the rename.  Return a
-human-readable report string.  Signal `user-error' on a malformed
-action, a missing source, or an existing destination."
+is saved first and then follows the rename.  A context entry for
+FILE moves with it, and a rename never adds a file the session did
+not already hold.  Return a human-readable report string.  Signal
+`user-error' on a malformed action, a missing source, or an
+existing destination."
   (unless (and file to)
     (user-error "Scalpel: malformed file-rename action"))
   (unless (file-exists-p file)
     (user-error "Scalpel: can't rename %s: no such file" file))
   (when (file-exists-p to)
     (user-error "Scalpel: can't rename %s: %s already exists" file to))
-  (let ((buffer (find-buffer-visiting file)))
+  (let ((buffer (find-buffer-visiting file))
+        ;; Asked while the old path still names a file: the session tracks
+        ;; files by their resolved path, and nothing can be resolved
+        ;; against a path that has moved away.
+        (tracked (scalpel-agent--context-file-p file)))
     (when buffer
       (with-current-buffer buffer
         (when (buffer-modified-p)
@@ -1269,6 +1365,16 @@ action, a missing source, or an existing destination."
     (when (and buffer (buffer-live-p buffer))
       (with-current-buffer buffer
         (set-visited-file-name to t)))
+    ;; The context entry moves with the file.  Left behind, it would keep
+    ;; a path the session cannot open in every later prompt, while the
+    ;; path that now exists -- the only readable one -- stayed out of
+    ;; reach.  A rename is not a way into the context: a file the session
+    ;; never held adds nothing.  The track below cannot report a refusal,
+    ;; because the swap removes one entry before it adds one and the
+    ;; count never grows.
+    (when tracked
+      (scalpel-agent--context-untrack file)
+      (scalpel-agent--context-track to))
     (format "Renamed %s to %s" file to)))
 
 (defun scalpel-agent--printable-output (text)
