@@ -431,6 +431,37 @@ directory."
                             'scalpel-console-context-unchanged-face))))))
       (when (buffer-live-p buf) (kill-buffer buf)))))
 
+(ert-deftest scalpel-console-test-append-follows-point-only-at-the-end ()
+  "Appending moves point to the end only when the user is already there.
+Regression: `scalpel-console--append' moved point to point-max
+unconditionally, so redisplay scrolled the window back to the
+bottom while the user was reading earlier turns, and every new
+report yanked the view away from the history."
+  (let ((buf (scalpel-console-test--new-console-buffer)))
+    (unwind-protect
+        (with-current-buffer buf
+          (erase-buffer)
+          (scalpel-console--insert-tagged "User: first\n" 'user)
+          ;; The user scrolled back: point sits mid-buffer.
+          (goto-char (point-min))
+          (scalpel-console--append "Scalpel: reply one\n\n" 'assistant)
+          (ert-info ((format "Point %d of %d; buffer:\n%S"
+                             (point) (point-max) (buffer-string)))
+            ;; The text still lands at the end...
+            (should (string-match-p "Scalpel: reply one" (buffer-string)))
+            (should (string-match-p
+                     "\\`User: first\nScalpel: reply one"
+                     (buffer-string)))
+            ;; ...but the user's point stays where it was.
+            (should (= (point) (point-min))))
+          ;; A user waiting at the end keeps following the output.
+          (goto-char (point-max))
+          (scalpel-console--append "Scalpel: reply two\n\n" 'assistant)
+          (ert-info ((format "Point %d of %d" (point) (point-max)))
+            (should (= (point) (point-max)))
+            (should (string-match-p "Scalpel: reply two" (buffer-string)))))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
+
 (ert-deftest scalpel-console-test-reset-context-leaves-point-at-max ()
   "Context commands leave point at the buffer end, not on the context block.
 Regression: `scalpel-console--append' restored point via

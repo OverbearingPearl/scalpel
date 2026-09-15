@@ -758,9 +758,17 @@ consumed-body marks: that round is the cycle that processes the previous
 report's output, so the previous body stops being sent."
   (let ((buf (scalpel-console--target-buffer)))
     (with-current-buffer buf
-      (goto-char (point-max))
-      (let ((inhibit-read-only t)
-            (beg (point)))
+      ;; Read the user's position BEFORE moving: whether the user was
+      ;; reading the end is decided from where they actually were, and
+      ;; the move below then places the insertion at the end.
+      (let* ((follow (>= (point) (point-max)))
+             ;; A marker, not a position: the insert below shifts it,
+             ;; and the user's place in the history must follow the
+             ;; text they were reading, not the byte offset.
+             (user-point (copy-marker (point) t)))
+        (goto-char (point-max))
+        (let ((inhibit-read-only t)
+              (beg (point)))
         (scalpel-console--insert-tagged (format "%s\n\n" text) role)
         (unless role
           (put-text-property beg (point) 'scalpel-console-output t))
@@ -774,8 +782,20 @@ report's output, so the previous body stops being sent."
         ;; this role can change which report is newest, so only this
         ;; role pays for the rescan.
         (when (eq role 'assistant)
-          (scalpel-console--refresh-consumed-body-markers)))
-      (goto-char (point-max)))))
+          (scalpel-console--refresh-consumed-body-markers))
+        ;; Follow the new output only when the user was already reading
+        ;; the end.  An unconditional move dragged point to point-max, so
+        ;; redisplay scrolled the window back to the bottom while the user
+        ;; was reading earlier turns.  The next instruction does not need
+        ;; point at the end: `scalpel-console-send-line' reads pending
+        ;; input wherever it sits and re-anchors the record itself.
+        (if follow
+            (goto-char (point-max))
+          ;; The insert above left point at the new end: the insertion
+          ;; happened at point-max, and point rides it.  Restore the
+          ;; reader's place explicitly.
+          (goto-char user-point))
+        (set-marker user-point nil))))))
 
 (defun scalpel-console-toggle-output ()
   "Show or hide every fenced report body in the console.
