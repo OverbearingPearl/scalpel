@@ -420,6 +420,13 @@ Scalpel is in active, deliberately small MVP stages.
   finished whole-file draft, missing parent directories are created, and the
   action is confirmed with the user first like every file-level action
   (`rename`, `delete-file`), because it decides which files exist
+- Mechanical batch rewriting through the `rewrite` action: the planner names
+  context files, a pattern and a replacement, Scalpel applies the change itself
+  and reports every file and occurrence count; the whole rewrite is computed
+  and validated before anything reaches disk, a rewrite that matches nothing
+  or would unbalance an Emacs Lisp file refuses entire, it is always confirmed
+  by the user first because its reach spans every file it names, and its
+  report joins the conversation so the planner can iterate on the result
 
 **Near-term**
 - Session diff and one-shot rollback: review everything a session changed as a

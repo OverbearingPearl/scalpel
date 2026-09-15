@@ -1322,6 +1322,137 @@ names the created path in full."
   (should (equal (scalpel-agent--path-components "a/b.el")
                  '("a" "b.el"))))
 
+(defun scalpel-agent-test--stage-two-files ()
+  "Create two context files under one temp directory; return (DIR F1 F2)."
+  (let ((dir (make-temp-file "scalpel-test-rewrite-" t)))
+    (let ((f1 (expand-file-name "a.el" dir))
+          (f2 (expand-file-name "b.el" dir)))
+      (with-temp-file f1 (insert "(defun old-a ())\n(defun keep ())\n"))
+      (with-temp-file f2 (insert "(defun old-b ())\n"))
+      (list dir f1 f2))))
+
+(ert-deftest scalpel-agent-test-rewrite-applies-across-context-files ()
+  "A rewrite changes every matching occurrence in every named file.
+The effect is enumerable: each file and its occurrence count is in
+the report, and the one confirmation is not waivable."
+  (cl-destructuring-bind (dir f1 f2) (scalpel-agent-test--stage-two-files)
+    (unwind-protect
+        (let* ((files (mapcar #'file-truename (list f1 f2)))
+               (scalpel-agent--context-files (copy-sequence files))
+               (asked 0)
+               report)
+          (cl-letf (((symbol-function 'yes-or-no-p)
+                     (lambda (&rest _) (setq asked (1+ asked)) t)))
+            (scalpel-agent-execute-action
+             (list :tool "rewrite" :files files
+                   :pattern "old-" :replacement "new-"
+                   :reason "bulk rename")
+             (lambda (r) (setq report r))
+             (lambda (e) (ert-fail (plist-get e :message)))))
+          (ert-info ((format "Report: %S asked=%d" report asked))
+            (should (string-match-p "Rewrote 1 occurrence(s) in .*a\\.el"
+                                    report))
+            (should (string-match-p "Rewrote 1 occurrence(s) in .*b\\.el"
+                                    report)))
+          (ert-info ((format "asked=%d" asked))
+            (should (= asked 1)))
+          (with-temp-buffer (insert-file-contents f1)
+            (should (string-match-p "(defun new-a ())" (buffer-string)))
+            (should (string-match-p "(defun keep ())" (buffer-string)))))
+      (dolist (f (list f1 f2))
+        (scalpel-utils-test-kill-file-buffer f))
+      (delete-directory dir t))))
+
+(ert-deftest scalpel-agent-test-rewrite-refuses-file-outside-context ()
+  "A rewrite never touches a file outside the session context."
+  (let ((scalpel-agent--context-files nil))
+    (should-error (scalpel-agent-rewrite
+                   (list "/tmp/scalpel-not-in-context.el") "x" "y")
+                  :type 'user-error)))
+
+(ert-deftest scalpel-agent-test-rewrite-refuses-zero-matches ()
+  "A rewrite matching nothing is refused, not reported as success."
+  (cl-destructuring-bind (dir f1 _f2) (scalpel-agent-test--stage-two-files)
+    (unwind-protect
+        (let ((scalpel-agent--context-files (list (file-truename f1))))
+          (should-error (scalpel-agent-rewrite
+                         (list (file-truename f1))
+                         "no-such-token" "x")
+                        :type 'user-error))
+      (dolist (f (directory-files dir t "^[^.]"))
+        (scalpel-utils-test-kill-file-buffer f))
+      (delete-directory dir t))))
+
+(ert-deftest scalpel-agent-test-rewrite-refuses-unbalanced-result-whole ()
+  "One file whose rewrite breaks balance refuses every file's change.
+Regression risk: applying file by file would leave the earlier files
+rewritten when a later one failed -- a half-applied batch whose
+extent nothing downstream could know."
+  (cl-destructuring-bind (dir f1 f2) (scalpel-agent-test--stage-two-files)
+    (unwind-protect
+        (let* ((files (mapcar #'file-truename (list f1 f2)))
+               (scalpel-agent--context-files (copy-sequence files)))
+          ;; A harmless change in a.el is paired with an unbalancing
+          ;; one in b.el; the refusal must cover a.el too.
+          (should-error
+           (scalpel-agent-rewrite files "(defun keep" "(defun keep (")
+           :type 'user-error)
+          (with-temp-buffer (insert-file-contents f1)
+            (should (string-match-p "old-a" (buffer-string)))))
+      (dolist (f (list f1 f2))
+        (scalpel-utils-test-kill-file-buffer f))
+      (delete-directory dir t))))
+
+(ert-deftest scalpel-agent-test-rewrite-malformed-signals ()
+  "A rewrite without files, pattern or replacement signals."
+  (should-error (scalpel-agent-rewrite nil "x" "y") :type 'user-error)
+  (should-error (scalpel-agent-rewrite '("/tmp/a.el") nil "y")
+                :type 'user-error))
+
+(ert-deftest scalpel-agent-test-rewrite-summary-shows-pattern-and-count ()
+  "The confirmation prompt names the pattern and the file count.
+Regression: the summary fell through to :reason, so the user
+confirmed a rewrite without seeing what it would match."
+  (should (string=
+           (scalpel-agent--action-summary
+            '(:tool "rewrite" :pattern "old-" :replacement "new-"
+                    :files ("/a.el" "/b.el") :reason "bulk"))
+           "old- over 2 file(s)")))
+
+(ert-deftest scalpel-agent-test-run-records-rewrites-for-continuation ()
+  "A rewrite round carries its report in :edits, so the console continues.
+Regression: only edit/create entered :edits, so a rewrite-only round
+ended the loop and the planner never read its own occurrence counts."
+  (cl-destructuring-bind (dir f1 _f2) (scalpel-agent-test--stage-two-files)
+    (unwind-protect
+        (let ((scalpel-agent--context-files (list (file-truename f1)))
+              (scalpel-console--root nil)
+              (orig-llm (symbol-function 'scalpel-llm-request-async))
+              (orig-yes (symbol-function 'yes-or-no-p))
+              result)
+          (unwind-protect
+              (progn
+                (fset 'yes-or-no-p (lambda (&rest _) t))
+                (fset 'scalpel-llm-request-async
+                      (lambda (_p on-success _on-error &optional _s)
+                        (funcall on-success
+                                 (concat "[{\"tool\":\"rewrite\","
+                                         "\"files\":[\"" f1 "\"],"
+                                         "\"pattern\":\"old-\","
+                                         "\"replacement\":\"new-\"}]"))))
+                (scalpel-agent-run "bulk rename" nil
+                                   (lambda (r) (setq result r))
+                                   (lambda (e) (ert-fail (plist-get e :message))))
+                (ert-info ((format "Result: %S" result))
+                  (should (= (length (plist-get result :edits)) 1))
+                  (should (string-match-p "Rewrote 1 occurrence"
+                                          (plist-get result :report)))))
+            (fset 'scalpel-llm-request-async orig-llm)
+            (fset 'yes-or-no-p orig-yes)))
+      (dolist (f (directory-files dir t "^[^.]"))
+        (scalpel-utils-test-kill-file-buffer f))
+      (delete-directory dir t))))
+
 (provide 'scalpel-agent-test)
 
 ;;; scalpel-agent-test.el ends here

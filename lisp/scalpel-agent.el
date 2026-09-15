@@ -31,7 +31,7 @@
 (require 'scalpel-execute)
 (require 'scalpel-sandbox)
 
-(defconst scalpel-agent--tool-vocabulary '("edit" "reply" "create" "create-file" "delete" "rename" "delete-file" "read" "shell" "confirm")
+(defconst scalpel-agent--tool-vocabulary '("edit" "reply" "create" "create-file" "delete" "rename" "delete-file" "read" "shell" "rewrite" "confirm")
   "Tool names the planner may emit.
 Structural contract, not user configuration: dispatch in
 `scalpel-agent-execute-action' must stay in sync with it.")
@@ -46,6 +46,7 @@ Structural contract, not user configuration: dispatch in
     ("delete-file" . (:tool :file))
     ("read" . (:tool :file))
     ("shell" . (:tool :command :reason :long-running))
+    ("rewrite" . (:tool :files :pattern :replacement))
     ("confirm" . (:tool :text)))
   "Per-tool field contracts.
 Each entry is (TOOL . FIELDS).  `scalpel-agent-plan' validates
@@ -53,7 +54,8 @@ each parsed action against its tool's field list, so a missing or
 extra field fails loudly instead of silently degrading.")
 
 (defconst scalpel-agent--tool-optional-fields
-  '(("read" . (:symbol)))
+  '(("read" . (:symbol))
+    ("rewrite" . (:reason)))
   "Fields a tool accepts but does not require.
 Each entry is (TOOL . FIELDS), matching the shape of
 `scalpel-agent--tool-fields'.  `scalpel-agent--validate-action'
@@ -126,6 +128,7 @@ Each action is one of:
 {\"tool\":\"read\",\"file\":\"/abs/path.el\",\"symbol\":\"name\"}
 {\"tool\":\"read\",\"file\":\"/abs/path.el\"}
 {\"tool\":\"shell\",\"command\":\"...\",\"reason\":\"...\",\"long-running\":false}
+{\"tool\":\"rewrite\",\"files\":[\"/abs/a.el\",\"/abs/b.el\"],\"pattern\":\"...\",\"replacement\":\"...\",\"reason\":\"...\"}
 {\"tool\":\"confirm\",\"text\":\"...\"}
 To have a command executed, emit a shell action object:
 {\"tool\":\"shell\",\"command\":\"...\",\"reason\":\"...\",\"long-running\":false}.
@@ -149,14 +152,24 @@ file.  Only files in the context above can be read.  Use shell for
 finding things -- grep, ls, git log -- and read for looking at code
 itself.  Do not read the same definition twice: nothing changes
 between rounds unless you changed it.
+A rewrite applies one mechanical textual transformation across
+several files at once -- the bulk change no sequence of edits
+should be spelled out for.  Its \"files\" must all be context files
+named by their exact absolute paths, \"pattern\" is a regular
+expression and \"replacement\" the text it is replaced with, where
+\\1 and \\& refer to the match.  The rewrite runs only after the
+user confirms it, and it refuses entirely when it matches nothing
+or would leave an Emacs Lisp file unbalanced: prefer rewrite for
+mechanical batch changes, shell only for reading.
 Never invent commands the user did not ask for, and never use shell
 to change files: all file changes go through edit, create, delete,
-rename and delete-file.  When the best way to make a change is one
-mechanical batch command -- a bulk rename across many files, say --
-do not try to run it: the shell can only read.  Deliver the exact
-command through a confirm action whose \"text\" holds the command
-itself, so the user can copy and run it; never write such a command
-as prose, because a reply with no action array is refused whole.
+rename, delete-file and rewrite.  When the change is one mechanical
+batch transformation -- a bulk rename across many files, say --
+emit a rewrite action rather than a sequence of edits or a shell
+command.  Only what a rewrite cannot express -- output or a decision
+the planner needs from the user -- is delivered through a confirm
+action; never write such a request as prose, because a reply with
+no action array is refused whole.
 A create-file makes a new file: its \"text\" is the whole file
 content, headers and several definitions included, and its
 \"file\" must not name a file that already exists -- changing an
@@ -1353,6 +1366,91 @@ states the true size.  Output holding a NUL byte is withheld."
                         "--- output ---\n%s\n--- end output ---")
                 resolved bytes body)))))
 
+(defun scalpel-agent-rewrite (files pattern replacement)
+  "Apply the mechanical replacement PATTERN -> REPLACEMENT across FILES.
+This is the planner's channel for one mechanical batch
+transformation -- the job a whole-file shell one-liner would
+otherwise be asked to do -- executed by Scalpel itself, so its
+effect is enumerable: every file touched and every occurrence
+replaced is named in the report.  PATTERN is an Emacs Lisp regexp;
+REPLACEMENT is replacement text, where \\\\N and \\\\& refer to the
+match as `replace-regexp-in-string' reads them.  All FILES must be
+in the session context; a path outside it is refused, the same
+boundary a read obeys.
+
+The whole transformation is computed and validated before anything
+reaches disk: new contents are built in memory, an `.el' file whose
+new content has unbalanced brackets refuses the whole rewrite, and
+zero occurrences anywhere refuses it too -- a rewrite that matched
+nothing is a planner mistake, not a success.  Return a
+human-readable report.  Signal `user-error' on malformed input, a
+file outside the context, a bad replacement, no matches, or an
+unbalanced result."
+  (unless (and files pattern (stringp replacement))
+    (user-error "Scalpel: malformed rewrite action"))
+  (dolist (file files)
+    (unless (scalpel-agent--context-file-p file)
+      (user-error
+       (concat "Scalpel: %s is not in the context; a rewrite never "
+               "touches a file outside it")
+       file)))
+  ;; First pass: compute every new content in memory, so a failure in
+  ;; the last file cannot leave the first ones half-rewritten.
+  (let (staged)
+    (dolist (file files)
+      (let* ((resolved (file-truename (expand-file-name file)))
+             (old (with-current-buffer (find-file-noselect resolved)
+                    (buffer-substring-no-properties
+                     (point-min) (point-max))))
+             (new (condition-case err
+                      (let ((case-fold-search nil))
+                        (replace-regexp-in-string pattern replacement old))
+                    (error
+                     (user-error
+                      "Scalpel: rewrite replacement is malformed: %s"
+                      (error-message-string err))))))
+        (when (and (string-match-p "\\.el\\'" resolved)
+                   (not (with-temp-buffer
+                          (delay-mode-hooks (emacs-lisp-mode))
+                          (insert new)
+                          (goto-char (point-min))
+                          (condition-case nil
+                              (progn (scan-sexps (point) (point-max)) t)
+                            (scan-error nil)))))
+          (user-error
+           (concat "Scalpel: rewriting %s would leave unbalanced "
+                   "brackets; rewrite refused whole")
+           resolved))
+        (push (list resolved old new) staged)))
+    (setq staged (nreverse staged))
+    ;; Zero matches overall is a planner mistake: refuse instead of
+    ;; reporting a successful no-op.  A file whose content changed is
+    ;; one that matched at least once.
+    (unless (cl-some (lambda (entry)
+                       (not (string= (nth 1 entry) (nth 2 entry))))
+                     staged)
+      (user-error
+       (concat "Scalpel: rewrite pattern matched nothing in any of "
+               "the %d file(s); refusing")
+       (length staged)))
+    ;; Second pass: apply through the visiting buffers and save, the
+    ;; way `scalpel-execute' writes.
+    (let ((lines nil))
+      (pcase-dolist (`(,resolved ,old ,new) staged)
+        (let ((count 0)
+              (pos 0))
+          (while (string-match pattern old pos)
+            (setq count (1+ count)
+                  pos (match-end 0)))
+          (with-current-buffer (find-file-noselect resolved)
+            (let ((inhibit-read-only t))
+              (erase-buffer)
+              (insert new))
+            (save-buffer))
+          (push (format "Rewrote %d occurrence(s) in %s" count resolved)
+                lines)))
+      (string-join (nreverse lines) "\n"))))
+
 (defun scalpel-agent-confirm (text)
   "Return TEXT as a confirmation request to the user.
 This action does not execute any side effects; it yields control
@@ -1379,6 +1477,10 @@ the environment the command runs in."
   (let ((tool (plist-get action :tool)))
     (and (not (equal tool "create-file"))
          (or (member tool scalpel-agent--file-level-tools)
+             ;; A rewrite's reach spans every file it names, wider
+             ;; than any single edit; the one confirmation is where
+             ;; the user sees the pattern and the file list together.
+             (equal tool "rewrite")
              (and (member tool scalpel-agent-confirm-tools)
                   (not (and (equal tool "shell")
                             (not (eq (plist-get action :long-running) t)))))))))
@@ -1389,6 +1491,10 @@ Prefer the action's target over its stated reason, so the user can
 see what is about to run or change; fall back to `:reason' when
 the action has no target."
   (or (plist-get action :command)
+      (when (plist-get action :pattern)
+        (format "%s over %d file(s)"
+                (plist-get action :pattern)
+                (length (plist-get action :files))))
       (plist-get action :text)
       (let ((file (plist-get action :file))
             (symbol (plist-get action :symbol))
@@ -1495,6 +1601,18 @@ of being re-framed as an action failure."
                                          :message (error-message-string err)))
                           nil))))
            (when report (funcall on-success report))))
+        ("rewrite"
+         (let ((report (condition-case err
+                          (scalpel-agent-rewrite
+                           (plist-get action :files)
+                           (plist-get action :pattern)
+                           (plist-get action :replacement))
+                        (error
+                         (funcall on-error
+                                  (list :type 'action
+                                        :message (error-message-string err)))
+                         nil))))
+          (when report (funcall on-success report))))
         ("shell"
          (let ((report (condition-case err
                            (scalpel-agent-shell
@@ -1598,7 +1716,8 @@ busy flag still gets a chance to release it."
                               (push (list :file (plist-get action :file)
                                           :symbol (plist-get action :symbol))
                                     reads))
-                            ((member (plist-get action :tool) '("edit" "create"))
+                            ((member (plist-get action :tool)
+                                     '("edit" "create" "rewrite"))
                              (push report edits)))
                             (step (cdr rest))))
                          (lambda (err)
