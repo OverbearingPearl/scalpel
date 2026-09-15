@@ -370,7 +370,7 @@ produced output the planner could never be given."
                        (push prompt prompts)
                        (funcall on-success
                                 (if (= (length prompts) 1)
-                                    "[{\"tool\":\"file-read\",\"file\":\"/tmp/a.el\",\"symbol\":\"foo\"}]"
+                                    "[{\"tool\":\"file-peek\",\"file\":\"/tmp/a.el\",\"symbol\":\"foo\"}]"
                                   "[{\"tool\":\"reply\",\"text\":\"done\"}]"))))
                     ((symbol-function 'scalpel-agent-file-read)
                      (lambda (file symbol)

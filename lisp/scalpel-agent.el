@@ -31,22 +31,22 @@
 (require 'scalpel-execute)
 (require 'scalpel-sandbox)
 
-(defconst scalpel-agent--tool-vocabulary '("block-edit" "reply" "block-insert" "file-create" "block-delete" "file-rename" "file-delete" "file-read" "shell" "file-substitute" "confirm")
+(defconst scalpel-agent--tool-vocabulary '("file-peek" "block-edit" "block-insert" "block-delete" "file-create" "file-rename" "file-delete" "file-substitute" "shell" "reply" "confirm")
   "Tool names the planner may emit.
 Structural contract, not user configuration: dispatch in
 `scalpel-agent-execute-action' must stay in sync with it.")
 
 (defconst scalpel-agent--tool-fields
-  '(("block-edit" . (:tool :file :symbol :instruction))
-    ("reply" . (:tool :text))
+  '(("file-peek" . (:tool :file))
+    ("block-edit" . (:tool :file :symbol :instruction))
     ("block-insert" . (:tool :file :symbol :instruction :after))
-    ("file-create" . (:tool :file :text))
     ("block-delete" . (:tool :file :symbol))
+    ("file-create" . (:tool :file :text))
     ("file-rename" . (:tool :file :to))
     ("file-delete" . (:tool :file))
-    ("file-read" . (:tool :file))
-    ("shell" . (:tool :command :reason :long-running))
     ("file-substitute" . (:tool :files :pattern :replacement))
+    ("shell" . (:tool :command :reason :long-running))
+    ("reply" . (:tool :text))
     ("confirm" . (:tool :text)))
   "Per-tool field contracts.
 Each entry is (TOOL . FIELDS).  `scalpel-agent-plan' validates
@@ -54,7 +54,7 @@ each parsed action against its tool's field list, so a missing or
 extra field fails loudly instead of silently degrading.")
 
 (defconst scalpel-agent--tool-optional-fields
-  '(("file-read" . (:symbol))
+  '(("file-peek" . (:symbol))
     ("file-substitute" . (:reason)))
   "Fields a tool accepts but does not require.
 Each entry is (TOOL . FIELDS), matching the shape of
@@ -115,20 +115,20 @@ You have no tools and no function to call: nothing you emit is
 dispatched as a tool call, and markup written in a tool-calling
 format is not parsed, not translated and not executed.  The
 vocabulary below is ordinary JSON that you write, and only the
-array is acted on.  To look at a file, emit the read action below.
+array is acted on.  To look at a file, emit the file-peek action below.
 
 Each action is one of:
+{\"tool\":\"file-peek\",\"file\":\"/abs/path.el\",\"symbol\":\"name\"}
+{\"tool\":\"file-peek\",\"file\":\"/abs/path.el\"}
 {\"tool\":\"block-edit\",\"file\":\"/abs/path.el\",\"symbol\":\"name\",\"instruction\":\"...\"}
-{\"tool\":\"reply\",\"text\":\"...\"}
 {\"tool\":\"block-insert\",\"file\":\"/abs/path.el\",\"symbol\":\"new-name\",\"instruction\":\"...\",\"after\":\"existing-symbol\"}
-{\"tool\":\"file-create\",\"file\":\"/abs/new/path.el\",\"text\":\"...\"}
 {\"tool\":\"block-delete\",\"file\":\"/abs/path.el\",\"symbol\":\"name\"}
+{\"tool\":\"file-create\",\"file\":\"/abs/new/path.el\",\"text\":\"...\"}
 {\"tool\":\"file-rename\",\"file\":\"/abs/old.el\",\"to\":\"/abs/new.el\"}
 {\"tool\":\"file-delete\",\"file\":\"/abs/path.el\"}
-{\"tool\":\"file-read\",\"file\":\"/abs/path.el\",\"symbol\":\"name\"}
-{\"tool\":\"file-read\",\"file\":\"/abs/path.el\"}
-{\"tool\":\"shell\",\"command\":\"...\",\"reason\":\"...\",\"long-running\":false}
 {\"tool\":\"file-substitute\",\"files\":[\"/abs/a.el\",\"/abs/b.el\"],\"pattern\":\"...\",\"replacement\":\"...\",\"reason\":\"...\"}
+{\"tool\":\"shell\",\"command\":\"...\",\"reason\":\"...\",\"long-running\":false}
+{\"tool\":\"reply\",\"text\":\"...\"}
 {\"tool\":\"confirm\",\"text\":\"...\"}
 To have a command executed, emit a shell action object:
 {\"tool\":\"shell\",\"command\":\"...\",\"reason\":\"...\",\"long-running\":false}.
@@ -145,12 +145,12 @@ is frozen until the command returns; every other shell action
 runs immediately.  Declare it truthfully: leaving it false on a
 command that hangs the editor takes the choice away from the
 user.
-Reading code is a file-read action, not a shell command: use
-{\"tool\":\"file-read\",\"file\":\"...\",\"symbol\":\"name\"} to see one
+Reading code is a file-peek action, not a shell command: use
+{\"tool\":\"file-peek\",\"file\":\"...\",\"symbol\":\"name\"} to see one
 definition, and the same object without \"symbol\" to see a whole
 file.  Only files in the context above can be read.  Use shell for
-finding things -- grep, ls, git log -- and read for looking at code
-itself.  Do not read the same definition twice: nothing changes
+finding things -- grep, ls, git log -- and file-peek for looking
+at code itself.  Do not read the same definition twice: nothing changes
 between rounds unless you changed it.
 A file-substitute applies one mechanical textual transformation
 across several files at once -- the bulk change no sequence of
@@ -192,7 +192,7 @@ The file-rename and file-delete actions are effectful and are
 always confirmed by the user before they run.
 Shell commands run with the context files above as the whole
 filesystem: they are the only files you may read, whether through a
-shell command or a read action, and they must be named by the
+shell command or a file-peek action, and they must be named by the
 absolute paths exactly as given.  A file
 that exists on disk but is absent from the context is off-limits:
 when a request needs one, ask the user to add it with a confirm
@@ -307,7 +307,7 @@ Raise it deliberately, or add a subdirectory instead."
   "Tools that decide which files exist.
 Their confirmation is not waivable: the boundary lock cannot
 predict a file-level action's reach, so the prompt must survive
-any setting of `scalpel-agent-confirm-tools'.  `create-file' is
+any setting of `scalpel-agent-confirm-tools'.  `file-create' is
 deliberately absent: the planner delivers a finished whole-file
 draft and the report names the path, so the creation is visible
 without a prompt.")
@@ -323,7 +323,7 @@ prompt: the sandbox already bounds what a command may touch, so
 only the editor-freezing case needs an answer.  Removing \"shell\"
 from this list disables the prompt for every shell action,
 including a long-running one.
-The file-level tools (`rename', `delete-file') are confirmed
+The file-level tools (`file-rename', `file-delete') are confirmed
 regardless of this list: a file-level action changes which files
 exist rather than bytes inside a file, so the boundary lock cannot
 predict its reach and the user must always approve it."
@@ -1008,7 +1008,7 @@ the edit."
   (cl-block scalpel-agent-block-edit
     (unless (and file symbol instruction)
       (funcall on-error (list :type 'malformed
-                              :message "Scalpel: malformed edit action"))
+                              :message "Scalpel: malformed block-edit action"))
       (cl-return-from scalpel-agent-block-edit))
     (let ((range (condition-case err
                      (scalpel-locate-range file symbol)
@@ -1087,7 +1087,7 @@ ON-SUCCESS receives the report string.  ON-ERROR receives a plist
   (cl-block scalpel-agent-block-insert
     (unless (and file symbol instruction after)
       (funcall on-error (list :type 'malformed
-                              :message "Scalpel: malformed create action"))
+                              :message "Scalpel: malformed block-insert action"))
       (cl-return-from scalpel-agent-block-insert))
     (let ((anchor-range (scalpel-locate-range file after)))
       (unless anchor-range
@@ -1144,7 +1144,7 @@ work -- and creates missing parent directories.  Return a
 human-readable report string.  Signal `user-error' on a malformed
 action or an existing file."
   (unless (and file text)
-    (user-error "Scalpel: malformed create-file action"))
+    (user-error "Scalpel: malformed file-create action"))
   (when (file-exists-p file)
     (user-error "Scalpel: can't create %s: already exists" file))
   (let ((dir (file-name-directory (expand-file-name file))))
@@ -1159,7 +1159,7 @@ the deletion brings together are reconciled, so removing a block
 does not leave an extra blank line where it stood.  The file is
 saved before this returns.  Return a human-readable report string."
   (unless (and file symbol)
-    (user-error "Scalpel: malformed delete action"))
+    (user-error "Scalpel: malformed block-delete action"))
   (let ((range (scalpel-locate-range file symbol)))
     (unless range
       (user-error "Scalpel: can't locate %s in %s" symbol file))
@@ -1179,7 +1179,7 @@ it has no unsaved changes; when it does, this refuses rather than
 discard them.  Return a human-readable report string.  Signal
 `user-error' on a malformed action or a missing file."
   (unless file
-    (user-error "Scalpel: malformed delete-file action"))
+    (user-error "Scalpel: malformed file-delete action"))
   (unless (file-exists-p file)
     (user-error "Scalpel: can't delete %s: no such file" file))
   (let ((buffer (find-buffer-visiting file)))
@@ -1199,7 +1199,7 @@ is saved first and then follows the rename.  Return a
 human-readable report string.  Signal `user-error' on a malformed
 action, a missing source, or an existing destination."
   (unless (and file to)
-    (user-error "Scalpel: malformed rename action"))
+    (user-error "Scalpel: malformed file-rename action"))
   (unless (file-exists-p file)
     (user-error "Scalpel: can't rename %s: no such file" file))
   (when (file-exists-p to)
@@ -1234,7 +1234,9 @@ byte is display junk."
 The command's reach is bounded by the sandbox, whose file scope is
 exactly the current context files and which binds each of them
 read-only: a shell command may inspect the context but never write to
-it, so file changes always pass through edit, create or delete.  The
+it, so file changes always pass through block-edit, block-insert,
+block-delete, file-create, file-rename, file-delete and
+file-substitute.  The
 confirmation gate is driven by `scalpel-agent-confirm-tools'.
 COMMAND may use pipes, redirection and quoting.  The report names
 the command, always states the exit status, and wraps the output in
@@ -1325,7 +1327,7 @@ ask for the whole file.  A whole-file read is a partial view by
 construction, so it is truncated at that limit with a marker that
 states the true size.  Output holding a NUL byte is withheld."
   (unless file
-    (user-error "Scalpel: malformed read action"))
+    (user-error "Scalpel: malformed file-peek action"))
   (unless (scalpel-agent--context-file-p file)
     (user-error
      (concat "Scalpel: %s is not in the context; ask the user to add it "
@@ -1391,7 +1393,7 @@ file outside the context, a bad replacement, no matches, or an
 unbalanced result."
   (unless (and files pattern (stringp replacement))
     (user-error
-     (concat "Scalpel: malformed rewrite action (files=%S pattern=%S "
+     (concat "Scalpel: malformed file-substitute action (files=%S pattern=%S "
              "replacement=%S)")
      files pattern replacement))
   (dolist (file files)
@@ -1411,10 +1413,10 @@ unbalanced result."
              (new (condition-case err
                       (let ((case-fold-search nil))
                         (replace-regexp-in-string pattern replacement old))
-                    (error
-                     (user-error
-                      "Scalpel: rewrite replacement is malformed: %s"
-                      (error-message-string err))))))
+                   (error
+                    (user-error
+                     "Scalpel: file-substitute replacement is malformed: %s"
+                     (error-message-string err))))))
         (when (and (string-match-p "\\.el\\'" resolved)
                    (not (with-temp-buffer
                           (delay-mode-hooks (emacs-lisp-mode))
@@ -1424,8 +1426,8 @@ unbalanced result."
                               (progn (scan-sexps (point) (point-max)) t)
                             (scan-error nil)))))
           (user-error
-           (concat "Scalpel: rewriting %s would leave unbalanced "
-                   "brackets (pattern %S); rewrite refused whole")
+           (concat "Scalpel: file-substitute of %s would leave unbalanced "
+                   "brackets (pattern %S); refused whole")
            resolved pattern))
         (push (list resolved old new) staged)))
     (setq staged (nreverse staged))
@@ -1436,7 +1438,7 @@ unbalanced result."
                        (not (string= (nth 1 entry) (nth 2 entry))))
                      staged)
       (user-error
-       (concat "Scalpel: rewrite pattern %S matched nothing in any of "
+       (concat "Scalpel: file-substitute pattern %S matched nothing in any of "
                "the %d file(s) (%s); refusing")
        pattern (length staged)
        (string-join (mapcar (lambda (entry) (nth 0 entry)) staged) ", ")))
@@ -1470,7 +1472,7 @@ The planner must emit this as its final action."
 (defun scalpel-agent--confirm-needed-p (action)
   "Return non-nil when ACTION must be confirmed before execution.
 A file-level tool is always confirmed: it decides which files
-exist, which no setting can waive.  `create-file' is deliberately
+exist, which no setting can waive.  `file-create' is deliberately
 excluded here and from the confirm gate altogether: the creation is
 reported in full, so it never runs with a prompt, whatever this
 list holds.  A tool in
@@ -1484,8 +1486,8 @@ the environment the command runs in."
   (let ((tool (plist-get action :tool)))
     (and (not (equal tool "file-create"))
          (or (member tool scalpel-agent--file-level-tools)
-             ;; A rewrite's reach spans every file it names, wider
-             ;; than any single edit; the one confirmation is where
+             ;; A file-substitute's reach spans every file it names,
+             ;; wider than any single edit; the one confirmation is where
              ;; the user sees the pattern and the file list together.
              (equal tool "file-substitute")
              (and (member tool scalpel-agent-confirm-tools)
@@ -1518,9 +1520,9 @@ ON-SUCCESS receives the report string.  ON-ERROR receives a plist
 \(:type SYMBOL :message STRING); the type is `sandbox' when a shell
 action was refused by the sandbox, so a caller can keep the
 boundary out of the conversation.  Actions that issue no LLM
-request (`reply', `confirm', `create-file', `delete', `rename',
-`delete-file', `read', `shell') settle synchronously; `edit' and
-`create' settle
+request (`reply', `confirm', `file-create', `block-delete',
+`file-rename', `file-delete', `file-peek', `shell') settle
+synchronously; `block-edit' and `block-insert' settle
 from their LLM's callback.  ON-SUCCESS and ON-ERROR run outside
 the internal error guard, so an error they raise escapes instead
 of being re-framed as an action failure."
@@ -1597,7 +1599,7 @@ of being re-framed as an action failure."
                                          :message (error-message-string err)))
                           nil))))
            (when report (funcall on-success report))))
-        ("file-read"
+        ("file-peek"
          (let ((report (condition-case err
                            (scalpel-agent-file-read
                             (plist-get action :file)
@@ -1655,14 +1657,16 @@ SHELLS holds one entry per shell action the round executed, as a
 plist with :command plus the output metadata recorded by
 `scalpel-agent-shell' \(:bytes, :truncated, :binary), so a caller
 can tell whether the round produced output worth reading back.
-READS holds one entry per read action, with :file and :symbol,
+READS holds one entry per file-peek action, with :file and
+:symbol,
 and is a separate list because a read report is not subject to the
 shell rules: there is no size gate, and no binary downgrade beyond
 withholding the contents.
 ON-ERROR receives a plist (:type SYMBOL :message STRING).
 
-Actions are executed in array order; an `edit' or `create' action
-settles from its own LLM callback, so actions stay serialized while
+Actions are executed in array order; a `block-edit' or
+`block-insert' action settles from its own LLM callback, so actions
+stay serialized while
 the caller's command loop keeps running.  Every callback runs in
 the buffer that was current when this function was called, so the
 session's buffer-local context and `scalpel-agent--shell-output'
@@ -1719,7 +1723,7 @@ busy flag still gets a chance to release it."
                                                   (plist-get action :command))
                                             scalpel-agent--shell-output)
                                     shells))
-                             ((equal (plist-get action :tool) "file-read")
+                             ((equal (plist-get action :tool) "file-peek")
                               (push (list :file (plist-get action :file)
                                           :symbol (plist-get action :symbol))
                                     reads))

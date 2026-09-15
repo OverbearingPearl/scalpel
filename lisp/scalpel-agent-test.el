@@ -295,7 +295,7 @@ holding the whole file."
 (ert-deftest scalpel-agent-test-read-runs-without-confirmation ()
   "A read has no side effects, so it is never put to the user."
   (should-not (scalpel-agent--confirm-needed-p
-               (list :tool "file-read" :file "/tmp/a.el" :symbol "foo"))))
+               (list :tool "file-peek" :file "/tmp/a.el" :symbol "foo"))))
 
 (ert-deftest scalpel-agent-test-execute-action-read ()
   "A read action settles synchronously through ON-SUCCESS."
@@ -304,8 +304,8 @@ holding the whole file."
     (let ((scalpel-agent--context-files
            (list (file-truename (expand-file-name this-file))))
           report)
-      (scalpel-agent-execute-action
-       (list :tool "file-read" :file this-file :symbol nil)
+     (scalpel-agent-execute-action
+      (list :tool "file-peek" :file this-file :symbol nil)
        (lambda (r) (setq report r))
        (lambda (err) (ert-fail (plist-get err :message))))
       (ert-info ((format "Report:\n%S" report))
@@ -317,22 +317,22 @@ Regression: `scalpel-agent--project-actions' kept only declared
 fields and `scalpel-agent--validate-action' required every declared
 one, so an optional field could be neither declared nor dropped."
   (let ((parsed (scalpel-llm-dialect--default-parse
-                 (concat "[{\"tool\":\"read\",\"file\":\"/tmp/a.el\"},"
-                         "{\"tool\":\"read\",\"file\":\"/tmp/a.el\","
+                 (concat "[{\"tool\":\"file-peek\",\"file\":\"/tmp/a.el\"},"
+                         "{\"tool\":\"file-peek\",\"file\":\"/tmp/a.el\","
                          "\"symbol\":\"foo\"}]"))))
     (should (= (length parsed) 2))
     (should-not (plist-get (car parsed) :symbol))
     (should (equal (plist-get (cadr parsed) :symbol) "foo")))
   (let ((projected (scalpel-agent--project-actions
-                    (list (list :tool "file-read" :file "/tmp/a.el")
-                          (list :tool "file-read" :file "/tmp/a.el" :symbol "foo")))))
+                    (list (list :tool "file-peek" :file "/tmp/a.el")
+                          (list :tool "file-peek" :file "/tmp/a.el" :symbol "foo")))))
     (should-not (plist-get (car projected) :symbol))
     (should (equal (plist-get (cadr projected) :symbol) "foo"))))
 
 (ert-deftest scalpel-agent-test-read-requires-file ()
   "A read action without :file is rejected at validation."
   (should-error
-   (scalpel-agent--validate-action '(:tool "file-read" :symbol "foo"))
+   (scalpel-agent--validate-action '(:tool "file-peek" :symbol "foo"))
    :type 'user-error))
 
 (ert-deftest scalpel-agent-test-run-records-reads ()
@@ -350,7 +350,7 @@ never ran the round that would have read it back."
           (fset 'scalpel-llm-request-async
                 (lambda (_prompt on-success _on-error &optional _system)
                   (funcall on-success
-                           (concat "[{\"tool\":\"file-read\",\"file\":\"/tmp/a.el\","
+                           (concat "[{\"tool\":\"file-peek\",\"file\":\"/tmp/a.el\","
                                    "\"symbol\":\"foo\"}]"))))
           (let (result)
             (cl-letf (((symbol-function 'scalpel-agent-file-read)
@@ -1247,7 +1247,7 @@ ran outside the error guard and escaped the callback contract."
   (should-not (scalpel-agent--replacement-name "not lisp (")))
 
 (ert-deftest scalpel-agent-test-create-file-writes-whole-content ()
-  "A create-file lands the whole content and missing parents.
+  "A file-create lands the whole content and missing parents.
 Regression: no tool could create a file, so a planner holding a
 finished new-file draft could only degrade to handing the user a
 shell command through confirm."
@@ -1270,9 +1270,9 @@ shell command through confirm."
       (delete-directory dir t)))
 
 (ert-deftest scalpel-agent-test-create-file-refuses-existing ()
-  "A create-file onto an existing file is refused, never overwritten.
-Changing an existing file is `edit' and `create' work; the refusal
-must leave the file exactly as it was."
+  "A file-create onto an existing file is refused, never overwritten.
+Changing an existing file is `block-edit' and `block-insert' work;
+the refusal must leave the file exactly as it was."
   (scalpel-utils-test-with-temp-file ".el"
     (with-temp-file this-file (insert "keep\n"))
     (progn
@@ -1285,7 +1285,7 @@ must leave the file exactly as it was."
         (should (string= on-disk "keep\n"))))))
 
 (ert-deftest scalpel-agent-test-create-file-runs-without-confirmation ()
-  "A create-file runs without asking, whatever the confirm list says.
+  "A file-create runs without asking, whatever the confirm list says.
 Regression: it was a file-level tool and always prompted, so
 every new-file creation cost a keystroke although the report
 names the created path in full."
@@ -1308,7 +1308,7 @@ names the created path in full."
       (delete-directory dir t))))
 
 (ert-deftest scalpel-agent-test-create-file-refuses-malformed ()
-  "A create-file without a file or content signals `user-error'."
+  "A file-create without a file or content signals `user-error'."
   (should-error (scalpel-agent-file-create nil "x") :type 'user-error)
   (should-error (scalpel-agent-file-create "/tmp/a.el" nil)
                 :type 'user-error))

@@ -140,7 +140,7 @@ touched can be read back and unwound.**
    │  (LLM calls)  │    │   LLM: plan → structured actions     │
    ╰───────────────╯    ╰───────────────┬──────────────────────╯
                                         │ 3. action list, e.g.
-                                        │  {edit, file, symbol}
+                                        │  {block-edit, file, symbol}
                                         ▼
    ╭───────────────╮    ╭──────────────────────────────────────╮
    │     LSP /     │◀───│          scalpel-locate              │
@@ -374,7 +374,7 @@ Inside the console:
   Commands also get the temporary directory for scratch files.  When the
   sandbox is unavailable, or its probe fails, shell actions fail closed
   instead of falling back to an unsandboxed shell.
-- Reading code back does not go through the sandbox: the `read` action serves
+- Reading code back does not go through the sandbox: the `file-peek` action serves
   one definition, or a whole file, straight from the context list, and refuses
   any path outside it.  A report's body reaches the planner once -- on the
   round that follows the command or read that produced it -- and later prompts
@@ -405,8 +405,10 @@ Scalpel is in active, deliberately small MVP stages.
   `scalpel-locate-gitignore`)
 - The console and the multi-round agent loop: context management, shell-output
   continuation, and conversation replay
-- Structured action planning and parsing (`edit`, `create`, `delete`, `read`,
-  `shell`, `reply`, `confirm`), each action returning a human-readable report
+- Structured action planning and parsing (`block-edit`, `block-insert`,
+  `block-delete`, `file-create`, `file-rename`, `file-delete`, `file-peek`,
+  `file-substitute`, `shell`, `reply`, `confirm`), each action returning a
+  human-readable report
   that stays in the console buffer, so a session's changes are readable after
   the fact
 - Execution boundary lock: a replacement lands only on the range the locator
@@ -416,11 +418,13 @@ Scalpel is in active, deliberately small MVP stages.
 - Shell execution through `bubblewrap` on Linux, plus an experimental macOS
   backend through `sandbox-exec`; shell actions are refused when the sandbox is
   unavailable or fails its probe
-- New-file creation through the `create-file` action: the planner delivers a
+- New-file creation through the `file-create` action: the planner delivers a
   finished whole-file draft, missing parent directories are created, and the
-  action is confirmed with the user first like every file-level action
-  (`rename`, `delete-file`), because it decides which files exist
-- Mechanical batch rewriting through the `rewrite` action: the planner names
+  action runs without a confirmation prompt (the report names the created
+  path in full), unlike the file-level actions (`file-rename`,
+  `file-delete`), which are always confirmed because they decide which
+  files exist
+- Mechanical batch rewriting through the `file-substitute` action: the planner names
   context files, a pattern and a replacement, Scalpel applies the change itself
   and reports every file and occurrence count; the whole rewrite is computed
   and validated before anything reaches disk, a rewrite that matches nothing

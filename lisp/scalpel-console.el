@@ -103,7 +103,7 @@ trimming is never silent."
 
 (defcustom scalpel-console-collapse-output t
   "Whether a report's fenced output body is folded in the display.
-A shell or read report may hold thousands of lines that the user
+A shell or file-peek report may hold thousands of lines that the user
 does not have to read: its output already goes back to the planner
 by itself, and the header -- what ran, how it exited, how large
 the output was -- is what a reader needs at a glance.  With this

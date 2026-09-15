@@ -172,7 +172,7 @@ the reply fell through to the generic invalid-JSON error and sent
 the user hunting for a JSON syntax error that did not exist."
   (let ((raw (concat "I'll investigate the full scope of gptel usage "
                      "before giving advice. Let me read the key files."
-                     "<tool_call>read<arg_key>file</arg_key>"
+                     "<tool_call>file-peek<arg_key>file</arg_key>"
                      "<arg_value>/tmp/a.el</arg_value></tool_call>")))
     (let ((err (condition-case e
                    (progn (scalpel-llm-dialect--default-parse raw) nil)

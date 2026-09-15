@@ -17,34 +17,34 @@
 
 (defconst scalpel-llm-laguna-test--read-call
   (concat "I'll check the file.\n"
-          "<tool_call>file-read<arg_key>file</arg_key>"
+          "<tool_call>file-peek<arg_key>file</arg_key>"
           "<arg_value>/tmp/a.el</arg_value></tool_call>")
   "A reply shape as observed: prose, then one read call.
 The tool name and the field name inside the call belong to Scalpel;
 only the envelope around them is the dialect.")
 
 (ert-deftest scalpel-llm-laguna-test-parse-converts-a-read-call ()
-  "A read call written as text becomes the read action it describes.
+  "A read call written as text becomes the file-peek action.
 Regression: the reply used to reach the refusal path, so the whole
 round was thrown away although every name in it belonged to Scalpel."
   (let ((actions (scalpel-llm-laguna-parse-reply
                   scalpel-llm-laguna-test--read-call)))
     (ert-info ((format "Actions: %S" actions))
       (should (= (length actions) 1))
-      (should (equal (plist-get (car actions) :tool) "file-read"))
+      (should (equal (plist-get (car actions) :tool) "file-peek"))
       (should (equal (plist-get (car actions) :file) "/tmp/a.el")))))
 
 (ert-deftest scalpel-llm-laguna-test-parse-converts-every-call-in-order ()
   "Each call in the reply becomes one action, in the order written."
   (let ((actions
          (scalpel-llm-laguna-parse-reply
-          (concat "<tool_call>file-read<arg_key>file</arg_key>"
+          (concat "<tool_call>file-peek<arg_key>file</arg_key>"
                   "<arg_value>/tmp/a.el</arg_value></tool_call>"
                   "<tool_call>reply<arg_key>text</arg_key>"
                   "<arg_value>done</arg_value></tool_call>"))))
     (ert-info ((format "Actions: %S" actions))
       (should (= (length actions) 2))
-      (should (equal (plist-get (car actions) :tool) "file-read"))
+      (should (equal (plist-get (car actions) :tool) "file-peek"))
       (should (equal (plist-get (cadr actions) :tool) "reply"))
       (should (equal (plist-get (cadr actions) :text) "done")))))
 
@@ -144,7 +144,7 @@ reply rather than the call.  The reported cause names tool-call
 syntax, which is what such a reply is; the truncation is not
 distinguished from it."
   (let ((raw
-         (concat "<tool_call>read<arg_key>file</arg_key>"
+         (concat "<tool_call>file-peek<arg_key>file</arg_key>"
                  "<arg_value>/tmp/a.el</arg_value></tool_call>"
                  "<tool_call>shell<arg_key>command</arg_key>"
                  "<arg_value>grep -rn gptel .</arg_value>")))
@@ -163,7 +163,7 @@ that decides whether a command needs an answer from the user."
                  "<arg_key>long-running</arg_key><arg_value>true"
                  "</tool_call>"))
         (missing-key-end
-         "<tool_call>read<arg_key>file</tool_call>"))
+         "<tool_call>file-peek<arg_key>file</tool_call>"))
     (ert-info ((format "Raw:\n%S" missing-value))
       (should-error (scalpel-llm-laguna-parse-reply missing-value)
                     :type 'scalpel-llm-dialect-tool-call-error))
@@ -203,7 +203,7 @@ rejected before dispatch is ever reached."
                           scalpel-llm-laguna-test--read-call)))
             (ert-info ((format "Actions: %S" actions))
               (should (= (length actions) 1))
-              (should (equal (plist-get (car actions) :tool) "file-read"))))
+              (should (equal (plist-get (car actions) :tool) "file-peek"))))
           (setq gptel-backend
                 (gptel-make-openai "Somewhere-Else" :key "test-key"))
           (should-error (scalpel-llm-dialect-parse
@@ -233,7 +233,7 @@ planner report a tool-call failure and the round ran nothing."
               (ert-info ((format "Actions: %S Error: %S" actions error))
                 (should-not error)
                 (should (= (length actions) 1))
-                (should (equal (plist-get (car actions) :tool) "file-read"))
+                (should (equal (plist-get (car actions) :tool) "file-peek"))
                 (should (equal (plist-get (car actions) :file)
                                "/tmp/a.el"))))))
       (setq gptel-backend saved)

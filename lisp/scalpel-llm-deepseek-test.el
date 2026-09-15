@@ -14,7 +14,7 @@
   (ert-info ("Input: DSML invoke markup with U+FF5C delimiters; expect user-error naming DSML")
     (let ((raw (concat "<" (string #xFF5C) "DSML" (string #xFF5C) "calls>\n"
                        "<" (string #xFF5C) "DSML" (string #xFF5C)
-                       "invoke name=\"read\">\n"
+                       "invoke name=\"file-peek\">\n"
                        "</" (string #xFF5C) "DSML" (string #xFF5C) "invoke>\n"
                        "</" (string #xFF5C) "DSML" (string #xFF5C) "calls>")))
       (should-error (scalpel-llm-deepseek-parse-reply raw)
@@ -32,7 +32,7 @@
   (ert-info ("Input: <invoke> markup; expect user-error from the default parser")
     (should-error
      (scalpel-llm-deepseek-parse-reply
-      "<invoke name=\"read\">\n<parameter name=\"file\">/tmp/a.el</parameter>\n</invoke>")
+      "<invoke name=\"file-peek\">\n<parameter name=\"file\">/tmp/a.el</parameter>\n</invoke>")
      :type 'user-error)))
 
 (provide 'scalpel-llm-deepseek-test)
