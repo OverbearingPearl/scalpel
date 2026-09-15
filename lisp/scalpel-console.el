@@ -434,8 +434,13 @@ writing reports or continuing rounds.")
 BREAKDOWN is a plist with keys :system, :context, :history and
 :instruction, each an integer token estimate for the round.  The
 display shows the four segment counts from BREAKDOWN, their sum as
-the uploaded total, the received total from
-`scalpel-llm--tokens-received', and whole elapsed seconds.
+the uploaded total, the received total as the growth of the
+cumulative `scalpel-llm--total-received' since this line was
+inserted, and whole elapsed seconds.  The cumulative counter is
+what survives a new request inside the same round: the per-request
+`scalpel-llm--tokens-received' is zeroed by every request, so a
+user returning to the console would otherwise see the down count
+shrink instead of having grown.
 Return a cons (REFRESH . STOP) of zero-arg functions.  REFRESH
 rewrites the line with the current received total and whole
 elapsed seconds; STOP removes the line together with its trailing
@@ -447,13 +452,14 @@ newline, so the cursor returns to the line the status occupied."
          (hist (plist-get breakdown :history))
          (instr (plist-get breakdown :instruction))
          (up (+ sys ctx hist instr))
+         (down0 scalpel-llm--total-received)
          (line (lambda (down seconds)
                  (format "Scalpel: up %d = sys %d + ctx %d + hist %d + instr %d, down %d, %ds\n"
                          up sys ctx hist instr down seconds)))
          beg)
     (goto-char (point-max))
     (setq beg (point-marker))
-    (insert (funcall line scalpel-llm--tokens-received 0))
+    (insert (funcall line (- scalpel-llm--total-received down0) 0))
     (let ((refresh
            (lambda ()
              (when (marker-buffer beg)
@@ -462,7 +468,8 @@ newline, so the cursor returns to the line the status occupied."
                    (let ((inhibit-read-only t))
                      (goto-char beg)
                      (delete-region (point) (1+ (line-end-position)))
-                     (insert (funcall line scalpel-llm--tokens-received
+                     (insert (funcall line
+                                      (- scalpel-llm--total-received down0)
                                       (round (- (float-time) start))))))))))
           (stop
            (lambda ()

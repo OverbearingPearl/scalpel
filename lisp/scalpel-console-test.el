@@ -258,7 +258,7 @@ so non-zero counters made STOP delete a character inside
 \"Scalpel:\" instead of the whole line."
   (let ((buf (scalpel-console-test--new-console-buffer))
         (scalpel-llm--tokens-uploaded 12)
-        (scalpel-llm--tokens-received 34))
+        (scalpel-llm--total-received 34))
     (unwind-protect
         (with-current-buffer buf
           (erase-buffer)
@@ -275,10 +275,19 @@ so non-zero counters made STOP delete a character inside
               (goto-char (point-min))
               (should (search-forward
                        (concat "Scalpel: up 12 = sys 12 + ctx 0 + hist 0"
-                               " + instr 0, down 34, 0s\n")
+                               " + instr 0, down 0, 0s\n")
                        nil t)))
-            ;; Refreshing rewrites the same single line.
+            ;; A second request inside the same round must not reset the
+            ;; down display: the line reads the growth of the cumulative
+            ;; total, never the per-request counter a new request zeroes.
+            (setq scalpel-llm--tokens-received 0)
+            (setq scalpel-llm--total-received 40)
             (funcall refresh)
+            (save-excursion
+              (goto-char (point-min))
+              ;; 40 received minus the 34 snapshotted at insert time.
+              (should (search-forward "down 6," nil t)))
+            ;; Refreshing rewrites the same single line.
             (funcall refresh)
             (should (= (how-many "^Scalpel:" (point-min) (point-max)) 1))
             ;; STOP removes the whole line, leaving no residue.
