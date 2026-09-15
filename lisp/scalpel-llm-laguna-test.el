@@ -17,7 +17,7 @@
 
 (defconst scalpel-llm-laguna-test--read-call
   (concat "I'll check the file.\n"
-          "<tool_call>read<arg_key>file</arg_key>"
+          "<tool_call>file-read<arg_key>file</arg_key>"
           "<arg_value>/tmp/a.el</arg_value></tool_call>")
   "A reply shape as observed: prose, then one read call.
 The tool name and the field name inside the call belong to Scalpel;
@@ -31,20 +31,20 @@ round was thrown away although every name in it belonged to Scalpel."
                   scalpel-llm-laguna-test--read-call)))
     (ert-info ((format "Actions: %S" actions))
       (should (= (length actions) 1))
-      (should (equal (plist-get (car actions) :tool) "read"))
+      (should (equal (plist-get (car actions) :tool) "file-read"))
       (should (equal (plist-get (car actions) :file) "/tmp/a.el")))))
 
 (ert-deftest scalpel-llm-laguna-test-parse-converts-every-call-in-order ()
   "Each call in the reply becomes one action, in the order written."
   (let ((actions
          (scalpel-llm-laguna-parse-reply
-          (concat "<tool_call>read<arg_key>file</arg_key>"
+          (concat "<tool_call>file-read<arg_key>file</arg_key>"
                   "<arg_value>/tmp/a.el</arg_value></tool_call>"
                   "<tool_call>reply<arg_key>text</arg_key>"
                   "<arg_value>done</arg_value></tool_call>"))))
     (ert-info ((format "Actions: %S" actions))
       (should (= (length actions) 2))
-      (should (equal (plist-get (car actions) :tool) "read"))
+      (should (equal (plist-get (car actions) :tool) "file-read"))
       (should (equal (plist-get (cadr actions) :tool) "reply"))
       (should (equal (plist-get (cadr actions) :text) "done")))))
 
@@ -203,7 +203,7 @@ rejected before dispatch is ever reached."
                           scalpel-llm-laguna-test--read-call)))
             (ert-info ((format "Actions: %S" actions))
               (should (= (length actions) 1))
-              (should (equal (plist-get (car actions) :tool) "read"))))
+              (should (equal (plist-get (car actions) :tool) "file-read"))))
           (setq gptel-backend
                 (gptel-make-openai "Somewhere-Else" :key "test-key"))
           (should-error (scalpel-llm-dialect-parse
@@ -233,7 +233,7 @@ planner report a tool-call failure and the round ran nothing."
               (ert-info ((format "Actions: %S Error: %S" actions error))
                 (should-not error)
                 (should (= (length actions) 1))
-                (should (equal (plist-get (car actions) :tool) "read"))
+                (should (equal (plist-get (car actions) :tool) "file-read"))
                 (should (equal (plist-get (car actions) :file)
                                "/tmp/a.el"))))))
       (setq gptel-backend saved)

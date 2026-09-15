@@ -370,9 +370,9 @@ produced output the planner could never be given."
                        (push prompt prompts)
                        (funcall on-success
                                 (if (= (length prompts) 1)
-                                    "[{\"tool\":\"read\",\"file\":\"/tmp/a.el\",\"symbol\":\"foo\"}]"
+                                    "[{\"tool\":\"file-read\",\"file\":\"/tmp/a.el\",\"symbol\":\"foo\"}]"
                                   "[{\"tool\":\"reply\",\"text\":\"done\"}]"))))
-                    ((symbol-function 'scalpel-agent-read)
+                    ((symbol-function 'scalpel-agent-file-read)
                      (lambda (file symbol)
                        (format (concat "Read: %s in %s\nOutput: 14 bytes\n"
                                        "--- output ---\n(defun foo ())\n"

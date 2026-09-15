@@ -81,10 +81,10 @@ was the backend, not the reply's syntax."
   "Every field of an action object survives parsing.
 Moved from `scalpel-agent-test-parse-json' when parsing became this
 module's job: the agent no longer owns a JSON parser."
-  (let ((raw "[{\"tool\":\"edit\",\"file\":\"/tmp/foo.el\",\"symbol\":\"bar\",\"instruction\":\"do something\"}]"))
+  (let ((raw "[{\"tool\":\"block-edit\",\"file\":\"/tmp/foo.el\",\"symbol\":\"bar\",\"instruction\":\"do something\"}]"))
     (let ((actions (scalpel-llm-dialect--default-parse raw)))
       (should (= (length actions) 1))
-      (should (equal (plist-get (car actions) :tool) "edit"))
+      (should (equal (plist-get (car actions) :tool) "block-edit"))
       (should (equal (plist-get (car actions) :file) "/tmp/foo.el"))
       (should (equal (plist-get (car actions) :symbol) "bar"))
       (should (equal (plist-get (car actions) :instruction) "do something")))))

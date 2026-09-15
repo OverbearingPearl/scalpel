@@ -106,7 +106,7 @@ outlived their run."
   (scalpel-utils-test-with-temp-file ".el"
     (with-temp-file this-file (insert "(defun foo ())\n"))
     (let ((resolved (file-truename this-file)))
-      ;; Visit through the resolved name, the way `scalpel-agent-read'
+      ;; Visit through the resolved name, the way `scalpel-agent-file-read'
       ;; does, so the two spellings really differ on this platform.
       (find-file-noselect resolved)
       (ert-info ((format "Resolved name: %S" resolved))

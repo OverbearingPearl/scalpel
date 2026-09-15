@@ -45,7 +45,7 @@
     (cl-letf (((symbol-function 'scalpel-llm-request-async)
                (lambda (_prompt on-success _on-error &optional _system)
                  (funcall on-success "(defun foo (x)\n  (+ x 2))"))))
-      (let ((action (list :tool "edit"
+      (let ((action (list :tool "block-edit"
                           :file this-file
                           :symbol "foo"
                           :instruction "increment x"
@@ -72,7 +72,7 @@ prompt."
                  (funcall on-success "(defun baz ()\n  t)"))))
       (let (report)
         (scalpel-agent-execute-action
-         (list :tool "create" :file this-file :symbol "baz"
+         (list :tool "block-insert" :file this-file :symbol "baz"
                :instruction "add baz" :after "foo")
          (lambda (r) (setq report r))
          (lambda (err) (ert-fail (plist-get err :message))))
@@ -94,7 +94,7 @@ the file on disk must already hold the result."
   (scalpel-utils-test-with-temp-file ".el"
     (with-temp-file this-file
       (insert "(defun foo (x)\n  (+ x 1))\n\n(defun bar ()\n  nil)\n"))
-    (let ((action (list :tool "delete" :file this-file :symbol "foo"))
+    (let ((action (list :tool "block-delete" :file this-file :symbol "foo"))
           report)
       (scalpel-agent-execute-action
        action
@@ -139,7 +139,7 @@ the file on disk must already hold the result."
 (ert-deftest scalpel-agent-test-edit-malformed ()
   "Malformed edit action (missing fields) is reported through ON-ERROR."
   (let (error)
-    (scalpel-agent-edit
+    (scalpel-agent-block-edit
      nil nil nil
      (lambda (_r) (ert-fail "malformed edit must not succeed"))
      (lambda (e) (setq error e)))
@@ -155,7 +155,7 @@ the file on disk must already hold the result."
                  (funcall on-success
                           "There are no occurrences of `(+ x 1)` in the body."))))
       (let (error)
-        (scalpel-agent-edit
+        (scalpel-agent-block-edit
          this-file "foo" "replace x with y"
          (lambda (_r) (ert-fail "prose reply must not produce a report"))
          (lambda (e) (setq error e)))
@@ -211,7 +211,7 @@ failure that surfaced as a prose-reply error."
     (with-temp-file this-file (insert "(defun foo ())\n"))
     (let ((scalpel-agent--context-files
            (list (file-truename (expand-file-name this-file)))))
-      (let ((report (scalpel-agent-read this-file nil)))
+      (let ((report (scalpel-agent-file-read this-file nil)))
         (ert-info ((format "Report:\n%S" report))
           (should (string-match-p "\\`Read: " report))
           (should (string-match-p "\n--- output ---\n" report))
@@ -225,7 +225,7 @@ failure that surfaced as a prose-reply error."
       (insert "(defun foo ())\n(defun bar ())\n"))
     (let ((scalpel-agent--context-files
            (list (file-truename (expand-file-name this-file)))))
-      (let ((report (scalpel-agent-read this-file "foo")))
+      (let ((report (scalpel-agent-file-read this-file "foo")))
         (ert-info ((format "Report:\n%S" report))
           (should (string-match-p "Read: foo in " report))
           (should (string-match-p "(defun foo ())" report))
@@ -239,8 +239,8 @@ the user can read."
   (scalpel-utils-test-with-temp-file ".el"
     (with-temp-file this-file (insert "(defun foo ())\n"))
     (let ((scalpel-agent--context-files nil))
-      (should-error (scalpel-agent-read this-file nil) :type 'user-error)
-      (should-error (scalpel-agent-read this-file "foo")
+      (should-error (scalpel-agent-file-read this-file nil) :type 'user-error)
+      (should-error (scalpel-agent-file-read this-file "foo")
                     :type 'user-error))))
 
 (ert-deftest scalpel-agent-test-read-refuses-oversized-definition ()
@@ -254,9 +254,9 @@ keeps the failure loud."
                       (make-string 200 ?x))))
     (let ((scalpel-agent--context-files
            (list (file-truename (expand-file-name this-file))))
-          (scalpel-agent-read-max-bytes 10))
+          (scalpel-agent-file-read-max-bytes 10))
       (let ((err (condition-case e
-                     (progn (scalpel-agent-read this-file "foo") nil)
+                     (progn (scalpel-agent-file-read this-file "foo") nil)
                    (user-error e))))
         (ert-info ((format "Error: %S" err))
           (should err)
@@ -272,11 +272,11 @@ holding the whole file."
       (insert (format "(defvar x \"%s\")\n" (make-string 200 ?y))))
     (let* ((scalpel-agent--context-files
             (list (file-truename (expand-file-name this-file))))
-           (scalpel-agent-read-max-bytes 20)
+           (scalpel-agent-file-read-max-bytes 20)
            (size (with-temp-buffer
                    (insert-file-contents this-file)
                    (string-bytes (buffer-string))))
-           (report (scalpel-agent-read this-file nil)))
+           (report (scalpel-agent-file-read this-file nil)))
       (ert-info ((format "Report:\n%S" report))
         (should (string-match-p
                  (regexp-quote (format "Output: %d bytes" size)) report))
@@ -295,7 +295,7 @@ holding the whole file."
 (ert-deftest scalpel-agent-test-read-runs-without-confirmation ()
   "A read has no side effects, so it is never put to the user."
   (should-not (scalpel-agent--confirm-needed-p
-               (list :tool "read" :file "/tmp/a.el" :symbol "foo"))))
+               (list :tool "file-read" :file "/tmp/a.el" :symbol "foo"))))
 
 (ert-deftest scalpel-agent-test-execute-action-read ()
   "A read action settles synchronously through ON-SUCCESS."
@@ -305,7 +305,7 @@ holding the whole file."
            (list (file-truename (expand-file-name this-file))))
           report)
       (scalpel-agent-execute-action
-       (list :tool "read" :file this-file :symbol nil)
+       (list :tool "file-read" :file this-file :symbol nil)
        (lambda (r) (setq report r))
        (lambda (err) (ert-fail (plist-get err :message))))
       (ert-info ((format "Report:\n%S" report))
@@ -324,15 +324,15 @@ one, so an optional field could be neither declared nor dropped."
     (should-not (plist-get (car parsed) :symbol))
     (should (equal (plist-get (cadr parsed) :symbol) "foo")))
   (let ((projected (scalpel-agent--project-actions
-                    (list (list :tool "read" :file "/tmp/a.el")
-                          (list :tool "read" :file "/tmp/a.el" :symbol "foo")))))
+                    (list (list :tool "file-read" :file "/tmp/a.el")
+                          (list :tool "file-read" :file "/tmp/a.el" :symbol "foo")))))
     (should-not (plist-get (car projected) :symbol))
     (should (equal (plist-get (cadr projected) :symbol) "foo"))))
 
 (ert-deftest scalpel-agent-test-read-requires-file ()
   "A read action without :file is rejected at validation."
   (should-error
-   (scalpel-agent--validate-action '(:tool "read" :symbol "foo"))
+   (scalpel-agent--validate-action '(:tool "file-read" :symbol "foo"))
    :type 'user-error))
 
 (ert-deftest scalpel-agent-test-run-records-reads ()
@@ -350,10 +350,10 @@ never ran the round that would have read it back."
           (fset 'scalpel-llm-request-async
                 (lambda (_prompt on-success _on-error &optional _system)
                   (funcall on-success
-                           (concat "[{\"tool\":\"read\",\"file\":\"/tmp/a.el\","
+                           (concat "[{\"tool\":\"file-read\",\"file\":\"/tmp/a.el\","
                                    "\"symbol\":\"foo\"}]"))))
           (let (result)
-            (cl-letf (((symbol-function 'scalpel-agent-read)
+            (cl-letf (((symbol-function 'scalpel-agent-file-read)
                        (lambda (file symbol)
                          (format (concat "Read: %s in %s\nOutput: 8 bytes\n"
                                          "--- output ---\n(defun foo ())\n"
@@ -799,7 +799,7 @@ by `scalpel-locate-single-definition-p'."
                  (lambda (p _on-success on-error &optional _system)
                    (setq prompt p)
                    (funcall on-error (list :type 'test :message "stop")))))
-        (scalpel-agent-edit this-file "Alpha" "tighten the wording"
+        (scalpel-agent-block-edit this-file "Alpha" "tighten the wording"
                             (lambda (_report) nil)
                             (lambda (_err) nil)))
       (ert-info ((format "Prompt:\n%S" prompt))
@@ -808,7 +808,7 @@ by `scalpel-locate-single-definition-p'."
 
 (ert-deftest scalpel-agent-test-create-prompt-requests-no-change-sentinel ()
   "The create prompt asks for the sentinel the code compares against.
-Regression: `scalpel-agent-create' tested the reply against
+Regression: `scalpel-agent-block-insert' tested the reply against
 `scalpel-agent--no-change-sentinel', but its prompt never asked for
 it, so \"nothing should be created\" had no way to be said and the
 model could only answer with a definition that should not exist."
@@ -819,7 +819,7 @@ model could only answer with a definition that should not exist."
                  (lambda (p _on-success on-error &optional _system)
                    (setq prompt p)
                    (funcall on-error (list :type 'test :message "stop")))))
-        (scalpel-agent-create this-file "bar" "add bar" "foo"
+        (scalpel-agent-block-insert this-file "bar" "add bar" "foo"
                               (lambda (_report) nil)
                               (lambda (_err) nil)))
       (ert-info ((format "Prompt:\n%S" prompt))
@@ -882,7 +882,7 @@ was confirmed without ever being displayed."
                     '(:tool "shell" :command "make test" :reason "run tests"))
                    "make test"))
   (should (string= (scalpel-agent--action-summary
-                    '(:tool "edit" :file "/tmp/a.el" :symbol "foo"))
+                    '(:tool "block-edit" :file "/tmp/a.el" :symbol "foo"))
                    "foo in /tmp/a.el"))
   (should (string= (scalpel-agent--action-summary
                     '(:tool "reply" :text "hi"))
@@ -1079,7 +1079,7 @@ The report preserves the raw output size for continuation decisions."
       (unwind-protect
           (progn
             (with-current-buffer buf (insert "x") (set-buffer-modified-p nil))
-            (let ((report (scalpel-agent-rename this-file to)))
+            (let ((report (scalpel-agent-file-rename this-file to)))
               (ert-info ((format "Report: %S" report))
                 (should (string-match-p "Renamed" report))))
             (should (file-exists-p to))
@@ -1092,18 +1092,18 @@ The report preserves the raw output size for continuation decisions."
   "A rename of a missing source or onto an existing target signals."
   (scalpel-utils-test-with-temp-file ".el"
     (with-temp-file this-file (insert "x"))
-    (should-error (scalpel-agent-rename "/nonexistent/x.el" "/tmp/y.el")
+    (should-error (scalpel-agent-file-rename "/nonexistent/x.el" "/tmp/y.el")
                   :type 'user-error)
-    (should-error (scalpel-agent-rename this-file this-file)
+    (should-error (scalpel-agent-file-rename this-file this-file)
                   :type 'user-error)
-    (should-error (scalpel-agent-rename nil nil) :type 'user-error)))
+    (should-error (scalpel-agent-file-rename nil nil) :type 'user-error)))
 
 (ert-deftest scalpel-agent-test-delete-file-removes-from-disk ()
   "A `delete-file' removes the file and kills its unmodified buffer."
   (scalpel-utils-test-with-temp-file ".el"
     (with-temp-file this-file (insert "(defun foo ())"))
     (find-file-noselect this-file)
-    (let ((report (scalpel-agent-delete-file this-file)))
+    (let ((report (scalpel-agent-file-delete this-file)))
       (ert-info ((format "Report: %S" report))
         (should (string-match-p "Deleted file" report)))
       (should-not (file-exists-p this-file))
@@ -1115,16 +1115,16 @@ The report preserves the raw output size for continuation decisions."
     (with-temp-file this-file (insert "(defun foo ())"))
     (let ((buf (find-file-noselect this-file)))
       (with-current-buffer buf (insert "unsaved"))
-      (should-error (scalpel-agent-delete-file this-file)
+      (should-error (scalpel-agent-file-delete this-file)
                     :type 'user-error)
       (should (file-exists-p this-file))
       (with-current-buffer buf (set-buffer-modified-p nil)))))
 
 (ert-deftest scalpel-agent-test-delete-file-refuses-missing ()
   "A `delete-file' of an absent file signals; so does a malformed action."
-  (should-error (scalpel-agent-delete-file "/nonexistent/x.el")
+  (should-error (scalpel-agent-file-delete "/nonexistent/x.el")
                 :type 'user-error)
-  (should-error (scalpel-agent-delete-file nil) :type 'user-error))
+  (should-error (scalpel-agent-file-delete nil) :type 'user-error))
 
 (ert-deftest scalpel-agent-test-execute-action-rename-and-delete-file ()
   "Rename and `delete-file' actions settle synchronously through reports."
@@ -1134,13 +1134,13 @@ The report preserves the raw output size for continuation decisions."
           report)
       (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
       (scalpel-agent-execute-action
-       (list :tool "rename" :file this-file
+       (list :tool "file-rename" :file this-file
              :to (concat this-file "-moved.el"))
        (lambda (r) (setq report r))
        (lambda (err) (ert-fail (plist-get err :message))))
       (should (string-match-p "Renamed" report))
       (scalpel-agent-execute-action
-       (list :tool "delete-file" :file (concat this-file "-moved.el"))
+       (list :tool "file-delete" :file (concat this-file "-moved.el"))
        (lambda (r) (setq report r))
        (lambda (err) (ert-fail (plist-get err :message)))))
       (should (string-match-p "Deleted file" report)))))
@@ -1162,7 +1162,7 @@ The report preserves the raw output size for continuation decisions."
 (ert-deftest scalpel-agent-test-action-summary-falls-back-to-file-and-reason ()
   "The summary falls back through file, then reason, then a placeholder."
   (should (string= (scalpel-agent--action-summary
-                    '(:tool "delete-file" :file "/tmp/a.el"))
+                    '(:tool "file-delete" :file "/tmp/a.el"))
                    "/tmp/a.el"))
   (should (string= (scalpel-agent--action-summary
                     '(:tool "shell" :reason "look around"))
@@ -1178,7 +1178,7 @@ a raw error instead of a planner failure the history could read."
   (scalpel-utils-test-with-temp-file ".el"
     (with-temp-file this-file (insert "(defun foo (x)\n  (+ x 1))\n"))
     (let (error)
-      (scalpel-agent-edit
+      (scalpel-agent-block-edit
        this-file "gone" "do nothing"
        (lambda (_r) (ert-fail "a missing symbol must not edit"))
        (lambda (e) (setq error e)))
@@ -1199,7 +1199,7 @@ only channel that tells the planner the old symbol no longer exists."
                (lambda (_prompt on-success _on-error &optional _system)
                  (funcall on-success "(defun bar (x)\n  (+ x 2))"))))
       (let (report)
-        (scalpel-agent-edit
+        (scalpel-agent-block-edit
          this-file "foo" "rename to bar"
          (lambda (r) (setq report r))
          (lambda (err) (ert-fail (plist-get err :message))))
@@ -1230,7 +1230,7 @@ ran outside the error guard and escaped the callback contract."
                    (set-buffer-modified-p nil))
                  (funcall on-success "(defun foo (x)\n  (+ x 2))"))))
       (let (error)
-        (scalpel-agent-edit
+        (scalpel-agent-block-edit
          this-file "foo" "increment x"
          (lambda (_r) (ert-fail "a changed region must not edit"))
          (lambda (e) (setq error e)))
@@ -1256,7 +1256,7 @@ shell command through confirm."
     (unwind-protect
         (let ((target (expand-file-name "sub/new.el" dir)))
           (scalpel-agent-execute-action
-           (list :tool "create-file" :file target
+           (list :tool "file-create" :file target
                  :text "(defun a ())\n(defun b ())\n")
            (lambda (r) (setq report r))
            (lambda (err) (ert-fail (plist-get err :message))))
@@ -1277,7 +1277,7 @@ must leave the file exactly as it was."
     (with-temp-file this-file (insert "keep\n"))
     (progn
       (should-error
-       (scalpel-agent-create-file this-file "(defun a ())")
+       (scalpel-agent-file-create this-file "(defun a ())")
        :type 'user-error)
       (let ((on-disk (with-temp-buffer
                        (insert-file-contents this-file)
@@ -1289,7 +1289,7 @@ must leave the file exactly as it was."
 Regression: it was a file-level tool and always prompted, so
 every new-file creation cost a keystroke although the report
 names the created path in full."
-  (let ((scalpel-agent-confirm-tools '("create-file"))
+  (let ((scalpel-agent-confirm-tools '("file-create"))
         (asked 0)
         (dir (make-temp-file "scalpel-test-new-" t)))
     (unwind-protect
@@ -1297,7 +1297,7 @@ names the created path in full."
           (cl-letf (((symbol-function 'yes-or-no-p)
                      (lambda (&rest _) (setq asked (1+ asked)) t)))
             (scalpel-agent-execute-action
-             (list :tool "create-file"
+             (list :tool "file-create"
                    :file (expand-file-name "new.el" dir)
                    :text "x")
              (lambda (_r) nil)
@@ -1309,8 +1309,8 @@ names the created path in full."
 
 (ert-deftest scalpel-agent-test-create-file-refuses-malformed ()
   "A create-file without a file or content signals `user-error'."
-  (should-error (scalpel-agent-create-file nil "x") :type 'user-error)
-  (should-error (scalpel-agent-create-file "/tmp/a.el" nil)
+  (should-error (scalpel-agent-file-create nil "x") :type 'user-error)
+  (should-error (scalpel-agent-file-create "/tmp/a.el" nil)
                 :type 'user-error))
 
 (ert-deftest scalpel-agent-test-path-components-relative-and-absolute ()
@@ -1344,7 +1344,7 @@ the report, and the one confirmation is not waivable."
           (cl-letf (((symbol-function 'yes-or-no-p)
                      (lambda (&rest _) (setq asked (1+ asked)) t)))
             (scalpel-agent-execute-action
-             (list :tool "rewrite" :files files
+             (list :tool "file-substitute" :files files
                    :pattern "old-" :replacement "new-"
                    :reason "bulk rename")
              (lambda (r) (setq report r))
@@ -1366,19 +1366,30 @@ the report, and the one confirmation is not waivable."
 (ert-deftest scalpel-agent-test-rewrite-refuses-file-outside-context ()
   "A rewrite never touches a file outside the session context."
   (let ((scalpel-agent--context-files nil))
-    (should-error (scalpel-agent-rewrite
+    (should-error (scalpel-agent-file-substitute
                    (list "/tmp/scalpel-not-in-context.el") "x" "y")
                   :type 'user-error)))
 
 (ert-deftest scalpel-agent-test-rewrite-refuses-zero-matches ()
-  "A rewrite matching nothing is refused, not reported as success."
+  "A rewrite matching nothing is refused, not reported as success.
+The refusal names the pattern and the files it scanned: the message
+is the planner's only feedback for correcting its own next rewrite,
+and a refusal without the pattern is a dead end for the user too."
   (cl-destructuring-bind (dir f1 _f2) (scalpel-agent-test--stage-two-files)
     (unwind-protect
         (let ((scalpel-agent--context-files (list (file-truename f1))))
-          (should-error (scalpel-agent-rewrite
-                         (list (file-truename f1))
-                         "no-such-token" "x")
-                        :type 'user-error))
+          (let ((err (condition-case e
+                         (progn (scalpel-agent-file-substitute
+                                 (list (file-truename f1))
+                                 "no-such-token" "x")
+                                nil)
+                       (user-error e))))
+            (ert-info ((format "Error: %S" err))
+              (should err)
+              (let ((message (error-message-string err)))
+                (should (string-match-p "no-such-token" message))
+                (should (string-match-p
+                         (regexp-quote (file-truename f1)) message))))))
       (dolist (f (directory-files dir t "^[^.]"))
         (scalpel-utils-test-kill-file-buffer f))
       (delete-directory dir t))))
@@ -1395,7 +1406,7 @@ extent nothing downstream could know."
           ;; A harmless change in a.el is paired with an unbalancing
           ;; one in b.el; the refusal must cover a.el too.
           (should-error
-           (scalpel-agent-rewrite files "(defun keep" "(defun keep (")
+           (scalpel-agent-file-substitute files "(defun keep" "(defun keep (")
            :type 'user-error)
           (with-temp-buffer (insert-file-contents f1)
             (should (string-match-p "old-a" (buffer-string)))))
@@ -1405,8 +1416,8 @@ extent nothing downstream could know."
 
 (ert-deftest scalpel-agent-test-rewrite-malformed-signals ()
   "A rewrite without files, pattern or replacement signals."
-  (should-error (scalpel-agent-rewrite nil "x" "y") :type 'user-error)
-  (should-error (scalpel-agent-rewrite '("/tmp/a.el") nil "y")
+  (should-error (scalpel-agent-file-substitute nil "x" "y") :type 'user-error)
+  (should-error (scalpel-agent-file-substitute '("/tmp/a.el") nil "y")
                 :type 'user-error))
 
 (ert-deftest scalpel-agent-test-rewrite-summary-shows-pattern-and-count ()
@@ -1415,7 +1426,7 @@ Regression: the summary fell through to :reason, so the user
 confirmed a rewrite without seeing what it would match."
   (should (string=
            (scalpel-agent--action-summary
-            '(:tool "rewrite" :pattern "old-" :replacement "new-"
+            '(:tool "file-substitute" :pattern "old-" :replacement "new-"
                     :files ("/a.el" "/b.el") :reason "bulk"))
            "old- over 2 file(s)")))
 
@@ -1436,7 +1447,7 @@ ended the loop and the planner never read its own occurrence counts."
                 (fset 'scalpel-llm-request-async
                       (lambda (_p on-success _on-error &optional _s)
                         (funcall on-success
-                                 (concat "[{\"tool\":\"rewrite\","
+                                 (concat "[{\"tool\":\"file-substitute\","
                                          "\"files\":[\"" f1 "\"],"
                                          "\"pattern\":\"old-\","
                                          "\"replacement\":\"new-\"}]"))))
