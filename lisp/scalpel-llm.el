@@ -105,11 +105,11 @@ previous single ratio priced Chinese text at a quarter of its real
 cost, so the status line and the token accounting under-reported
 every CJK-heavy prompt."
   (let ((cjk 0)
-        (other 0))
-    (dolist (char (string-to-list text))
-      (if (scalpel-llm--cjk-char-p char)
-          (setq cjk (1+ cjk))
-        (setq other (1+ other))))
+        (other (- (length text) 0)))
+    (cl-loop for char across text
+             when (scalpel-llm--cjk-char-p char)
+             do (setq cjk (1+ cjk)))
+    (setq other (- (length text) cjk))
     (+ cjk (ceiling (/ other 4.0)))))
 
 (defun scalpel-llm--reset-reasoning-buffer ()
