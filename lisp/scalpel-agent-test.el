@@ -2170,6 +2170,41 @@ coincidence cannot displace the near miss."
         ;; bracket sentence is due.
         (should-not (cdr hint))))))
 
+(ert-deftest scalpel-agent-test-rewrite-anchored-pattern-still-shows-the-closest-lines ()
+  "A refused anchored pattern still quotes the file's own line.
+Regression: `scalpel-agent--substitute-prefix-lines' walked its
+prefixes off the right of the pattern, so a leading anchor --
+zero-width, and held by no file line -- survived on every prefix and
+no line could match it.  The refusal for an anchored pattern quoted
+nothing, which is the shape the observed failure took: a
+registration call refused for matching nothing, with no line for the
+planner to compare against."
+  (scalpel-utils-test-with-temp-file ".el"
+    (with-temp-file this-file
+      (insert "(llm-pick-source-register 'artificial-analysis "
+              ":kind 'capability)\n"))
+    (let* ((resolved (file-truename (expand-file-name this-file)))
+           (scalpel-agent--context-files (list resolved))
+           (err (condition-case e
+                    (progn
+                      (scalpel-agent-file-substitute
+                       (list resolved)
+                       (concat "^\\(llm-pick-source-register "
+                               "'artificial-analysis.*\\)")
+                       "x")
+                      nil)
+                  (user-error e))))
+      (ert-info ((format "Error: %S" err))
+        (should err)
+        (let ((message (error-message-string err)))
+          (ert-info ((format "Message:\n%S" message))
+            (should (string-match-p "matched nothing" message))
+            (should (string-match-p "closest lines" message))
+            (should (string-match-p
+                     (regexp-quote
+                      "(llm-pick-source-register 'artificial-analysis")
+                     message))))))))
+
 (ert-deftest scalpel-agent-test-rewrite-hint-sees-through-bracket-escapes ()
   "A bracket-group pattern's refusal quotes the line it was aimed at.
 Regression: a planner wrote \" \\(transient \"0\\.3\\.0\"\\)\" for a

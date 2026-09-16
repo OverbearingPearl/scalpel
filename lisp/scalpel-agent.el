@@ -2033,7 +2033,8 @@ under the minimum of twelve, so the twelve-character run its opening
 shares with the file was never looked for and the refusal quoted
 nothing.  A pattern longer than `scalpel-agent--substitute-hint-attempts'
 characters steps further, so the number of searches stays bounded."
-  (let* ((length (length pattern))
+  (let* ((pattern (string-remove-prefix "^" pattern))
+         (length (length pattern))
          (limit scalpel-agent--substitute-hint-min-prefix)
          (attempts scalpel-agent--substitute-hint-attempts)
          (step (max 1 (ceiling (/ length (float attempts)))))
