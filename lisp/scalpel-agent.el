@@ -235,15 +235,17 @@ between rounds unless you changed it.
    "
 A file-substitute applies one mechanical textual transformation
 across several files at once -- the bulk change no sequence of
-edits should be spelled out for.  Its \"files\" must all be context
-files named by their exact absolute paths, \"pattern\" is a regular
-expression and \"replacement\" the text it is replaced with, where
-\\1 and \\& refer to the match.  The substitution runs only after
-the user confirms it, and it refuses entirely when it matches
-nothing or would leave an Emacs Lisp file unbalanced: prefer
-file-substitute for mechanical batch changes, shell only for
-reading.
-
+edits should be spelled out for.  Its \"files\" must all be
+context files named by their exact absolute paths, \"pattern\" is
+a regular expression and \"replacement\" the text it is replaced
+with, where \\1 and \\& refer to the match.  The substitution
+runs only after the user confirms it, and it refuses entirely
+when it matches nothing or would leave an Emacs Lisp file
+unbalanced: prefer file-substitute only for mechanical batch
+changes -- the same transformation repeated across many places or
+many files; a change confined to one spot, even one definition,
+is block-edit work no matter how mechanical it is, and shell is
+only for reading.
 "
    scalpel-agent--substitute-pattern-rule
    "
