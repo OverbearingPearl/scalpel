@@ -2001,6 +2001,7 @@ and a refusal without the pattern is a dead end for the user too."
               (should err)
               (let ((message (error-message-string err)))
                 (should (string-match-p "no-such-token" message))
+                (should (string-match-p "replacement \"x\"" message))
                 (should (string-match-p
                          (regexp-quote (file-truename f1)) message))))))
       (dolist (f (directory-files dir t "^[^.]"))
@@ -2018,9 +2019,20 @@ extent nothing downstream could know."
                (scalpel-agent--context-files (copy-sequence files)))
           ;; A harmless change in a.el is paired with an unbalancing
           ;; one in b.el; the refusal must cover a.el too.
-          (should-error
-           (scalpel-agent-file-substitute files "(defun keep" "(defun keep (")
-           :type 'user-error)
+          (let ((err (condition-case e
+                         (progn (scalpel-agent-file-substitute
+                                 files "(defun keep" "(defun keep (")
+                                nil)
+                       (user-error e))))
+            (ert-info ((format "Error: %S" err))
+              (should err))
+            ;; The refused action names the pair it was built from, so
+            ;; the next attempt can correct it whole.
+            (should (string-match-p
+                     (regexp-quote
+                      (scalpel-agent--substitute-invocation
+                       "(defun keep" "(defun keep ("))
+                     (error-message-string err))))
           (with-temp-buffer (insert-file-contents f1)
             (should (string-match-p "old-a" (buffer-string)))))
       (dolist (f (list f1 f2))
@@ -2395,6 +2407,39 @@ that is not there."
   (should-error (scalpel-agent-file-substitute nil "x" "y") :type 'user-error)
   (should-error (scalpel-agent-file-substitute '("/tmp/a.el") nil "y")
                 :type 'user-error))
+
+(ert-deftest scalpel-agent-test-rewrite-malformed-replacement-names-the-pair ()
+  "A refused replacement names the pattern and the replacement itself.
+Regression: the refusal said only that the replacement was malformed,
+so the other half of the action had to be restored from memory before
+another one could be written -- and memory wrote the malformed half.
+`scalpel-agent--substitute-invocation' is what every file-substitute
+refusal now carries for that."
+  (scalpel-utils-test-with-temp-file ".el"
+    (with-temp-file this-file (insert "(defun foo ())\n"))
+    (let* ((resolved (file-truename (expand-file-name this-file)))
+           (scalpel-agent--context-files (list resolved))
+           (pattern "(defun foo")
+           ;; A trailing backslash is not a valid replacement text; the
+           ;; pattern matches, so the replacement is really read.
+           (replacement "\\")
+           (err (condition-case e
+                    (progn
+                      (scalpel-agent-file-substitute
+                       (list resolved) pattern replacement)
+                      nil)
+                  (user-error e))))
+      (ert-info ((format "Error: %S" err))
+        (should err)
+        (let ((message (error-message-string err)))
+          (ert-info ((format "Message:\n%S" message))
+            (should (string-match-p "replacement is malformed" message))
+            (should (string-match-p (regexp-quote resolved) message))
+            (should (string-match-p
+                     (regexp-quote
+                      (scalpel-agent--substitute-invocation
+                       pattern replacement))
+                     message))))))))
 
 (ert-deftest scalpel-agent-test-rewrite-bracket-correction-is-verified ()
   "A corrected spelling is offered only when it really matches the file.

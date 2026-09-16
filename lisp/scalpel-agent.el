@@ -2281,6 +2281,20 @@ compares against."
                              corrected)
                           scalpel-agent--substitute-bracket-correction-fails)))))))
 
+(defun scalpel-agent--substitute-invocation (pattern replacement)
+  "Return the pattern and the replacement of a file-substitute, on one line.
+Both halves are named whatever the refusal's cause was: a pattern and
+the replacement it is applied with are one action, and the next attempt
+corrects the action.  A refusal that names only the half which failed --
+a pattern that matched nothing, a replacement the replace matcher
+rejected -- leaves the other half to be restored from memory, and memory
+is what wrote the refused half in the first place.
+
+PATTERN and REPLACEMENT are printed with %S, so either may be anything
+the action carried, including nil: a malformed action describes itself
+instead of raising a second error inside the message builder."
+  (format "pattern %S -> replacement %S" pattern replacement))
+
 (defun scalpel-agent-file-substitute (files pattern replacement)
   "Apply the mechanical replacement PATTERN -> REPLACEMENT across FILES.
 This is the planner's channel for one mechanical batch
@@ -2303,25 +2317,29 @@ rename leaves the old name in the planner's hands and the next
 round's locate failure explains nothing on its own.  A zero-match
 refusal quotes the lines that begin like the pattern, so the planner
 can correct the pattern it wrote rather than spend a round reading
-the text it had already misremembered.  Return a human-readable
-report.  Signal `user-error' on malformed input, a file outside the
-context, a bad replacement, no matches, or an unbalanced result."
+the text it had already misremembered.  Every refusal states the
+pattern and the replacement together, through
+`scalpel-agent--substitute-invocation', because the two are one
+action: a refusal naming only the half which failed leaves the other
+half to be restored from memory.  Return a human-readable report.
+Signal `user-error' on malformed input, a file outside the context,
+a bad replacement, no matches, or an unbalanced result."
   (unless (and files pattern (stringp replacement))
-    (user-error
-     (concat "Scalpel: malformed file-substitute action (files=%S pattern=%S "
-             "replacement=%S)")
-     files pattern replacement))
+    (user-error "Scalpel: malformed file-substitute action: %s, files %S"
+                (scalpel-agent--substitute-invocation pattern replacement)
+                files))
   (dolist (file files)
     (unless (scalpel-agent--context-file-p file)
       (user-error
        (concat "Scalpel: %s is not in the context, so file-substitute "
                "refuses it: the action never changes a file outside the "
                "context.  %s; ask the user to add it (C-c C-a in the "
-               "console) and try again")
+               "console) and try again\n%s")
        file
        (if (file-exists-p (expand-file-name file))
            "The file exists on disk"
-         "No such file exists on disk"))))
+         "No such file exists on disk")
+       (scalpel-agent--substitute-invocation pattern replacement))))
   ;; First pass: compute every new content in memory, so a failure in
   ;; the last file cannot leave the first ones half-rewritten.
   (let (staged)
@@ -2335,8 +2353,12 @@ context, a bad replacement, no matches, or an unbalanced result."
                         (replace-regexp-in-string pattern replacement old))
                    (error
                     (user-error
-                     "Scalpel: file-substitute replacement is malformed: %s"
-                     (error-message-string err))))))
+                     (concat "Scalpel: file-substitute replacement is "
+                             "malformed (in %s): %s\n%s")
+                     resolved
+                     (error-message-string err)
+                     (scalpel-agent--substitute-invocation
+                      pattern replacement))))))
         ;; The bracket question is the language provider's, asked of the
         ;; rewritten text: one answer for both this check and a refused
         ;; reply, so a language that says nothing about bracket shape is
@@ -2345,8 +2367,9 @@ context, a bad replacement, no matches, or an unbalanced result."
         (when (not (scalpel-locate-balanced-p resolved new))
           (user-error
            (concat "Scalpel: file-substitute of %s would leave unbalanced "
-                   "brackets (pattern %S); refused whole")
-           resolved pattern))
+                   "brackets; refused whole\n%s")
+           resolved
+           (scalpel-agent--substitute-invocation pattern replacement)))
         (push (list resolved old new) staged)))
     (setq staged (nreverse staged))
     ;; Zero matches overall is a planner mistake: refuse instead of
@@ -2356,10 +2379,11 @@ context, a bad replacement, no matches, or an unbalanced result."
                        (not (string= (nth 1 entry) (nth 2 entry))))
                      staged)
       (user-error
-       (concat "Scalpel: file-substitute pattern %S matched nothing in any of "
-               "the %d file(s) (%s); refusing%s")
-       pattern (length staged)
+       (concat "Scalpel: file-substitute matched nothing in any of the "
+               "%d file(s) (%s); refusing\n%s%s")
+       (length staged)
        (string-join (mapcar (lambda (entry) (nth 0 entry)) staged) ", ")
+       (scalpel-agent--substitute-invocation pattern replacement)
        (concat (scalpel-agent--substitute-near-miss-note staged pattern)
                ;; The lines quoted above are the file's nearest text, so a
                ;; character the pattern demands and the file never holds

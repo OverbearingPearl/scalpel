@@ -158,14 +158,14 @@ to end or abort it with `scalpel-console-abort`."
   (message "Scalpel modules reloaded."))
 
 (defun scalpel-test--load-test-files ()
-  "Load every `*-test.el' under `lisp', each file once and from disk.
+  "Load each `*-test.el' file under `lisp', once and from disk.
 A test file may `require' a sibling: `scalpel-agent-test' needs the
 `scalpel-utils-test-with-temp-file' macro at expansion time, so it
 cannot wait for this loop -- which visits files in name order -- to
 reach `scalpel-utils-test'.  ERT signals when it is handed a test it
 already knows, so that `require' counts as the file's load and the
 loop does not load it again.  Call this once per run, with the
-previous run's tests already deleted."
+previous run's test files already deleted."
   (let ((preloaded
          (cl-remove-if-not
           #'featurep
@@ -178,6 +178,20 @@ previous run's tests already deleted."
                       file (expand-file-name "lisp"
                                              scalpel-test--package-root))))))))
 
+(defun scalpel-test--load-entry-tests ()
+  "Load this entry file again so that ERT registers what is written here.
+`ert-delete-all-tests' is run before the load pass, so what was
+registered before is gone.  That pass walks `lisp' alone while this
+file sits at the package root, so what was written here never ran.
+Reading the file back from disk is the same answer the pass gives
+every other file, and it redefines the functions above exactly as
+the pass redefines the modules under test: the call that started
+this run keeps running under the definition it entered with."
+  (let ((entry (expand-file-name "scalpel-test.el"
+                                 scalpel-test--package-root)))
+    (when (file-exists-p entry)
+      (load-file entry))))
+
 (defun scalpel-test-run-internal ()
   "Run the suite in this Emacs.
 In batch mode, runs all tests and exits.  Interactively, discards any
@@ -189,6 +203,9 @@ results buffer is recreated with the invoking directory as its
     (scalpel-test--kill-temp-file-buffers)
     (scalpel-test-reload-modules)
     (scalpel-test--load-test-files)
+    ;; The entry's own tests are read back here: the pass above visits
+    ;; `lisp' files, and this file is not one of them.
+    (scalpel-test--load-entry-tests)
     (scalpel-test--kill-temp-file-buffers)
     (let ((default-directory dir))
       (if noninteractive
