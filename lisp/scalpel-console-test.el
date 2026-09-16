@@ -131,6 +131,33 @@ branch."
           (should-not (search-forward "User: second instruction" nil t)))
       (when (buffer-live-p buf) (kill-buffer buf)))))
 
+(ert-deftest scalpel-console-test-send-line-rejected-when-sibling-busy ()
+  "Refuse sending a prompt from a console while a sibling console for the same root is busy."
+  (let ((root (make-temp-file "scalpel-console-root" t))
+        buf-a buf-b)
+    (unwind-protect
+        (progn
+          (setq buf-a (get-buffer-create "*scalpel console*")
+                buf-b (get-buffer-create
+                       (generate-new-buffer-name "*scalpel console*")))
+          (with-current-buffer buf-a
+            (scalpel-console-mode)
+            (setq-local scalpel-console--root root))
+          (with-current-buffer buf-b
+            (scalpel-console-mode)
+            (setq-local scalpel-console--root root)
+            (setq scalpel-console--busy t))
+          (with-current-buffer buf-a
+            (insert "user prompt")
+            (goto-char (point-min))
+            (should-not (scalpel-console-send-line))
+            (should-not (string-match-p "User:" (buffer-string))))
+          (with-current-buffer buf-b
+            (should scalpel-console--busy)
+            (should-not (string-match-p "User:" (buffer-string)))))
+      (when (buffer-live-p buf-a) (kill-buffer buf-a))
+      (when (buffer-live-p buf-b) (kill-buffer buf-b)))))
+
 (ert-deftest scalpel-console-test-progress-callback-bound-during-request ()
   "The progress callback must be bound while the agent request runs."
   (let ((buf (scalpel-console-test--new-console-buffer))

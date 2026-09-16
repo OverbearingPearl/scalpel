@@ -1038,14 +1038,18 @@ clear the conversation instead, use
     (scalpel-console--show-context)))
 
 (defun scalpel-console-open ()
-  "Open (or switch to) the Scalpel console buffer and clear its contents.
+  "Open a fresh Scalpel console buffer for the current directory.
 Internal setup routine of `scalpel-open'; not an interactive command.
+Each call creates a new console buffer for the root -- re-running
+`scalpel-open' opens a new session rather than switching to an
+existing one -- and the buffer's name carries Emacs's standard
+uniqueness suffix when the name is taken (e.g. \"*scalpel: ~/proj*<2>\").
 The console is anchored to `default-directory' at call time: the
 buffer name embeds the path and the buffer's `default-directory' is
 pinned to it, so any file-system command run inside the console uses
 that path."
   (let* ((root (file-name-as-directory (expand-file-name default-directory)))
-         (buf (get-buffer-create (scalpel-console--buffer-name root))))
+         (buf (get-buffer-create (generate-new-buffer-name (scalpel-console--buffer-name root)))))
     (switch-to-buffer buf)
     (setq buffer-read-only nil)
     (unless (eq major-mode 'scalpel-console-mode)
@@ -1398,7 +1402,12 @@ invoked in, it would answer for that buffer instead."
 The pending instruction is every line typed since the last appended
 output, so text composed with S-RET is sent as a single message.
 Every round re-sends the conversation recorded in this buffer, so
-the agent can access its own earlier replies and shell output."
+the agent can access its own earlier replies and shell output.
+A send is refused while another console anchored to the same root
+has a round in flight -- two consoles on one root serialize their
+writes instead of interleaving them.  The gate reads only
+buffer-local busy state, so a sibling that aborts or whose buffer
+is killed releases its hold with no separate lock cleanup."
   (interactive)
   (if (scalpel-console--busy-p)
       (progn
@@ -1407,33 +1416,48 @@ the agent can access its own earlier replies and shell output."
     (let ((buf (scalpel-console--target-buffer)))
       (unless (eq (current-buffer) buf)
         (switch-to-buffer buf))
-      (let* ((regions (scalpel-console--pending-input-regions))
-             (instr (string-trim
-                     (mapconcat
-                      (lambda (region)
-                        (buffer-substring-no-properties
-                         (car region) (cdr region)))
-                      regions
-                      ""))))
-        (if (string-empty-p instr)
-            (message "Scalpel: nothing to send.")
-          ;; Read the conversation before this instruction joins it.
-          (let ((history (scalpel-console--history)))
-            ;; Remember the instruction so `scalpel-console-repeat' can
-            ;; resubmit it verbatim after a planner-output failure.
-            (setq scalpel-console--last-instruction instr)
-            ;; Rewrite the typed input into the logged user message, so the
-            ;; instruction is not shown twice (once raw, once prefixed).
-            ;; Regions are deleted back to front so positions stay valid.
-            (let ((inhibit-read-only t))
-              (dolist (region (reverse regions))
-                (delete-region (car region) (cdr region)))
-              (goto-char (point-max))
-              (scalpel-console--insert-tagged
-               (format "User: %s\n" instr) 'user))
-            (scalpel-console--run-rounds instr history)
-            (goto-char (point-max))
-            (message "Scalpel: instruction sent.")))))))
+      (let ((sibling
+             (cl-find-if
+              (lambda (b)
+                (and (buffer-live-p b)
+                     (not (eq b buf))
+                     (buffer-local-value 'scalpel-console--busy b)
+                     (equal (buffer-local-value 'scalpel-console--root buf)
+                            (buffer-local-value 'scalpel-console--root b))))
+              (buffer-list))))
+        (if sibling
+            (progn
+              (message "Scalpel: console %s is working on the same root %s; wait for it to settle or abort it there."
+                       (buffer-name sibling)
+                       (buffer-local-value 'scalpel-console--root buf))
+              (ding))
+          (let* ((regions (scalpel-console--pending-input-regions))
+                 (instr (string-trim
+                         (mapconcat
+                          (lambda (region)
+                            (buffer-substring-no-properties
+                             (car region) (cdr region)))
+                          regions
+                          ""))))
+            (if (string-empty-p instr)
+                (message "Scalpel: nothing to send.")
+              ;; Read the conversation before this instruction joins it.
+              (let ((history (scalpel-console--history)))
+                ;; Remember the instruction so `scalpel-console-repeat' can
+                ;; resubmit it verbatim after a planner-output failure.
+                (setq scalpel-console--last-instruction instr)
+                ;; Rewrite the typed input into the logged user message, so the
+                ;; instruction is not shown twice (once raw, once prefixed).
+                ;; Regions are deleted back to front so positions stay valid.
+                (let ((inhibit-read-only t))
+                  (dolist (region (reverse regions))
+                    (delete-region (car region) (cdr region)))
+                  (goto-char (point-max))
+                  (scalpel-console--insert-tagged
+                   (format "User: %s\n" instr) 'user))
+                (scalpel-console--run-rounds instr history)
+                (goto-char (point-max))
+                (message "Scalpel: instruction sent.")))))))))
 (defun scalpel-console-abort ()
   "Cancel the operation currently in flight for this console, if any.
 This cancels the whole console operation -- not only the current
