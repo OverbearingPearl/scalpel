@@ -1239,6 +1239,97 @@ that tells the next round the old symbol no longer exists."
           (symbol-name (cadr form))))
     (error nil)))
 
+(defun scalpel-agent--elisp-balanced-p (text)
+  "Return non-nil for balanced Emacs Lisp over the whole of TEXT.
+Every top-level form is walked to the end of TEXT, so a bracket left
+open anywhere in it is seen rather than only in the first form.  The
+walk runs in `emacs-lisp-mode' with its hooks delayed, because the
+syntax table is what reads strings, comments and character literals the
+way an Emacs Lisp file does: a bracket inside a docstring or a `;'
+comment is text, not structure.  Blank space between forms is skipped,
+so a text whose forms are separated by blank lines is still read whole.
+
+The walk is bounded by construction, because an unbounded one hung the
+editor: each step records the position it asked about, and a step that
+leaves the position there or moves it back is not asked again -- the
+character is stepped over and the walk goes on.  A position no scan
+moves over is not a form the reader can read, and this answer only ever
+becomes the wording of a refusal (`scalpel-locate-single-definition-p'
+has already refused the reply), so walking past it decides nothing,
+while a loop that keeps asking at the same position never returns at
+all."
+  (with-temp-buffer
+    (delay-mode-hooks (emacs-lisp-mode))
+    (insert text)
+    (goto-char (point-min))
+    (condition-case nil
+        (progn
+          (while (progn (skip-chars-forward " \t\n\r")
+                        (forward-comment 1)
+                        (skip-chars-forward " \t\n\r")
+                        (< (point) (point-max)))
+            (let ((from (point)))
+              (scan-sexps from 1)
+              ;; Asked again at FROM, the scan would answer the same way
+              ;; forever: that is a stall, not a slow walk.  The step below
+              ;; always moves forward, so the walk terminates.
+              (when (<= (point) from)
+                (forward-char 1))))
+          t)
+      (scan-error nil))))
+
+(defun scalpel-agent--unusable-replacement-reason (file text)
+  "Return a sentence saying why TEXT is not a usable replacement for FILE.
+Structural contract shared by `scalpel-agent-block-edit' and
+`scalpel-agent-block-insert', whose refusals both append it, and by the
+tests that pin each cause.
+
+The refusal had no reason of its own: `scalpel-agent--usable-replacement'
+tries the whole reply and every line-bounded prefix and suffix of it, and
+when none passes `scalpel-locate-single-definition-p' the caller knows
+only that the reply was refused.  Nothing in that tells the planner what
+to change, and the observed failure spent round after round re-sending a
+defun whose one missing closing bracket nobody had named.
+
+Only facts that decide the refusal are stated.  A reply the file's own
+locator reads no definition in is answered first -- prose, a stray form,
+or a definition written in a spelling the locator does not know -- so a
+reply holding no definition is not explained by the structure of one it
+never held.  For a reply that does name one, the bracket walk is asked
+next, before the count: the elisp listing reads names with a regexp, so
+an unbalanced reply still lists the name it was aiming at, and the count
+would otherwise look healthy for a text no reader finishes.  The count
+is left for the case it decides, a reply holding several.  The reply
+itself is quoted by the caller, so this names the cause and leaves the
+text to be compared against it."
+  (let ((defs (scalpel-agent--definitions-in-text file text)))
+    (cond
+     ;; Nothing to read at all is answered before the walk: the walk asks
+     ;; how a definition failed to read, and with no definition in the reply
+     ;; there is nothing for that question to be about.  The order is also
+     ;; what keeps the walk away from such a reply, which is where it hung
+     ;; the editor.
+     ((null defs)
+      (concat "No definition could be read out of it: the locator reads "
+              "none in it, or cannot list definitions in this file's "
+              "language."))
+     ;; The bracket walk is Emacs Lisp syntax, so it is asked only about a
+     ;; `.el' reply -- the same gate `scalpel-agent-file-substitute' uses
+     ;; for the same check -- and only about a reply that names a
+     ;; definition for the question to be about.
+     ((and (string-match-p "\\.el\\'" file)
+           (not (scalpel-agent--elisp-balanced-p text)))
+      (concat "Its brackets do not balance, so the Emacs Lisp reader "
+              "cannot reach the end of it."))
+     ((cdr defs)
+      (format (concat "It reads as %d top-level definitions (%s), and a "
+                      "replacement must be one, because it lands on one "
+                      "resolved range.")
+              (length defs) (string-join defs ", ")))
+     (t
+      (concat "It is not one complete definition for this file's "
+              "language.")))))
+
 (defun scalpel-agent--usable-replacement (file text)
   "Return the replacement TEXT usable for FILE, or TEXT itself.
 A replacement reply is one definition by contract, but models pad
@@ -1398,8 +1489,11 @@ the edit."
                                 :message
                                 (format (concat "Scalpel: planner returned no usable "
                                                 "replacement for %s. "
-                                                "Refusing to edit. Reply was: %S")
-                                        symbol new-text)))))))
+                                                "Refusing to edit. %s Reply was: %S")
+                                        symbol
+                                        (scalpel-agent--unusable-replacement-reason
+                                         file new-text)
+                                        new-text)))))))
            on-error))))))
 
 (defun scalpel-agent-block-insert (file symbol instruction after
@@ -1452,8 +1546,11 @@ file really holds when that is not SYMBOL.  ON-ERROR receives a plist
                                 :message
                                 (format (concat "Scalpel: planner returned no usable "
                                                 "definition for %s. "
-                                                "Refusing to create. Reply was: %S")
-                                        symbol new-text)))))))
+                                                "Refusing to create. %s Reply was: %S")
+                                        symbol
+                                        (scalpel-agent--unusable-replacement-reason
+                                         file new-text)
+                                        new-text)))))))
            on-error))))))
 
 (defun scalpel-agent-file-create (file text)

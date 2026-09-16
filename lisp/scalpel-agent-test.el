@@ -266,6 +266,118 @@ failure that surfaced as a prose-reply error."
         (should (scalpel-locate-single-definition-p this-file usable))
         (should (string= usable "(defun foo (x)\n  (+ x 2))"))))))
 
+(ert-deftest scalpel-agent-test-edit-names-unbalanced-brackets ()
+  "A refused replacement whose brackets do not balance says so.
+Regression: the planner's reply was one closing bracket short, and the
+refusal said only that no usable replacement had been returned -- so
+nothing told the planner what to change, and the same broken reply came
+back on the next round.  The cause is decidable here, unlike the intent
+behind a bad pattern, so the refusal states it."
+  (scalpel-utils-test-with-temp-file ".el"
+    (with-temp-file this-file
+      (insert "(defun foo (x)\n  (+ x 1))\n"))
+    (cl-letf (((symbol-function 'scalpel-llm-request-async)
+               (lambda (_prompt on-success _on-error &optional _system)
+                 ;; The defun is never closed: no reader gets past it.  A
+                 ;; suffix of it passes the bracket walk on its own, and
+                 ;; is still refused, because `let' defines nothing.
+                 (funcall on-success
+                          "(defun foo (x)\n  (let ((y x))\n    (+ y 1))"))))
+      (let (error)
+        (scalpel-agent-block-edit
+         this-file "foo" "bump x"
+         (lambda (_report) (ert-fail "an unbalanced reply must not edit"))
+         (lambda (err) (setq error err)))
+        (ert-info ((format "Error: %S" error))
+          (should (eq (plist-get error :type) 'no-replacement))
+          (should (string-match-p "brackets do not balance"
+                                  (plist-get error :message))))))))
+
+(ert-deftest scalpel-agent-test-edit-names-a-reply-with-no-definition ()
+  "A refused replacement that reads as no definition says so.
+A bare \"no usable replacement\" merges causes that are not alike: a
+reply whose brackets do not balance, one holding no definition, and one
+holding several.  Each is decidable, so each is named, and the planner
+is not left to guess which one it wrote."
+  (scalpel-utils-test-with-temp-file ".el"
+    (with-temp-file this-file
+      (insert "(defun foo (x)\n  (+ x 1))\n"))
+    (cl-letf (((symbol-function 'scalpel-llm-request-async)
+               (lambda (_prompt on-success _on-error &optional _system)
+                 ;; Balanced, and defines nothing: `require' is not one
+                 ;; of `scalpel-locate-elisp--defining-forms'.
+                 (funcall on-success "(require 'json)"))))
+      (let (error)
+        (scalpel-agent-block-edit
+         this-file "foo" "do nothing"
+         (lambda (_report) (ert-fail "a non-definition must not edit"))
+         (lambda (err) (setq error err)))
+        (ert-info ((format "Error: %S" error))
+          (should (eq (plist-get error :type) 'no-replacement))
+          (should (string-match-p "No definition could be read"
+                                  (plist-get error :message))))))))
+
+(ert-deftest scalpel-agent-test-refusal-explains-a-reply-with-nothing-to-read ()
+  "A reply holding no definition is explained by that, not by brackets.
+Regression: the bracket walk was consulted before the definition count,
+so a prose reply -- which holds no definition to have brackets about --
+was answered with a sentence about structure, and the walk was asked
+about text no step of it could move over, which hung the run.  The
+listing below reads no definition in the reply, so the refusal must say
+that and never reach the walk."
+  (scalpel-utils-test-with-temp-file ".el"
+    (with-temp-file this-file (insert "(defun foo (x)\n  (+ x 1))\n"))
+    (let* ((reply "There are no occurrences of `(+ x 1)` in the body.")
+           (reason (scalpel-agent--unusable-replacement-reason
+                    this-file reply)))
+      (ert-info ((format "Reason: %S" reason))
+        (should (string-match-p "No definition could be read" reason))
+        (should-not (string-match-p "brackets" reason))))))
+
+(ert-deftest scalpel-agent-test-insert-names-unbalanced-brackets ()
+  "A refused insertion states the same reason a refused edit does.
+The two refusals are one judgement -- the reply is not a single usable
+definition -- so the planner must not read a different account of it
+depending on which action it reached for."
+  (scalpel-utils-test-with-temp-file ".el"
+    (with-temp-file this-file (insert "(defun anchor ())\n"))
+    (cl-letf (((symbol-function 'scalpel-llm-request-async)
+               (lambda (_prompt on-success _on-error &optional _system)
+                 (funcall on-success
+                          "(defun baz ()\n  (let ((y 1))\n    y)"))))
+      (let (error)
+        (scalpel-agent-block-insert
+         this-file "baz" "add baz" "anchor"
+         (lambda (_report) (ert-fail "an unbalanced reply must not land"))
+         (lambda (err) (setq error err)))
+        (ert-info ((format "Error: %S" error))
+          (should (eq (plist-get error :type) 'no-replacement))
+          (should (string-match-p "brackets do not balance"
+                                  (plist-get error :message))))))))
+
+(ert-deftest scalpel-agent-test-edit-accepts-escaped-quotes-in-a-docstring ()
+  "A docstring's escaped quotes are source syntax, not a defect.
+Regression risk: the refusal that started this work arrived with
+backslash-escaped quotes in its docstring, and the tempting fix --
+stripping them -- would close the string early and leave the reply
+unreadable.  The reader needs the backslash to keep the quote inside the
+string, so such a reply must be applied as written."
+  (scalpel-utils-test-with-temp-file ".el"
+    (with-temp-file this-file (insert "(defun foo ()\n  \"Say hi.\")\n"))
+    (cl-letf (((symbol-function 'scalpel-llm-request-async)
+               (lambda (_prompt on-success _on-error &optional _system)
+                 (funcall on-success "(defun foo ()\n  \"Say \\\"hi\\\".\")"))))
+      (let (report)
+        (scalpel-agent-block-edit
+         this-file "foo" "quote the word"
+         (lambda (r) (setq report r))
+         (lambda (err) (ert-fail (plist-get err :message))))
+        (ert-info ((format "Report: %S" report))
+          (should (string-match-p "Edited foo" report)))
+        (with-current-buffer (find-file-noselect this-file)
+          (should (string= (buffer-string)
+                           "(defun foo ()\n  \"Say \\\"hi\\\".\")\n")))))))
+
 (ert-deftest scalpel-agent-test-read-whole-file ()
   "A read without a symbol returns the file inside the output fence."
   (scalpel-utils-test-with-temp-file ".el"
