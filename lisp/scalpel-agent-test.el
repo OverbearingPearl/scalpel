@@ -1027,6 +1027,22 @@ the way the brevity rule and the perl preference are guarded."
     (should (string-match-p (regexp-quote "\\1")
                             scalpel-agent--substitute-pattern-rule))))
 
+(ert-deftest scalpel-agent-test-system-prompt-takes-names-literally ()
+  "The prompt says a symbol name is copied, never re-spelled.
+Regression: the planner asked for `llm-pick-view--cache-dir' while the
+file held `llm-pick-view-cache-dir', and for `llm-pick-view--main'
+while it held `llm-pick-view-main'; each round died before anything was
+edited, although the SYMBOLS list in the prompt stated the right
+spelling.  Nothing in the code can prevent the spelling, so the rule
+has to be stated to the model; this guards only that the live prompt
+still carries it, the way the dialect and brevity rules are guarded."
+  (ert-info ((format "Rule:\n%S" scalpel-agent--symbol-name-rule))
+    (should (string-match-p
+             (regexp-quote scalpel-agent--symbol-name-rule)
+             scalpel-agent-system-prompt))
+    (should (string-match-p "taken literally"
+                            scalpel-agent--symbol-name-rule))))
+
 (ert-deftest scalpel-agent-test-system-prompt-prefers-perl ()
   "The prompt steers text-transformation commands toward perl.
 Nothing in the code can make the planner pick a portable tool, so
@@ -1419,6 +1435,147 @@ file next round, so \"not found\" alone is a dead end."
           (should (string-match-p
                    (regexp-quote (car scalpel-agent--context-files))
                    (error-message-string err))))))))
+
+(ert-deftest scalpel-agent-test-absent-symbol-reports-what-the-file-defines ()
+  "A symbol missing from a context file reports what that file defines.
+Regression: the refusal told the planner to add the file to the
+context, which was already true -- the user hit it twice with a file
+the context plainly held -- so the cause it could not name, a
+definition the locator does not read, stayed invisible and the round
+was spent on a remedy that changed nothing.  The definitions below
+are the observed shape: the file holds a name that begins like the
+one asked for, and the requested spelling is not among them."
+  (scalpel-utils-test-with-temp-file ".el"
+    (with-temp-file this-file
+      (insert "(defun llm-pick-view--main-groups (records)\n  nil)\n"
+              "(defun llm-pick-view-main ())\n"))
+    (let ((scalpel-agent--context-files
+           (list (file-truename (expand-file-name this-file)))))
+      (let ((err (condition-case e
+                     (progn (scalpel-agent--resolve-symbol
+                             (car scalpel-agent--context-files)
+                             "llm-pick-view--main")
+                            nil)
+                   (user-error e))))
+        (ert-info ((format "Error: %S" err))
+          (should err)
+          (let ((message (error-message-string err)))
+            (ert-info ((format "Message:\n%S" message))
+              (should (string-match-p "defines 2 definition" message))
+              (should (string-match-p
+                       "llm-pick-view--main is not one of them" message))
+              ;; The name that is nearly the one asked for gets its own
+              ;; line, so the gap is visible without reading the list.
+              ;; The line reads "like <asked for>: <near name>", so the
+              ;; assertion quotes exactly that: a literal joining the
+              ;; two names without the symbol between them matches no
+              ;; line here, and a shorter one matching only the near
+              ;; name would also match the "It defines" line below it,
+              ;; passing even if this line were gone.
+              (should (string-match-p
+                       (regexp-quote
+                        (concat "Definitions spelled like "
+                                "llm-pick-view--main: "
+                                "llm-pick-view--main-groups"))
+                       message)))))))))
+
+(ert-deftest scalpel-agent-test-symbol-skeleton-blinds-only-separators ()
+  "Separators vanish from the comparison; letters stay.
+Regression: the names this failure turns on differ only in hyphens --
+`llm-pick-view--cache-dir' was asked for while the file held
+`llm-pick-view-cache-dir' -- so the comparison has to see through
+them; one that did not could only offer the shared prefix, which is
+the part every name of that file shares."
+  (should (equal (scalpel-agent--symbol-skeleton "llm-pick-view--cache-dir")
+                 (scalpel-agent--symbol-skeleton "llm-pick-view-cache-dir")))
+  (should-not (equal (scalpel-agent--symbol-skeleton "llm-pick-view--cache-dir")
+                     (scalpel-agent--symbol-skeleton "llm-pick-view--cache-file"))))
+
+(ert-deftest scalpel-agent-test-absent-symbol-names-a-separator-mismatch ()
+  "A name one hyphen away is reported as the file spells it.
+Regression: the near-name line compared prefixes, so the name the
+planner was aiming at was invisible exactly when it was a separator
+away -- `llm-pick-view--cache-dir' was asked for while the file held
+`llm-pick-view-cache-dir', and the refusal offered only
+`llm-pick-view', the prefix every name of that file shares."
+  (scalpel-utils-test-with-temp-file ".el"
+    (with-temp-file this-file
+      (insert "(defcustom llm-pick-view-cache-dir nil\n  \"Where.\")\n"
+              "(defun llm-pick-view--cache-file ()\n  nil)\n"))
+    (let ((scalpel-agent--context-files
+           (list (file-truename (expand-file-name this-file)))))
+      (let ((err (condition-case e
+                     (progn (scalpel-agent--resolve-symbol
+                             (car scalpel-agent--context-files)
+                             "llm-pick-view--cache-dir")
+                            nil)
+                   (user-error e))))
+        (ert-info ((format "Error: %S" err))
+          (should err)
+          (let ((message (error-message-string err)))
+            (ert-info ((format "Message:\n%S" message))
+              (should (string-match-p
+                       (regexp-quote
+                        (concat "The file spells llm-pick-view-cache-dir "
+                                "where llm-pick-view--cache-dir was asked "
+                                "for"))
+                       message)))))))))
+
+(ert-deftest scalpel-agent-test-absent-symbol-keeps-letters-apart ()
+  "A name differing in a letter gets no separator sentence.
+The comparison drops `-' and `_', so a name that differs by a letter
+must not be offered as the same name spelled differently: that
+sentence would send the planner after a definition it never named."
+  (scalpel-utils-test-with-temp-file ".el"
+    (with-temp-file this-file (insert "(defun llm-pick-view--cache-file ())\n"))
+    (let ((scalpel-agent--context-files
+           (list (file-truename (expand-file-name this-file)))))
+      (let ((err (condition-case e
+                     (progn (scalpel-agent--resolve-symbol
+                             (car scalpel-agent--context-files)
+                             "llm-pick-view--cache-dir")
+                            nil)
+                   (user-error e))))
+        (should err)
+        (should-not (string-match-p "only the separators differ"
+                                    (error-message-string err)))))))
+
+(ert-deftest scalpel-agent-test-absent-symbol-when-the-locator-reads-nothing ()
+  "A file holding no locatable definition says so, not \"add its file\".
+A definition written with a form the locator does not know, and a
+file whose text is not on disk, both read as an empty definition
+list; that is a different cause from a file nobody added to the
+context, and the two must not share a message."
+  (scalpel-utils-test-with-temp-file ".el"
+    (with-temp-file this-file (insert "(message \"no definitions here\")\n"))
+    (let ((scalpel-agent--context-files
+           (list (file-truename (expand-file-name this-file)))))
+      (let ((err (condition-case e
+                     (progn (scalpel-agent--resolve-symbol
+                             (car scalpel-agent--context-files) "gone")
+                            nil)
+                   (user-error e))))
+        (ert-info ((format "Error: %S" err))
+          (should err)
+          (should (string-match-p "reads no definition in it"
+                                  (error-message-string err))))))))
+
+(ert-deftest scalpel-agent-test-absent-symbol-outside-the-context-names-the-remedy ()
+  "A file outside the context is reported as something to ask the user for.
+The planner cannot add a file itself -- the prompt says so -- so a
+refusal that told it to do so asked for something it cannot carry
+out, and cost a round."
+  (scalpel-utils-test-with-temp-file ".el"
+    (with-temp-file this-file (insert "(defun elsewhere ())\n"))
+    (let ((scalpel-agent--context-files nil))
+      (let ((err (condition-case e
+                     (progn (scalpel-agent--resolve-symbol this-file "gone")
+                            nil)
+                   (user-error e))))
+        (ert-info ((format "Error: %S" err))
+          (should err)
+          (should (string-match-p "ask the user to add it"
+                                  (error-message-string err))))))))
 
 (ert-deftest scalpel-agent-test-edit-missing-symbol-reports-through-on-error ()
   "An edit naming a symbol the file does not hold settles via ON-ERROR.

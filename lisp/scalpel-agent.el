@@ -80,8 +80,8 @@ that wrote something is a round whose report the planner still has to
 act on, and a caller that stopped after it would abandon the rest of a
 request the planner split across rounds -- three files created one per
 round is the same shape as three edits.  Reading tools stay out: their
-output is already the round's report, which the caller reads through
-:shells and :reads.  A new writing tool belongs in this list, or the
+output is already the round's report, which reaches the caller through
+the shell and read lists.  A new writing tool belongs in this list, or
 loop ends after it without ever telling the planner what landed.")
 
 (defconst scalpel-agent--no-change-sentinel "NO_CHANGE"
@@ -113,6 +113,24 @@ bound what the model writes, so the bound has to be stated to the
 model.  The failure it prevents is a reply cut off mid-JSON by the
 backend's output limit, which loses the whole round, and the suite
 cannot see it because every reply there is mocked.")
+
+(defconst scalpel-agent--symbol-name-rule
+  "A definition's name is taken literally, character for character.
+`llm-pick-view-cache-dir' and `llm-pick-view--cache-dir' are two
+different names, and only one of them exists.  The SYMBOLS list under
+each file in the context states the spelling, so copy a name from
+there instead of re-spelling it from memory; a name the file does not
+hold fails the action before anything is edited, and the round is
+spent on the failure."
+  "Rule that a symbol name is copied from the context, never re-spelled.
+Structural contract shared by `scalpel-agent-system-prompt', which
+embeds it, and the test that guards it.  The failures it addresses
+returned across several rounds: `llm-pick-view--cache-dir' was asked
+for while the file held `llm-pick-view-cache-dir', and
+`llm-pick-view--main' while it held `llm-pick-view-main' -- each a
+separator the planner had re-spelled from memory, with the SYMBOLS
+list stating the right spelling all along.  Nothing in the code can
+prevent the spelling, so the rule has to be stated to the model.")
 
 (defconst scalpel-agent--substitute-pattern-rule
   "The regular-expression dialect a file-substitute pattern is read in.
@@ -212,6 +230,9 @@ file.  Only files in the context above can be read.  Use shell for
 finding things -- grep, ls, git log -- and file-peek for looking
 at code itself.  Do not read the same definition twice: nothing changes
 between rounds unless you changed it.
+"
+   scalpel-agent--symbol-name-rule
+   "
 A file-substitute applies one mechanical textual transformation
 across several files at once -- the bulk change no sequence of
 edits should be spelled out for.  Its \"files\" must all be context
@@ -1000,6 +1021,104 @@ nil, so every lookup runs inside its own guard."
         (when hit (push hit hits))))
     (nreverse hits)))
 
+(defun scalpel-agent--symbol-skeleton (name)
+  "Return NAME with its separator characters removed.
+`llm-pick-view-cache-dir' and `llm-pick-view--cache-dir' come back
+as one string, which is what makes the difference between them
+visible: the names this failure kept turning on were written with the
+wrong number of hyphens, and a comparison that kept the hyphens could
+only report the prefix every name of that file shares -- never the
+name the planner was aiming at.
+
+Only `-' and `_' are removed, the two characters that separate the
+words of a name.  A name differing in a letter keeps its difference:
+the comparison catches a separator, it does not guess at a typo."
+  (replace-regexp-in-string "[-_]" "" name))
+
+(defconst scalpel-agent--resolve-hint-max-symbols 20
+  "Maximum number of definitions a zero-hit refusal names.
+The list is evidence about what the locator can read, not a file
+listing; a longer dump would cost the planner tokens on every
+prompt the refusal is part of.")
+
+(defun scalpel-agent--resolve-hint (file symbol)
+  "Return a report line describing what the locator can read in FILE.
+FILE is the file SYMBOL was asked for and not found in.  The line
+separates the causes a bare \"not found\" merges: the file is in the
+context and carries no definition the locator recognises, the locator
+cannot read it at all, or none of the definitions it does read is
+SYMBOL -- which is what a symbol written with a form the locator does
+not know looks like, and what nobody can see without the list.
+Return the empty string when FILE cannot be described.
+
+A definition whose spelling starts with SYMBOL, or that SYMBOL starts
+with, is named on a line of its own: \"asked for x, the file defines
+x-groups\" is the shape this failure keeps taking, and it is decidable
+by comparing names rather than by guessing at what was meant.
+
+The comparison ignores `-' and `_', because the names this failure
+kept turning on differ from the file's by separators alone: asked for
+`llm-pick-view--cache-dir', the file held
+`llm-pick-view-cache-dir', and a prefix comparison saw only the part
+both spellings share.  A name that matches under that reading is
+reported first and as the file writes it, since it is the spelling
+the planner can actually use."
+  (let ((provider (scalpel-locate-provider-for-file file)))
+    (cond
+     ((null provider)
+      (format (concat "\nNote: no locator handles %s, so no definition in it "
+                      "can be located or listed.")
+              file))
+     (t
+      (let ((result (condition-case err
+                        (cons t (scalpel-locate-list-symbols file))
+                      (error (cons nil err)))))
+        (cond
+         ((null (car result))
+          (format "\nNote: the locator cannot read %s: %s"
+                  file (error-message-string (cdr result))))
+         ((null (cdr result))
+          (format (concat "\nNote: %s is in the context and the locator reads "
+                          "no definition in it, so %s is either absent from "
+                          "disk or written with a form the locator does not "
+                          "know.")
+                  file symbol))
+         (t
+          (let* ((symbols (cdr result))
+                 (skeleton (scalpel-agent--symbol-skeleton symbol))
+                 (same (cl-remove-if-not
+                        (lambda (name)
+                          (string= (scalpel-agent--symbol-skeleton name)
+                                   skeleton))
+                        symbols))
+                 (near (cl-remove-if
+                        (lambda (name) (member name same))
+                        (cl-remove-if-not
+                         (lambda (name)
+                           (let ((other
+                                  (scalpel-agent--symbol-skeleton name)))
+                             (or (string-prefix-p skeleton other)
+                                 (string-prefix-p other skeleton))))
+                         symbols)))
+                 (shown (cl-subseq symbols 0
+                                   (min (length symbols)
+                                        scalpel-agent--resolve-hint-max-symbols))))
+            (concat
+             (format (concat "\nNote: %s is in the context and defines %d "
+                             "definition(s); %s is not one of them.")
+                     file (length symbols) symbol)
+             (when same
+               (format (concat "\n  The file spells %s where %s was asked "
+                               "for; only the separators differ, and a name "
+                               "is taken literally.")
+                       (string-join same ", ") symbol))
+             (when near
+               (format "\n  Definitions spelled like %s: %s"
+                       symbol (string-join near ", ")))
+             (format "\n  It defines: %s%s"
+                     (string-join shown ", ")
+                     (if (< (length shown) (length symbols)) ", ..." "")))))))))))
+
 (defun scalpel-agent--resolve-symbol (file symbol)
   "Return (FILE . RANGE) for SYMBOL, falling back to a context search.
 FILE is tried first.  A planner that hallucinated the path -- the
@@ -1008,7 +1127,14 @@ deterministic correction instead of a dead end.  When SYMBOL is
 absent from FILE, every context file is scanned: a unique hit is
 returned with the file it really lives in, and the caller reports the
 correction; zero or several hits signal `user-error' naming the
-facts, so the next round can act on them instead of guessing again."
+facts, so the next round can act on them instead of guessing again.
+
+A zero-hit refusal also states what the locator can read in FILE,
+through `scalpel-agent--resolve-hint'.  The remedy such a message used
+to name -- add that file to the context -- is false when the file is
+already there, and a definition the locator does not read is invisible
+without the list; the two cases have different remedies and must not
+read alike."
   (let ((direct (condition-case nil
                     (cons file (scalpel-locate-range file symbol))
                   (error nil))))
@@ -1022,11 +1148,20 @@ facts, so the next round can act on them instead of guessing again."
             (0
              (user-error
               (concat "Scalpel: symbol %s not found in %s nor anywhere in "
-                      "the context (%s); add its file to the context first")
+                      "the context (%s)%s")
               symbol file
               (if scalpel-agent--context-files
                   (string-join scalpel-agent--context-files ", ")
-                "the context is empty")))
+                "the context is empty")
+              (if (and file (scalpel-agent--context-file-p file))
+                  ;; The file is already in the context, so the remedy
+                  ;; this message used to name -- add its file -- is
+                  ;; false; what the planner needs instead is what the
+                  ;; locator really reads in it.
+                  (scalpel-agent--resolve-hint file symbol)
+                (format (concat "\nNote: %s is not in the context; ask the "
+                                "user to add it with a confirm action.")
+                        file))))
             (_
              (user-error
               (concat "Scalpel: symbol %s is defined in several context "
