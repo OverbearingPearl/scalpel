@@ -201,7 +201,8 @@ ROOT is expanded, normalized with `file-name-as-directory' and
   "Return the console buffer the current command should write to.
 Return the current buffer when it is a console buffer; otherwise
 return the console buffer whose root contains `default-directory',
-or signal a `user-error' when there is none."
+preferring the console with the most specific (longest) matching
+root, or signal a `user-error' when there is none."
   (cond
    ((derived-mode-p 'scalpel-console-mode)
     ;; The mode function is reachable via M-x; a buffer entered that way
@@ -212,13 +213,14 @@ or signal a `user-error' when there is none."
     (current-buffer))
    (t
     (let ((dir (file-name-as-directory (expand-file-name default-directory)))
-          found)
+          found found-length)
       (dolist (buf (buffer-list))
-        (unless found
-          (with-current-buffer buf
-            (when (and (bound-and-true-p scalpel-console--root)
-                       (string-prefix-p scalpel-console--root dir))
-              (setq found buf)))))
+        (with-current-buffer buf
+          (when (and (bound-and-true-p scalpel-console--root)
+                     (string-prefix-p scalpel-console--root dir)
+                     (> (length scalpel-console--root) (or found-length 0)))
+            (setq found buf
+                  found-length (length scalpel-console--root)))))
       (or found
           (user-error "Scalpel: no console for %s; run `scalpel-open'" dir))))))
 

@@ -32,6 +32,31 @@ returned buffer when done."
         (setq-local default-directory root))
       buf)))
 
+(ert-deftest scalpel-console-test-nested-roots-prefer-the-deepest-console ()
+  "Console buffers with nested roots prefer the deepest matching root."
+  (let* ((temp-dir (make-temp-file "scalpel-console-test" t))
+         (nested-dir (expand-file-name "nested" temp-dir))
+         (parent-buffer (get-buffer-create "*scalpel-console-test-parent*"))
+         (nested-buffer (get-buffer-create "*scalpel-console-test-nested*")))
+    (make-directory nested-dir)
+    (unwind-protect
+        (progn
+          (with-current-buffer parent-buffer
+            (scalpel-console-mode)
+            (setq-local scalpel-console--root temp-dir)
+            (setq default-directory temp-dir))
+          (with-current-buffer nested-buffer
+            (scalpel-console-mode)
+            (setq-local scalpel-console--root nested-dir)
+            (setq default-directory nested-dir))
+          (with-temp-buffer
+            (setq default-directory nested-dir)
+            (should (eq (scalpel-console--target-buffer) nested-buffer))
+            (should-not (eq (scalpel-console--target-buffer) parent-buffer))))
+      (kill-buffer parent-buffer)
+      (kill-buffer nested-buffer)
+      (delete-directory temp-dir t))))
+
 (ert-deftest scalpel-console-test-sends-text-typed-through-keyboard ()
   "Keyboard-typed input is sent even when it follows display output.
 Regression: `self-insert-command' inserts through `insert-and-inherit',
