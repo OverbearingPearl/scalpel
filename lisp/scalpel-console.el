@@ -1434,6 +1434,9 @@ The pending instruction is every line typed since the last appended
 output, so text composed with S-RET is sent as a single message.
 Every round re-sends the conversation recorded in this buffer, so
 the agent can access its own earlier replies and shell output.
+An immediate acknowledgement line is appended right after the
+instruction is logged, giving instant feedback before the spinner
+appears.
 A send is refused while another console anchored to the same root
 has a round in flight -- two consoles on one root serialize their
 writes instead of interleaving them.  The gate reads only
@@ -1486,6 +1489,22 @@ is killed releases its hold with no separate lock cleanup."
                   (goto-char (point-max))
                   (scalpel-console--insert-tagged
                    (format "User: %s\n" instr) 'user))
+                ;; Immediate display-only acknowledgement so the user knows
+                ;; the instruction was accepted before the spinner appears.
+                ;; This line is temporary feedback and carries the
+                ;; `scalpel-console-ack' property: it is deleted once the
+                ;; status line appears.  The `scalpel-console-output'
+                ;; property makes both `scalpel-console--history' and
+                ;; `scalpel-console--pending-input-regions' skip this line,
+                ;; so it never leaks into the next round's prompt as typed
+                ;; input.  The rear-nonsticky property list keeps typed
+                ;; input after it from inheriting anything.
+                (let ((inhibit-read-only t))
+                  (goto-char (point-max))
+                  (insert (propertize "Scalpel: Roger. Working...\n"
+                                      'scalpel-console-ack t
+                                      'scalpel-console-output t
+                                      'rear-nonsticky '(scalpel-console-output))))
                 (scalpel-console--run-rounds instr history)
                 (goto-char (point-max))
                 (message "Scalpel: instruction sent.")))))))))
