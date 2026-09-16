@@ -199,6 +199,109 @@ the mode and transient spellings."
     (should-error (scalpel-locate-single-definition-p this-file "(defvar x 1)")
                   :type 'user-error)))
 
+(ert-deftest scalpel-locate-test-elisp-single-form-p ()
+  "Exactly one complete top-level form is accepted, definition or not.
+The form need not define anything, which is the whole reason the
+predicate exists: a registration call is a top-level unit of an
+Emacs Lisp file."
+  (should (scalpel-locate-elisp--single-form-p "(defun foo (x) (+ x 1))"))
+  (should (scalpel-locate-elisp--single-form-p
+           (concat "(llm-pick-source-register 'artificial-analysis\n"
+                   "  :kind 'capability\n"
+                   "  :fetcher #'loader)")))
+  ;; Trailing whitespace is not a second form.
+  (should (scalpel-locate-elisp--single-form-p "(defun foo ())\n"))
+  ;; Two forms are refused: a reply that echoes a whole file holds
+  ;; several, and accepting one would append the file to itself.
+  (should-not (scalpel-locate-elisp--single-form-p
+               "(defun foo ())\n(defun bar ())"))
+  ;; A bare word reads as a symbol, so prose would otherwise be
+  ;; inserted as a form.
+  (should-not (scalpel-locate-elisp--single-form-p "No change needed."))
+  (should-not (scalpel-locate-elisp--single-form-p "(defun foo (x)"))
+  (should-not (scalpel-locate-elisp--single-form-p "")))
+
+(ert-deftest scalpel-locate-test-single-form-p-dispatches ()
+  "The public form predicate dispatches by file type and rejects unknown types."
+  (scalpel-utils-test-with-temp-file ".el"
+    (should (scalpel-locate-single-form-p this-file "(defun foo ())"))
+    (should (scalpel-locate-single-form-p
+             this-file "(scalpel-llm-dialect-register \"x\" 'y)")))
+  (scalpel-utils-test-with-temp-file ".unknown"
+    (should-error (scalpel-locate-single-form-p this-file "(defun foo ())")
+                  :type 'user-error)))
+
+(ert-deftest scalpel-locate-test-single-form-p-falls-back-to-definitions ()
+  "A provider without a form validator reuses its definition validator.
+A language whose top-level units are its definitions -- every
+provider but Emacs Lisp -- has no separate notion of a form, so the
+two checks are the same one there.  A provider registering neither is
+still refused: the fallback is a stated equivalence, not a silent
+pass."
+  (let ((scalpel-locate-providers
+         (cons (cons "\\.formless\\'"
+                     (list :single-definition-p
+                           (lambda (text) (string= text "ok"))))
+               scalpel-locate-providers)))
+    (should (scalpel-locate-single-form-p "/tmp/a.formless" "ok"))
+    (should-not (scalpel-locate-single-form-p "/tmp/a.formless" "no")))
+  (let ((scalpel-locate-providers
+         (cons (cons "\\.bare\\'" (list :locate #'ignore))
+               scalpel-locate-providers)))
+    (should-error (scalpel-locate-single-form-p "/tmp/a.bare" "ok")
+                  :type 'user-error)))
+
+(ert-deftest scalpel-locate-test-elisp-form-count ()
+  "The reader's count separates several forms from a text it cannot finish.
+A refusal is explained with this count: a text holding several forms
+and one no reader reaches the end of get different advice, and a
+boolean cannot tell them apart."
+  (should (= 1 (scalpel-locate-elisp--form-count
+                "(defun foo (x) (+ x 1))")))
+  (should (= 2 (scalpel-locate-elisp--form-count
+                "(defun a ())\n(defun b ())")))
+  ;; A registration call is a form like any other.
+  (should (= 1 (scalpel-locate-elisp--form-count
+                "(scalpel-llm-dialect-register \"x\" 'y)")))
+  ;; Layout between forms is not a form.
+  (should (= 1 (scalpel-locate-elisp--form-count "(defun foo ())\n")))
+  ;; A text the reader cannot finish has no count to give.
+  (should-not (scalpel-locate-elisp--form-count "(defun foo (x)"))
+  (should-not (scalpel-locate-elisp--form-count "\"unterminated"))
+  ;; Empty is a count of zero, not a failure to count.
+  (should (= 0 (scalpel-locate-elisp--form-count "")))
+  (should (= 0 (scalpel-locate-elisp--form-count "  \n"))))
+
+(ert-deftest scalpel-locate-test-elisp-balanced-p ()
+  "A bracket inside a docstring or a comment is text, not structure."
+  (should (scalpel-locate-elisp--balanced-p "(defun a ())"))
+  (should (scalpel-locate-elisp--balanced-p
+           "(defun a ()\n  \"See ()\")\n"))
+  (should (scalpel-locate-elisp--balanced-p
+           "(defun a ()\n  ;; a lone ( here\n  nil)\n"))
+  (should-not (scalpel-locate-elisp--balanced-p "(defun a ("))
+  (should-not (scalpel-locate-elisp--balanced-p "a)\n")))
+
+(ert-deftest scalpel-locate-test-form-count-and-balanced-p-dispatch ()
+  "Both diagnostics dispatch by file type and stay silent when unsure.
+A provider registering neither answers nil for the count and t for
+the brackets: an unexplained refusal must not be handed a cause about
+shape, and \"no answer\" is not a cause.  Emacs Lisp registers both,
+so a text its reader cannot finish is nilled by the count and refused
+by the bracket answer."
+  (scalpel-utils-test-with-temp-file ".el"
+    (should (= 2 (scalpel-locate-form-count
+                  this-file "(defun a ())\n(defun b ())")))
+    (should-not (scalpel-locate-form-count this-file "(defun a ("))
+    (should (scalpel-locate-balanced-p this-file "(defun a ())"))
+    (should-not (scalpel-locate-balanced-p this-file "(defun a (")))
+  (scalpel-utils-test-with-temp-file ".md"
+    (should-not (scalpel-locate-form-count this-file "# A\n# B\n"))
+    (should (scalpel-locate-balanced-p this-file "# A\n# B\n")))
+  (scalpel-utils-test-with-temp-file ".unknown"
+    (should-not (scalpel-locate-form-count this-file "anything"))
+    (should (scalpel-locate-balanced-p this-file "anything"))))
+
 (provide 'scalpel-locate-test)
 
 ;;; scalpel-locate-test.el ends here

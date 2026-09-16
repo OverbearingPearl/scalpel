@@ -269,6 +269,12 @@ the file does not hold fails the action.  A block-insert adds
 something new, so its \"after\" names an existing definition in the
 same file to insert the new one behind; the \"symbol\" of a
 block-insert is the name being created and is expected to be new.
+What a block-insert lands need not be a definition: exactly one
+complete top-level form of the file's language is accepted, so a
+registration call -- a file extending itself, such as a provider or
+a dialect registration -- is inserted like any definition.  Such a
+form defines no name, so it cannot be located afterwards and the
+report says so.
 The file-rename action only moves the file itself: it does not
 touch the definitions inside it and does not update any other
 file's require, import or path references, so those remain the
@@ -1239,50 +1245,23 @@ that tells the next round the old symbol no longer exists."
           (symbol-name (cadr form))))
     (error nil)))
 
-(defun scalpel-agent--elisp-balanced-p (text)
-  "Return non-nil for balanced Emacs Lisp over the whole of TEXT.
-Every top-level form is walked to the end of TEXT, so a bracket left
-open anywhere in it is seen rather than only in the first form.  The
-walk runs in `emacs-lisp-mode' with its hooks delayed, because the
-syntax table is what reads strings, comments and character literals the
-way an Emacs Lisp file does: a bracket inside a docstring or a `;'
-comment is text, not structure.  Blank space between forms is skipped,
-so a text whose forms are separated by blank lines is still read whole.
-
-The walk is bounded by construction, because an unbounded one hung the
-editor: each step records the position it asked about, and a step that
-leaves the position there or moves it back is not asked again -- the
-character is stepped over and the walk goes on.  A position no scan
-moves over is not a form the reader can read, and this answer only ever
-becomes the wording of a refusal (`scalpel-locate-single-definition-p'
-has already refused the reply), so walking past it decides nothing,
-while a loop that keeps asking at the same position never returns at
-all."
-  (with-temp-buffer
-    (delay-mode-hooks (emacs-lisp-mode))
-    (insert text)
-    (goto-char (point-min))
-    (condition-case nil
-        (progn
-          (while (progn (skip-chars-forward " \t\n\r")
-                        (forward-comment 1)
-                        (skip-chars-forward " \t\n\r")
-                        (< (point) (point-max)))
-            (let ((from (point)))
-              (scan-sexps from 1)
-              ;; Asked again at FROM, the scan would answer the same way
-              ;; forever: that is a stall, not a slow walk.  The step below
-              ;; always moves forward, so the walk terminates.
-              (when (<= (point) from)
-                (forward-char 1))))
-          t)
-      (scan-error nil))))
-
-(defun scalpel-agent--unusable-replacement-reason (file text)
+(defun scalpel-agent--unusable-replacement-reason (file text &optional form-p)
   "Return a sentence saying why TEXT is not a usable replacement for FILE.
 Structural contract shared by `scalpel-agent-block-edit' and
 `scalpel-agent-block-insert', whose refusals both append it, and by the
 tests that pin each cause.
+
+FORM-P says which judgement refused TEXT.  Nil, the default, is the
+one `block-edit' makes: the reply must read as one complete
+definition, because it lands on a located definition's range and a
+text that defines nothing would delete what it replaced.  Non-nil is
+the one `block-insert' makes, where the reply need only be one
+complete top-level form -- a definition, or a file's own registration
+call.  The causes that are the same for both keep one wording.  The
+ones that are not -- a reply holding no definition, a reply holding
+several -- are worded for the judgement that refused it, so an
+insertion is never told about a definition it was never meant to
+hold.
 
 The refusal had no reason of its own: `scalpel-agent--usable-replacement'
 tries the whole reply and every line-bounded prefix and suffix of it, and
@@ -1295,37 +1274,64 @@ Only facts that decide the refusal are stated.  A reply the file's own
 locator reads no definition in is answered first -- prose, a stray form,
 or a definition written in a spelling the locator does not know -- so a
 reply holding no definition is not explained by the structure of one it
-never held.  For a reply that does name one, the bracket walk is asked
-next, before the count: the elisp listing reads names with a regexp, so
-an unbalanced reply still lists the name it was aiming at, and the count
-would otherwise look healthy for a text no reader finishes.  The count
-is left for the case it decides, a reply holding several.  The reply
+never held.  What the file's own reader makes of the reply is asked
+next, through that language's provider rather than through any language
+this module knows: a text the reader cannot finish is the one case the
+bracket answer can state a cause for, while a text it reads as several
+complete forms has no bracket left open, and the bracket sentence would
+name a defect that is not there -- a two-form balanced reply was
+answered with it, which cost the round.  The definition count is left
+for the case it decides, a reply holding several of them.  The reply
 itself is quoted by the caller, so this names the cause and leaves the
 text to be compared against it."
-  (let ((defs (scalpel-agent--definitions-in-text file text)))
+  (let* ((defs (scalpel-agent--definitions-in-text file text))
+         ;; The count is the language provider's answer, never this
+         ;; module's: a reply is read in the language of the file it
+         ;; would land in, and only that language's provider knows how.
+         ;; Nil says the count is unavailable -- either the reader
+         ;; cannot finish the text or the provider counts nothing --
+         ;; which is why the bracket answer below is asked too.
+         (forms (scalpel-locate-form-count file text)))
     (cond
      ;; Nothing to read at all is answered before the walk: the walk asks
      ;; how a definition failed to read, and with no definition in the reply
      ;; there is nothing for that question to be about.  The order is also
      ;; what keeps the walk away from such a reply, which is where it hung
      ;; the editor.
-     ((null defs)
+     ((and (null defs) (not form-p))
       (concat "No definition could be read out of it: the locator reads "
               "none in it, or cannot list definitions in this file's "
               "language."))
-     ;; The bracket walk is Emacs Lisp syntax, so it is asked only about a
-     ;; `.el' reply -- the same gate `scalpel-agent-file-substitute' uses
-     ;; for the same check -- and only about a reply that names a
-     ;; definition for the question to be about.
-     ((and (string-match-p "\\.el\\'" file)
-           (not (scalpel-agent--elisp-balanced-p text)))
+     ;; A reply the reader cannot finish at all is answered before the
+     ;; count, because there is no count to give for it.  The bracket
+     ;; question -- the language provider's, the same one
+     ;; `scalpel-agent-file-substitute' asks of a rewritten text -- is
+     ;; asked only here, and only a language that counts forms can reach
+     ;; this line; only Emacs Lisp's provider does, so naming the Emacs
+     ;; Lisp reader in the sentence below is a fact about the one
+     ;; language that gets this far, not a guess about the file.  A
+     ;; language with no bracket answer refuses with the general sentence
+     ;; instead, rather than being handed a cause it never gave.
+     ((and (null forms)
+           (not (scalpel-locate-balanced-p file text)))
       (concat "Its brackets do not balance, so the Emacs Lisp reader "
               "cannot reach the end of it."))
-     ((cdr defs)
+     ;; A reply that reads as several complete forms, every one of them
+     ;; finished, is refused for its count.  The bracket walk used to be
+     ;; asked first, and answered such a reply -- two balanced forms,
+     ;; nothing left open -- with the sentence above, naming a defect
+     ;; that was not there and spending the round on it.
+     ((and form-p forms (> forms 1))
+      (concat "It is not exactly one complete top-level form for this "
+              "file's language."))
+     ((and (not form-p) (cdr defs))
       (format (concat "It reads as %d top-level definitions (%s), and a "
                       "replacement must be one, because it lands on one "
                       "resolved range.")
               (length defs) (string-join defs ", ")))
+     (form-p
+      (concat "It is not exactly one complete top-level form for this "
+              "file's language."))
      (t
       (concat "It is not one complete definition for this file's "
               "language.")))))
@@ -1395,7 +1401,10 @@ definition and what follows is reconciled by
 The report names what the file really holds afterwards.  The definition
 NEW-TEXT writes may not be the one SYMBOL names, and a report repeating
 SYMBOL would then send the next round after a definition that is not
-there -- the failure is not the insert, it is the silence about it."
+there -- the failure is not the insert, it is the silence about it.
+A form that defines no name at all -- a registration call -- is
+reported as unlocatable for the same reason: the next round must not
+be sent after a name the file does not hold."
   (with-current-buffer (find-file-noselect file)
     (let ((range (scalpel-agent--verified-range file after expected-body)))
       (scalpel-execute-insert-after (cdr range) new-text)
@@ -1499,9 +1508,14 @@ the edit."
 (defun scalpel-agent-block-insert (file symbol instruction after
                                   on-success on-error)
   "Create SYMBOL in FILE per INSTRUCTION, inserted after AFTER.
-ON-SUCCESS receives the report string, which names the definition the
-file really holds when that is not SYMBOL.  ON-ERROR receives a plist
-\(:type SYMBOL :message STRING)."
+The reply must be exactly one complete top-level form of FILE's
+language, and it need not define SYMBOL: a file's registration idiom
+-- a call that extends the file, such as a provider or dialect
+registration -- is a top-level unit of the file and is inserted like
+a definition, because refusing it would make the idiom impossible to
+reach through any tool.  ON-SUCCESS receives the report string, which
+names the definition the file really holds when that is not SYMBOL.
+ON-ERROR receives a plist (:type SYMBOL :message STRING)."
   (cl-block scalpel-agent-block-insert
     (unless (and file symbol instruction after)
       (funcall on-error (list :type 'malformed
@@ -1536,7 +1550,21 @@ file really holds when that is not SYMBOL.  ON-ERROR receives a plist
                 ((string= new-text scalpel-agent--no-change-sentinel)
                  (funcall on-success
                           (format "No change needed: %s in %s" symbol file)))
-                ((scalpel-locate-single-definition-p file new-text)
+                ;; The definition search inside
+                ;; `scalpel-agent--usable-replacement' hunts through the
+                ;; reply's lines for a definition, so it can never place
+                ;; a top-level unit that defines no name.  The reply as
+                ;; a whole is offered to the form validator next, which
+                ;; is what admits a file's own registration idiom.
+                ;;
+                ;; It is asked only here, after the definition search
+                ;; has failed, and never on the search's line-bounded
+                ;; prefixes: a padded reply's first complete form is not
+                ;; always the one meant -- a whole-file echo opens with
+                ;; its `require' -- and the definition search is what
+                ;; picks the wanted definition out of such a reply.
+                ((or (scalpel-locate-single-definition-p file new-text)
+                     (scalpel-locate-single-form-p file new-text))
                  (funcall on-success
                           (scalpel-agent--create-after-anchor
                            file symbol after anchor-body new-text)))
@@ -1545,11 +1573,11 @@ file really holds when that is not SYMBOL.  ON-ERROR receives a plist
                           (list :type 'no-replacement
                                 :message
                                 (format (concat "Scalpel: planner returned no usable "
-                                                "definition for %s. "
+                                                "top-level form for %s. "
                                                 "Refusing to create. %s Reply was: %S")
                                         symbol
                                         (scalpel-agent--unusable-replacement-reason
-                                         file new-text)
+                                         file new-text t)
                                         new-text)))))))
            on-error))))))
 
@@ -2031,7 +2059,7 @@ correction does not land and leaves the file's own lines above as the
 text to compare against.")
 
 (defconst scalpel-agent--substitute-regexp-construct-escapes
-  '(?| ?\( ?\) ?< ?> ?b ?B ?w ?W ?s ?S ?_ ?` ?' ?= ?{ ?} ?? ?+ ?* ?c ?C
+  '(?| ?\( ?\) ?< ?> ?b ?B ?w ?W ?s ?S ?_ ?\` ?\' ?= ?\{ ?\} ?? ?+ ?* ?c ?C
     ?0 ?1 ?2 ?3 ?4 ?5 ?6 ?7 ?8 ?9)
   "Characters a backslash turns into a regexp construct, not a literal.
 `\\|' alternates, `\\(' opens a group, `\\s' names a syntax class,
@@ -2048,7 +2076,14 @@ note, while a construct left off it would make the note report a
 reading of the pattern that is not true.  A refusal may stay silent
 about why a pattern matched nothing; it must never state a reason
 that is wrong.  Digits are included because \"\\1\" is a
-backreference rather than a literal \"1\".")
+backreference rather than a literal \"1\".
+
+A member is written with a backslash before the character wherever that
+character carries syntax of its own, so that a tool reading this buffer
+by syntax finds no structure in the list: an unescaped open-bracket
+member, or a member for the character a comment starts with, would make
+a checker such as `check-parens' report the defconst as unbalanced even
+though the reader reads every member as the character it names.")
 
 (defun scalpel-agent--substitute-escaped-literals (pattern)
   "Return the characters PATTERN demands through a backslash escape.
@@ -2252,14 +2287,12 @@ context, a bad replacement, no matches, or an unbalanced result."
                     (user-error
                      "Scalpel: file-substitute replacement is malformed: %s"
                      (error-message-string err))))))
-        (when (and (string-match-p "\\.el\\'" resolved)
-                   (not (with-temp-buffer
-                          (delay-mode-hooks (emacs-lisp-mode))
-                          (insert new)
-                          (goto-char (point-min))
-                          (condition-case nil
-                              (progn (scan-sexps (point) (point-max)) t)
-                            (scan-error nil)))))
+        ;; The bracket question is the language provider's, asked of the
+        ;; rewritten text: one answer for both this check and a refused
+        ;; reply, so a language that says nothing about bracket shape is
+        ;; never reported as having one.  It used to be an Emacs Lisp walk
+        ;; written here, beside the one in the refusal path.
+        (when (not (scalpel-locate-balanced-p resolved new))
           (user-error
            (concat "Scalpel: file-substitute of %s would leave unbalanced "
                    "brackets (pattern %S); refused whole")

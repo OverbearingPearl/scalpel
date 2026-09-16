@@ -355,6 +355,68 @@ depending on which action it reached for."
           (should (string-match-p "brackets do not balance"
                                   (plist-get error :message))))))))
 
+(ert-deftest scalpel-agent-test-insert-accepts-a-top-level-registration-call ()
+  "A reply that is one registration call, not a definition, is inserted.
+Regression: the insert path admitted only a reply the locator reads a
+definition in, so a file's registration idiom -- a call such as
+`llm-pick-source-register' -- was refused whole, and every round that
+reached for it died the same way.  The call defines no name, so it
+cannot be located afterwards; the report says so rather than leaving
+the planner to discover it."
+  (scalpel-utils-test-with-temp-file ".el"
+    (with-temp-file this-file (insert "(defun anchor ())\n"))
+    (cl-letf (((symbol-function 'scalpel-llm-request-async)
+               (lambda (_prompt on-success _on-error &optional _system)
+                 (funcall on-success
+                          (concat "(llm-pick-source-register "
+                                  "'artificial-analysis\n"
+                                  "  :kind 'capability\n"
+                                  "  :fetcher #'loader)")))))
+      (let (report)
+        (scalpel-agent-block-insert
+         this-file "register-artificial-analysis" "register it" "anchor"
+         (lambda (r) (setq report r))
+         (lambda (err) (ert-fail (plist-get err :message))))
+        (ert-info ((format "Report: %S On disk: %S" report
+                           (with-temp-buffer
+                             (insert-file-contents this-file)
+                             (buffer-string))))
+          (should (string-match-p "Created register-artificial-analysis"
+                                  report))
+          (should (string-match-p "cannot be located" report)))
+        (let ((on-disk (with-temp-buffer
+                         (insert-file-contents this-file)
+                         (buffer-string))))
+          (ert-info ((format "On disk:\n%S" on-disk))
+            (should (string-match-p "llm-pick-source-register" on-disk))
+            (should (string-match-p "artificial-analysis" on-disk))))))))
+
+(ert-deftest scalpel-agent-test-insert-refusal-speaks-of-forms-not-definitions ()
+  "A refused insertion says the reply is not one top-level form.
+Regression: the refusal judged the reply as a definition the locator
+had to read, so a file's own registration idiom was answered with
+\"no definition could be read out of it\" -- a sentence about a
+definition the reply was never meant to hold, which sent the next
+round after the wrong artifact.  The reply below is balanced and
+defines nothing, so it is refused for its form count, not as code the
+reader cannot finish."
+  (scalpel-utils-test-with-temp-file ".el"
+    (with-temp-file this-file (insert "(defun anchor ())\n"))
+    (cl-letf (((symbol-function 'scalpel-llm-request-async)
+               (lambda (_prompt on-success _on-error &optional _system)
+                 (funcall on-success "(require 'json)\n(provide 'x)"))))
+      (let (error)
+        (scalpel-agent-block-insert
+         this-file "register-x" "register x" "anchor"
+         (lambda (_r) (ert-fail "a two-form reply must not land"))
+         (lambda (e) (setq error e)))
+        (ert-info ((format "Error: %S" error))
+          (should (eq (plist-get error :type) 'no-replacement))
+          (should (string-match-p "exactly one complete top-level form"
+                                  (plist-get error :message)))
+          (should-not (string-match-p "No definition could be read"
+                                      (plist-get error :message))))))))
+
 (ert-deftest scalpel-agent-test-edit-accepts-escaped-quotes-in-a-docstring ()
   "A docstring's escaped quotes are source syntax, not a defect.
 Regression risk: the refusal that started this work arrived with
