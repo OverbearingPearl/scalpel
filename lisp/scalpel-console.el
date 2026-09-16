@@ -528,10 +528,15 @@ what survives a new request inside the same round: the per-request
 `scalpel-llm--tokens-received' is zeroed by every request, so a
 user returning to the console would otherwise see the down count
 shrink instead of having grown.
-Return a cons (REFRESH . STOP) of zero-arg functions.  REFRESH
-rewrites the line with the current received total and whole
-elapsed seconds; STOP removes the line together with its trailing
-newline, so the cursor returns to the line the status occupied."
+Return a cons (REFRESH . STOP).  REFRESH rewrites the line with the
+current received total and whole elapsed seconds, and takes an
+optional NEW-BREAKDOWN that replaces the four segment counts it
+shows, so a caller can install the line with a placeholder
+breakdown and then restate the real counts once they are known;
+called with no argument -- as the streaming progress callback does
+-- it re-renders the counts it was last given.  STOP removes the
+line together with its trailing newline, so the cursor returns to
+the line the status occupied."
   (let* ((inhibit-read-only t)
          (start (float-time))
          (sys (plist-get breakdown :system))
@@ -548,7 +553,18 @@ newline, so the cursor returns to the line the status occupied."
     (setq beg (point-marker))
     (insert (funcall line (- scalpel-llm--total-received down0) 0))
     (let ((refresh
-           (lambda ()
+           (lambda (&optional new-breakdown)
+             ;; The line is installed with a placeholder breakdown so the
+             ;; busy indicator shows before token counting runs; a caller
+             ;; restates the four segment counts here once they are known.
+             ;; A zero-arg call -- the streaming progress callback --
+             ;; re-renders the counts it was last given.
+             (when new-breakdown
+               (setq sys (plist-get new-breakdown :system))
+               (setq ctx (plist-get new-breakdown :context))
+               (setq hist (plist-get new-breakdown :history))
+               (setq instr (plist-get new-breakdown :instruction))
+               (setq up (+ sys ctx hist instr)))
              (when (marker-buffer beg)
                (with-current-buffer (marker-buffer beg)
                  (save-excursion
@@ -1085,11 +1101,25 @@ round can read it instead of losing it.  The console buffer is
 captured up front: if the user kills it while the request is in
 flight, writes are skipped but the round still settles.  The
 progress callback is installed for the duration and cleared before
-ON-COMPLETE, so it is never left pointing at a dead buffer.  A round
+ON-COMPLETE, so it is never left pointing at a dead buffer.  The
+status line is installed before the token counts are measured, so
+a slow count never leaves the user without feedback: a placeholder
+breakdown appears immediately and is replaced with the real counts
+by an initial refresh.  A round
 that changed the session's context file list redraws the context tree
 before ON-COMPLETE, so the file list on screen still describes the
 session the next round will run against."
   (let* ((target (scalpel-console--target-buffer))
+         ;; Install the status line first with a placeholder breakdown,
+         ;; so the busy indicator is visible before token counting runs.
+         (status (with-current-buffer target
+                   (scalpel-console--status-start
+                    (list :system 0
+                          :context 0
+                          :history 0
+                          :instruction 0))))
+         (refresh (car status))
+         (stop (cdr status))
          (breakdown
           (with-current-buffer target
             (list :system (scalpel-llm--count-tokens
@@ -1099,6 +1129,9 @@ session the next round will run against."
                   :history (scalpel-llm--count-tokens (or history ""))
                   :instruction (scalpel-llm--count-tokens
                                 (or instruction "")))))
+         ;; Rewrite the status line with the real counts as soon as
+         ;; they are known.
+         (_ (funcall refresh breakdown))
          ;; The round can change which files the session holds:
          ;; `file-create' adds the new one, `file-rename' moves its entry
          ;; and `file-delete' drops it.  This is the before-image the
@@ -1107,10 +1140,6 @@ session the next round will run against."
          ;; depend on that staying true.
          (context-before (with-current-buffer target
                            (copy-sequence scalpel-agent--context-files)))
-         (status (with-current-buffer target
-                   (scalpel-console--status-start breakdown)))
-         (refresh (car status))
-         (stop (cdr status))
          ;; Snapshot the cumulative counters before the round: a round
          ;; may issue several LLM requests (plan, then edit/create), so
          ;; the round's cost is the diff of the never-reset totals.

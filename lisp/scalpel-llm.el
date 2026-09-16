@@ -104,13 +104,13 @@ which is what modern tokenizers actually spend on them.  The
 previous single ratio priced Chinese text at a quarter of its real
 cost, so the status line and the token accounting under-reported
 every CJK-heavy prompt."
-  (let ((cjk 0)
-        (other (- (length text) 0)))
+  (let ((cjk 0))
     (cl-loop for char across text
-             when (scalpel-llm--cjk-char-p char)
-             do (setq cjk (1+ cjk)))
-    (setq other (- (length text) cjk))
-    (+ cjk (ceiling (/ other 4.0)))))
+             do (cl-loop for (lo . hi) in scalpel-llm--cjk-ranges
+                         when (and (>= char lo) (<= char hi))
+                         do (setq cjk (1+ cjk))
+                         and return t))
+    (+ cjk (ceiling (/ (- (length text) cjk) 4.0)))))
 
 (defun scalpel-llm--reset-reasoning-buffer ()
   "Clear the reasoning buffer for a new request."
