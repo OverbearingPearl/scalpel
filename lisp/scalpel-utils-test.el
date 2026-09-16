@@ -165,6 +165,125 @@ this directory is loaded by that pass, so all of them must provide."
       (ert-info ((format "Test file: %s" file))
         (should (featurep (intern (file-name-base file))))))))
 
+(defconst scalpel-utils-test--definition-forms
+  '(defun defsubst defmacro cl-defun cl-defmacro cl-defmethod ert-deftest
+    defconst defvar defvar-local defcustom defface)
+  "Top-level definition forms whose fourth element is a docstring.
+A `defun'-like form reads (HEAD NAME ARGLIST DOCSTRING BODY...), a
+`defconst'-like one (HEAD NAME VALUE DOCSTRING ...): the docstring
+sits at index 3 either way, which is what lets one scan cover both
+shapes.")
+
+(ert-deftest scalpel-utils-test-cut-short-docstring-scan-tells-prose-from-constants ()
+  "The scan reports a cut-short docstring, and nothing else.
+Regression, twice over: the guard read a bare symbol as the defect,
+so it reported live code.  nil is a symbol, and a definition whose
+docstring is its last element -- `(defconst NAME VALUE \"docstring\")',
+the shape most definitions in this package use -- leaves nil there, so
+`scalpel-agent--tool-vocabulary' was reported although its docstring is
+whole.  t is a symbol too, and `scalpel-console-unload-function'
+returns it as its whole body, which is the contract that keeps
+`unload-feature' from killing live consoles.
+
+The fixtures are the answers the scan exists to separate.  A docstring
+that really ends early leaves the next word of its prose in the
+definition's body; a docstring that is simply last leaves nothing
+there; and a body of t or nil is a constant the definition exists
+to return.  All are written so the file itself reads cleanly -- the
+broken one closes its form on the next line -- because a fixture the
+reader cannot finish would abort the scan before it reports anything."
+  (scalpel-utils-test-with-temp-file ".el"
+    (with-temp-file this-file
+      (insert "(defconst ok 1\n  \"A docstring, and the last element.\")\n"
+              ;; A body of `t' or `nil' is written on purpose: the guard
+              ;; must not read either as a prose word, or it reports the
+              ;; constant a function exists to return.
+              "(defun g ()\n  \"Whole.\"\n  t)\n"
+              "(defun h ()\n  \"Whole.\"\n  nil)\n"
+              "(defun f ()\n  \"ends early \"the)\n"))
+    (ert-info ((format "File:\n%S"
+                       (with-temp-buffer
+                         (insert-file-contents this-file)
+                         (buffer-string))))
+      (let ((suspects (scalpel-utils-test--cut-short-docstrings this-file)))
+        (should (equal suspects '((defun f the))))
+        (should-not (assq 'defconst suspects))))))
+
+(defun scalpel-utils-test--cut-short-docstrings (file)
+  "Return one (HEAD NAME TOKEN) per cut-short docstring in FILE.
+A docstring is a string literal, so an unescaped `\"' inside its
+prose ends it there and the next word of that prose becomes code:
+the form after a `defun''s docstring is then a bare symbol, and
+evaluating it raises `void-variable' when the function is called --
+or as the file loads, when the form is a `defconst', whose extra
+argument is evaluated at load time.
+
+The scan reads FILE's top-level forms and evaluates none of them,
+so it reports the defect instead of dying on it.  HEAD and NAME
+identify the definition, TOKEN is the prose word that became code.
+Symbols the language writes as values -- t, nil, a keyword --
+are not words of prose, so a body that is one of them is left
+alone: the guard that reported one was reporting live code."
+  (let (suspects)
+    (with-temp-buffer
+      (insert-file-contents file)
+      (goto-char (point-min))
+      (condition-case nil
+          (while t
+            (let ((form (read (current-buffer))))
+              ;; The three exemptions below are the language's own
+              ;; symbols, not prose: a bare `the' or `variable' after a
+              ;; docstring is the defect, while a body that is `t', `nil'
+              ;; or a keyword is written that way on purpose.  Each was
+              ;; added after the guard reported live code -- `nil' from
+              ;; the ordinary `(defconst NAME VALUE "docstring")' shape,
+              ;; where `(nthcdr 4 form)' is nil and nil IS a symbol, and
+              ;; `t' from `scalpel-console-unload-function', whose whole
+              ;; body is the constant its contract returns.
+              (when (and (consp form)
+                         (memq (car form) scalpel-utils-test--definition-forms)
+                         (stringp (nth 3 form))
+                         (nthcdr 4 form)
+                         (symbolp (nth 4 form))
+                         (not (keywordp (nth 4 form)))
+                         (not (memq (nth 4 form) '(t nil))))
+                (push (list (car form) (nth 1 form) (nth 4 form))
+                      suspects))))
+        (end-of-file nil)))
+    (nreverse suspects)))
+
+(ert-deftest scalpel-utils-test-no-docstring-is-cut-short ()
+  "No definition's docstring ends early and leaves its prose as code.
+Regression: a docstring holding an unescaped double quote ends
+there, and the next word of the sentence becomes the form that
+follows it.  For a `defun' that is a `void-variable' error the
+moment the function is called -- three tests failed that way, all
+naming the word `the' -- and for a `defconst' it is an argument
+evaluated as the file loads, which fails a whole module before any
+of it can be used.  A reader of the buffer sees nothing wrong, and
+neither does a reader of the parsed forms; only a check that looks
+at what follows a docstring finds it, which is this one."
+  (let* ((lisp-dir (scalpel-utils-test--lisp-directory))
+         (files (append (directory-files lisp-dir t "\\.el\\'")
+                        (directory-files (expand-file-name ".." lisp-dir)
+                                         t "\\`scalpel[^/]*\\.el\\'"))))
+    (ert-info ((format "Files: %S" files))
+      (should files))
+    (let (offenders)
+      (dolist (file files)
+        (dolist (suspect (scalpel-utils-test--cut-short-docstrings file))
+          (push (format (concat "%s: the %s %S has a docstring that ends "
+                                "early; the word %S that follows it is code, "
+                                "not prose.  Escape that double quote (\\\") or "
+                                "reword the sentence.")
+                        file (nth 0 suspect) (nth 1 suspect) (nth 2 suspect))
+                offenders)))
+      ;; Every offender is named in one run: the scan is cheap, and a
+      ;; guard that stops at the first one turns each defect into its own
+      ;; round of edit-and-rerun.
+      (when offenders
+        (ert-fail (string-join (nreverse offenders) "\n"))))))
+
 (provide 'scalpel-utils-test)
 
 ;;; scalpel-utils-test.el ends here

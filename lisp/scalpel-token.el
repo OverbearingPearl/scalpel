@@ -36,6 +36,32 @@
 (defvar scalpel-token--grand-down 0
   "Cumulative estimated download tokens across all consoles.")
 
+(defun scalpel-token--ensure-console-totals ()
+  "Return the console totals table, installing a fresh one when unusable.
+`defvar' never overwrites a symbol that is already bound, so a reload
+cannot repair a table that something carried in as a non-table value.
+The session restore in `scalpel-console' writes one: a variable that
+was unbound when the snapshot was taken comes back as a nil binding,
+and a reload whose `defvar' did not run -- or whose `require' found an
+older compiled file -- leaves the symbol bound to nil before it.  Every
+reader of the table -- the per-console lookup, `scalpel-token-record',
+`scalpel-token-reset' -- then fails inside `gethash' or `clrhash' with
+`wrong-type-argument' for the rest of the session.  The table holds
+estimates, so replacing an unusable one loses no correctness; that is
+a degradation and not a repair of the accounting, and it is announced
+rather than silent.  A table already in place comes back unchanged, so
+live accounting is never reset."
+  (unless (hash-table-p scalpel-token--console-totals)
+    (message (concat "Scalpel: token accounting table was %S, not a hash "
+                     "table; starting a fresh one")
+             scalpel-token--console-totals)
+    (setq scalpel-token--console-totals (make-hash-table :test 'equal)))
+  scalpel-token--console-totals)
+
+;; Run at load time, so the table is usable before any round can record
+;; into it.
+(scalpel-token--ensure-console-totals)
+
 (defun scalpel-token--console-totals (console)
   "Return (UP DOWN) cumulative estimates for CONSOLE, or (0 0)."
   (or (gethash console scalpel-token--console-totals) (list 0 0)))

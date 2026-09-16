@@ -97,9 +97,35 @@ to end or abort it with `scalpel-console-abort`."
     (when busy-buffer
       (user-error "Scalpel console %s has a round in flight; wait for it to finish or abort it with `scalpel-console-abort'"
                   (buffer-name busy-buffer))))
+  ;; The guard reads `featurep', not `fboundp': the feature being loaded is
+  ;; what says the module is here, and a snapshot function missing from a
+  ;; loaded module is a defect that has to fail this run loudly.  A
+  ;; `fboundp' guard skipped the snapshot silently instead, so every console
+  ;; lost its session on the reload with nothing said -- which is exactly how
+  ;; a defconst that had swallowed the whole function went unnoticed.
+  ;; A snapshot that signals is reported and then dropped, and the reload
+  ;; carries on without it.  The code being snapshotted is the code loaded
+  ;; in this session, which is not always the code on disk: a session open
+  ;; since before a fix holds the older function, and calling it here killed
+  ;; the reload before the unload -- so the session could never pick the fix
+  ;; up, and `M-x scalpel-test-run' repeated the old defect's own error
+  ;; (`void-variable the', from a docstring that had ended early) on every
+  ;; attempt until Emacs was restarted.  What is lost is the session state
+  ;; below, which the message names; what is gained is that one reload
+  ;; replaces the broken code with the code on disk, and the next run
+  ;; snapshots normally.
   (let ((scalpel-console-session-snapshot
-         (when (fboundp 'scalpel-console--session-snapshot)
-           (scalpel-console--session-snapshot))))
+         (when (featurep 'scalpel-console)
+           (condition-case err
+               (scalpel-console--session-snapshot)
+             (error
+              (message
+               (concat "Scalpel: could not snapshot console sessions (%s); "
+                       "they are not carried across this reload -- the "
+                       "session state of every open console is dropped, and "
+                       "a console may need `scalpel-open' again")
+               (error-message-string err))
+              nil)))))
     ;; Unload every module feature derived from the lisp directory.
     (dolist (feat (scalpel-test--module-features))
       (when (featurep feat)

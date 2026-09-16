@@ -274,19 +274,48 @@ zero would make its later lines disagree with its earlier ones.
 A global that no reader depends on across a reload does not belong
 here.")
 
+(defconst scalpel-console--session-format-version 2
+  "Format version of a value `scalpel-console--session-snapshot' returns.
+Structural contract shared by the snapshot, which writes it, and
+`scalpel-console--session-restore', which refuses any other value.
+
+The version exists because the two halves are not always the same
+code: `scalpel-test-reload-modules' snapshots with the code loaded at
+that moment and restores with the code it has just read from disk, so
+a file edited between the two is read back by a newer reader than its
+writer.  The shapes differ -- a captured value is wrapped in a list --
+and a reader that guessed at a shape it did not write met a bare string
+where it expected a pair: the console's own root reached `car' as text
+and signalled `wrong-type-argument', killing the reload before it had
+put a single variable back.
+Bump this whenever the shape changes.")
+
 (defun scalpel-console--session-snapshot ()
   "Return the session state to carry across a module reload.
-The per-buffer part is a list of (BUFFER-NAME . ((VAR . VALUE) ...))
+The per-buffer part is a list of (BUFFER-NAME . ((VAR . (VALUE)) ...))
 covering the buffer-local variables in
 `scalpel-console--session-variables'; the global part holds the same
-\(VAR . VALUE) shape for `scalpel-console--session-globals'.  The
+\(VAR . (VALUE)) shape for `scalpel-console--session-globals'.  The
 result is consumed by `scalpel-console--session-restore'.
+
+The value is wrapped in a list so that a variable that held nil and a
+variable that was unbound are different answers.  A restore that
+could not tell them apart set the variable to nil either way, and a
+module's own `defvar' -- which has already run by then -- never
+overwrites a symbol that is already bound, so the nil outlived the
+reload for every later reader.
 
 A console's state lives in these variables, which die when the module
 is unloaded, while the buffer text survives -- which is why they are
 captured here and put back afterwards.  A variable carrying session
 state goes in one of the two lists; nothing else enumerates them, so
-there is one place, not several, to update when one is added."
+there is one place, not several, to update when one is added.
+
+The plist names the shape it was written in, under :version, because
+the reader is not always the same code as the writer: the test runner
+snapshots with the code loaded at that moment and restores with the
+code it has just read from disk.  See
+`scalpel-console--session-format-version'."
   (let (buffers)
     (dolist (buffer (buffer-list))
       (with-current-buffer buffer
@@ -294,23 +323,58 @@ there is one place, not several, to update when one is added."
           (push (cons (buffer-name)
                       (mapcar (lambda (var)
                                 (cons var
-                                      (and (boundp var) (symbol-value var))))
+                                      (and (boundp var)
+                                           (list (symbol-value var)))))
                               scalpel-console--session-variables))
                 buffers))))
-    (list :buffers (nreverse buffers)
+    (list :version scalpel-console--session-format-version
+          :buffers (nreverse buffers)
           :globals (mapcar (lambda (var)
                              (cons var
-                                   (and (boundp var) (symbol-value var))))
+                                   (and (boundp var)
+                                        (list (symbol-value var)))))
                            scalpel-console--session-globals))))
 
 (defun scalpel-console--session-restore (snapshot)
   "Put a console's session back after the modules were reloaded.
-SNAPSHOT is the value `scalpel-console--session-snapshot' returned.
+SNAPSHOT is a value `scalpel-console--session-snapshot' returned, in
+the format `scalpel-console--session-format-version' names.  Install it
+when it is that format and refuse it otherwise: the two halves of a
+reload are not always the same code -- the test runner snapshots with
+the code loaded at that moment and restores with the code it has just
+read from disk -- and a reader that guessed at a shape it did not write
+met a bare string where it expected a pair and signalled
+`wrong-type-argument' on the console's own root, killing the reload
+before it had put a single variable back.
+
+A refused snapshot is named in the echo area, because the session state
+goes with it, and the reload itself carries on: one stale snapshot must
+not fail a whole test run.  A console left that way keeps its buffer and
+starts with fresh session state; reopen it with `scalpel-open' to anchor
+it again.  `scalpel-console--session-format-version' is what makes the
+two halves comparable at all."
+  (if (equal (plist-get snapshot :version)
+             scalpel-console--session-format-version)
+      (scalpel-console--session-install snapshot)
+    (message (concat "Scalpel: session snapshot is format %S, not %d; "
+                     "console sessions keep their buffers and start with "
+                     "fresh session state (reopen one with `scalpel-open')")
+             (plist-get snapshot :version)
+             scalpel-console--session-format-version)))
+
+(defun scalpel-console--session-install (snapshot)
+  "Put back the values SNAPSHOT captured, where they were read from.
+SNAPSHOT is a value `scalpel-console--session-snapshot' returned, in
+the format `scalpel-console--session-format-version' names; the caller
+has checked that, so each entry here really is one of the two pair
+shapes that format defines.
 The conversation never left the buffer, only the variables listed in
 `scalpel-console--session-variables' and
 `scalpel-console--session-globals' were lost, so re-installing them
 is enough to carry the session on.  A buffer killed while the modules
-were reloaded is skipped."
+were reloaded is skipped.  A variable the snapshot did not capture --
+one that was unbound when it was taken -- is not set at all, so a
+restore can never turn an unbound variable into a nil one."
   (dolist (entry (plist-get snapshot :buffers))
     (let ((buffer (get-buffer (car entry))))
       (when (buffer-live-p buffer)
@@ -318,19 +382,29 @@ were reloaded is skipped."
           (unless (derived-mode-p 'scalpel-console-mode)
             (setq buffer-read-only nil)
             (scalpel-console-mode))
-          ;; Every variable is restored through `make-local-variable', so
-          ;; a binding the unload removed is recreated and one it left
-          ;; alone is overwritten with its snapshot value.
+          ;; Every captured variable is restored through
+          ;; `make-local-variable', so a binding the unload removed is
+          ;; recreated and one it left alone gets its snapshot value
+          ;; back.  An uncaptured one is left as the reload left it:
+          ;; setting it would bind it to nil, and the module's own
+          ;; `defvar' never overwrites a symbol that is already bound.
           (dolist (pair (cdr entry))
-            (set (make-local-variable (car pair)) (cdr pair)))
+            (when (cdr pair)
+              (set (make-local-variable (car pair)) (car (cdr pair)))))
           ;; `--root' was restored just above, so the console stays
           ;; anchored to the directory its session belongs to.
           (setq-local default-directory scalpel-console--root)))))
   ;; A reload re-creates each global from its `defvar' form, so the
   ;; captured value -- a hash table, say -- is set back onto the fresh
-  ;; symbol and the accounting it held is not reset to empty.
+  ;; symbol and the accounting it held is not reset to empty.  A global
+  ;; the snapshot did not capture is left exactly as the reload left
+  ;; it: this restore is the only place this module can put nil there,
+  ;; and a nil in the token accounting table is the
+  ;; `wrong-type-argument hash-table-p nil' every later round reports,
+  ;; because `defvar' cannot repair a symbol that is already bound.
   (dolist (pair (plist-get snapshot :globals))
-    (set (car pair) (cdr pair))))
+    (when (cdr pair)
+      (set (car pair) (car (cdr pair))))))
 
 (defun scalpel-console--tag-change (pos)
   "Return the next position after POS where the console tags change.

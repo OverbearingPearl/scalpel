@@ -1118,12 +1118,48 @@ the planner can actually use."
                                "for; only the separators differ, and a name "
                                "is taken literally.")
                        (string-join same ", ") symbol))
-             (when near
+             ;; The line is printed only when it narrows the list.  Its
+             ;; point is to make the gap visible without reading the
+             ;; list; a file whose every name is spelled like the asked
+             ;; one is a file the list below already describes, in the
+             ;; same words, so the two lines carried the same names
+             ;; twice -- and this message joins the conversation, so the
+             ;; duplication was re-sent on every later round.  The
+             ;; `llm-pick-fetch-get' refusal did exactly that, with nine
+             ;; names on each of the two lines.
+             (when (and near (< (length near) (length symbols)))
                (format "\n  Definitions spelled like %s: %s"
                        symbol (string-join near ", ")))
              (format "\n  It defines: %s%s"
                      (string-join shown ", ")
                      (if (< (length shown) (length symbols)) ", ..." "")))))))))))
+
+(defun scalpel-agent--namesake-hint (file symbol)
+  "Return hint lines for the context files named after SYMBOL.
+FILE is the file that was asked; it is skipped, because its own hint
+is already on the message.  A namesake is a context file whose base
+name reads as SYMBOL -- `llm-pick-fetch-get.el' for the name
+`llm-pick-fetch-get' -- which is where a planner naming a symbol after
+the module that holds it is pointing, so what such a file really
+defines is the fact the zero-hit refusal is otherwise missing: the
+scan that found nothing walked every context file, and only the file
+the planner asked for was described.  The comparison drops `-' and
+`_', as `scalpel-agent--symbol-skeleton' does, so a file whose name
+differs from the symbol by separators alone counts too.  Return the
+empty string when the context holds no such file."
+  (let ((skeleton (scalpel-agent--symbol-skeleton symbol))
+        (asked (and file
+                    (condition-case nil
+                        (file-truename (expand-file-name file))
+                      (error nil)))))
+    (apply #'concat
+           (cl-loop for candidate in scalpel-agent--context-files
+                    for resolved = (file-truename (expand-file-name candidate))
+                    when (and (not (and asked (string= asked resolved)))
+                              (string= skeleton
+                                       (scalpel-agent--symbol-skeleton
+                                        (file-name-base resolved))))
+                    collect (scalpel-agent--resolve-hint resolved symbol)))))
 
 (defun scalpel-agent--resolve-symbol (file symbol)
   "Return (FILE . RANGE) for SYMBOL, falling back to a context search.
@@ -1140,7 +1176,10 @@ through `scalpel-agent--resolve-hint'.  The remedy such a message used
 to name -- add that file to the context -- is false when the file is
 already there, and a definition the locator does not read is invisible
 without the list; the two cases have different remedies and must not
-read alike."
+read alike.  The refusal describes the context files named after
+SYMBOL as well, through `scalpel-agent--namesake-hint': the scan that
+found nothing walked every file, and the module a symbol is named
+after is where it usually lives."
   (let ((direct (condition-case nil
                     (cons file (scalpel-locate-range file symbol))
                   (error nil))))
@@ -1154,7 +1193,7 @@ read alike."
             (0
              (user-error
               (concat "Scalpel: symbol %s not found in %s nor anywhere in "
-                      "the context (%s)%s")
+                      "the context (%s)%s%s")
               symbol file
               (if scalpel-agent--context-files
                   (string-join scalpel-agent--context-files ", ")
@@ -1167,7 +1206,12 @@ read alike."
                   (scalpel-agent--resolve-hint file symbol)
                 (format (concat "\nNote: %s is not in the context; ask the "
                                 "user to add it with a confirm action.")
-                        file))))
+                        file))
+              ;; The scan that found nothing walked every context file,
+              ;; so the file named after SYMBOL is described too: that is
+              ;; where the planner's name came from when the symbol is
+              ;; not the spelling the file holds.
+              (scalpel-agent--namesake-hint file symbol)))
             (_
              (user-error
               (concat "Scalpel: symbol %s is defined in several context "
@@ -2269,9 +2313,14 @@ context, a bad replacement, no matches, or an unbalanced result."
   (dolist (file files)
     (unless (scalpel-agent--context-file-p file)
       (user-error
-       (concat "Scalpel: %s is not in the context; a rewrite never "
-               "touches a file outside it")
-       file)))
+       (concat "Scalpel: %s is not in the context, so file-substitute "
+               "refuses it: the action never changes a file outside the "
+               "context.  %s; ask the user to add it (C-c C-a in the "
+               "console) and try again")
+       file
+       (if (file-exists-p (expand-file-name file))
+           "The file exists on disk"
+         "No such file exists on disk"))))
   ;; First pass: compute every new content in memory, so a failure in
   ;; the last file cannot leave the first ones half-rewritten.
   (let (staged)

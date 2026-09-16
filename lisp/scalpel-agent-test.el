@@ -1951,6 +1951,38 @@ the report, and the one confirmation is not waivable."
                    (list "/tmp/scalpel-not-in-context.el") "x" "y")
                   :type 'user-error)))
 
+(ert-deftest scalpel-agent-test-substitute-refusal-names-the-action-and-the-remedy ()
+  "A refused file-substitute names the action, the disk state, and the fix.
+Regression: the refusal called the action \"a rewrite\" -- a name no
+entry of `scalpel-agent--tool-vocabulary' answers to -- and stopped
+there, so neither the user nor the planner could tell what to do
+next."
+  (let ((absent (make-temp-name
+                 (expand-file-name "scalpel-absent-"
+                                   temporary-file-directory))))
+    (scalpel-utils-test-with-temp-file ".el"
+      (with-temp-file this-file (insert "(defun foo ())\n"))
+      (let ((scalpel-agent--context-files nil))
+        (dolist (probe (list (cons this-file "exists on disk")
+                             (cons absent "No such file")))
+          (let* ((file (car probe))
+                 (err (condition-case e
+                          (progn (scalpel-agent-file-substitute
+                                  (list file) "foo" "bar")
+                                 nil)
+                        (user-error e))))
+            (ert-info ((format "File %S; error: %S" file err))
+              (should err)
+              (let ((message (error-message-string err)))
+                (should (string-match-p "file-substitute" message))
+                (should-not (string-match-p "rewrite" message))
+                ;; The remedy is one the user can carry out...
+                (should (string-match-p "C-c C-a" message))
+                ;; ...and the disk state is stated, so a path that simply
+                ;; does not exist is not read as a missing context entry.
+                (should (string-match-p (regexp-quote (cdr probe))
+                                        message))))))))))
+
 (ert-deftest scalpel-agent-test-rewrite-refuses-zero-matches ()
   "A rewrite matching nothing is refused, not reported as success.
 The refusal names the pattern and the files it scanned: the message
@@ -2459,6 +2491,78 @@ writing tool a planner reaches for most often."
                            (car (plist-get result :changes))))))
             (fset 'scalpel-llm-request-async orig-llm)))
       (delete-directory dir t))))
+
+(ert-deftest scalpel-agent-test-absent-symbol-describes-its-namesake-file ()
+  "A symbol named after a context file is answered with that file's contents.
+Regression: the zero-hit refusal described the file the planner asked
+for and nothing else, so the file the name was actually about --
+`llm-pick-fetch-get' for `llm-pick-fetch-get.el' -- was invisible: the
+scan that found nothing had walked every context file, and only the
+asked one's answer was kept.  A name one separator away from what the
+file holds is then the one thing the message never shows."
+  (let ((dir (make-temp-file "scalpel-test-namesake-" t)))
+    (unwind-protect
+        (let ((asked (expand-file-name "asked.el" dir))
+              (namesake (expand-file-name "target-spec.el" dir)))
+          (with-temp-file asked (insert "(defun elsewhere ())\n"))
+          ;; The namesake holds the name one separator away, which is what
+          ;; the planner's own spelling of a module name usually is.
+          (with-temp-file namesake (insert "(defun target--spec ())\n"))
+          (let ((scalpel-agent--context-files
+                 (mapcar #'file-truename (list asked namesake))))
+            (let ((err (condition-case e
+                           (progn (scalpel-agent--resolve-symbol
+                                   (car scalpel-agent--context-files)
+                                   "target-spec")
+                                  nil)
+                         (user-error e))))
+              (ert-info ((format "Error: %S" err))
+                (should err)
+                (let ((message (error-message-string err)))
+                  (ert-info ((format "Message:\n%S" message))
+                    ;; The asked file is still described...
+                    (should (string-match-p "asked\\.el" message))
+                    ;; ...and so is the file named after the symbol, with
+                    ;; the spelling it really holds.
+                    (should (string-match-p "target-spec\\.el" message))
+                    (should (string-match-p "defines 1 definition" message))
+                    (should (string-match-p
+                             (regexp-quote
+                              (concat "spells target--spec where target-spec "
+                                      "was asked for"))
+                             message))))))))
+      (dolist (file (directory-files dir t "^[^.]"))
+        (scalpel-utils-test-kill-file-buffer file))
+      (delete-directory dir t))))
+
+(ert-deftest scalpel-agent-test-absent-symbol-omits-a-near-line-that-repeats-the-list ()
+  "A near-name line naming the whole list is left out.
+Regression: the two lines carried the same names whenever every name
+a file holds is spelled like the one asked for -- which is what a file
+named after the symbol looks like -- and the refusal printed them
+twice.  The message joins the conversation, so the duplication was
+re-sent on every later round; `llm-pick-fetch-get.el' printed eight
+names on each of the two lines.  The names are still stated, once, in
+the definition list below the header."
+  (scalpel-utils-test-with-temp-file ".el"
+    (with-temp-file this-file
+      (insert "(defun thing-one ())\n(defun thing-two ())\n"))
+    (let ((scalpel-agent--context-files
+           (list (file-truename (expand-file-name this-file)))))
+      (let ((err (condition-case e
+                     (progn (scalpel-agent--resolve-symbol
+                             (car scalpel-agent--context-files) "thing")
+                            nil)
+                   (user-error e))))
+        (ert-info ((format "Error: %S" err))
+          (should err)
+          (let ((message (error-message-string err)))
+            (ert-info ((format "Message:\n%S" message))
+              (should (string-match-p "defines 2 definition" message))
+              (should-not (string-match-p "Definitions spelled like"
+                                          message))
+              (should (string-match-p
+                       "It defines: thing-one, thing-two" message)))))))))
 
 (provide 'scalpel-agent-test)
 

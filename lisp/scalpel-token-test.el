@@ -88,6 +88,28 @@ display onto a buffer the test then kills."
     (scalpel-token-reset)
     (should-not (get-buffer scalpel-token-buffer-name))))
 
+(ert-deftest scalpel-token-test-unusable-table-is-replaced-and-a-live-one-kept ()
+  "An unusable table is replaced by an empty one; a real table is kept.
+Regression: the table is module state that `defvar' cannot repair,
+because `defvar' never overwrites a symbol that is already bound, so a
+value that arrived from outside the module -- as a session restore can
+carry one -- left every round reporting \"wrong-type-argument
+hash-table-p nil\" with no accounting written at all.  The table holds
+estimates, so an empty replacement loses no correctness, and the
+replacement is announced instead of silent."
+  (let ((live (make-hash-table :test 'equal)))
+    (puthash "console" '(1 2) live)
+    (let ((scalpel-token--console-totals live))
+      (ert-info ("a table in place comes back unchanged, live state and all")
+        (should (eq (scalpel-token--ensure-console-totals) live))
+        (should (equal (gethash "console" live) '(1 2)))))
+    (dolist (value (list nil "not a table"))
+      (let ((scalpel-token--console-totals value))
+        (ert-info ((format "Value: %S" value))
+          (should (hash-table-p (scalpel-token--ensure-console-totals)))
+          (should (= 0 (hash-table-count
+                        scalpel-token--console-totals))))))))
+
 (provide 'scalpel-token-test)
 
 ;;; scalpel-token-test.el ends here

@@ -2025,6 +2025,85 @@ Regression: a synchronous `quit' during `scalpel-agent-run' left
                 (should-not scalpel-llm--progress-callback)))))
       (scalpel-utils-test-kill-buffer (buffer-name buf)))))
 
+(ert-deftest scalpel-console-test-restore-does-not-invent-a-nil-binding ()
+  "A variable the snapshot did not capture is left as the reload left it.
+Regression: the restore set every entry the snapshot held, so a
+variable that was unbound when the snapshot was taken came back as a
+nil binding.  That is the wrong answer twice over: the module's own
+`defvar' has already run by then and never overwrites a symbol that is
+already bound, and a nil in the token accounting table is the
+`wrong-type-argument' on `hash-table-p' that every later round
+reports -- the table's readers meet it through `gethash' and
+`clrhash'."
+  (let ((snapshot (list :version scalpel-console--session-format-version
+                        :buffers nil
+                        :globals (list (cons 'scalpel-token--console-totals
+                                             nil))))
+        (scalpel-token--console-totals (make-hash-table :test 'equal)))
+    (scalpel-console--session-restore snapshot)
+    (ert-info ((format "Value: %S" scalpel-token--console-totals))
+      (should (hash-table-p scalpel-token--console-totals)))))
+
+(ert-deftest scalpel-console-test-snapshot-separates-nil-from-unbound ()
+  "A captured nil is captured; that answer is not \"unbound\".
+The snapshot's value is wrapped in a list for exactly this reason: a
+variable that held nil is session state and has to come back, while a
+nil that means \"nothing was captured\" must leave the fresh binding
+alone."
+  (let ((buf (scalpel-console-test--new-console-buffer)))
+    (unwind-protect
+        (with-current-buffer buf
+          (setq scalpel-console--last-instruction nil)
+          (let* ((snapshot (scalpel-console--session-snapshot))
+                 (entry (cdr (assq (buffer-name buf)
+                                   (plist-get snapshot :buffers))))
+                 (captured (cdr (assq 'scalpel-console--last-instruction
+                                      entry))))
+            (ert-info ((format "Captured: %S" captured))
+              (should captured)
+              (should (null (car captured))))
+            ;; And the nil it was comes back as a nil.
+            (setq scalpel-console--last-instruction "stale")
+            (scalpel-console--session-restore snapshot)
+            (should (null scalpel-console--last-instruction))))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
+
+(ert-deftest scalpel-console-test-restore-refuses-another-format ()
+  "A snapshot in another format is refused, never read.
+Regression: the snapshot is written by the code loaded at that moment
+and read back by the code taken from disk a moment later, so a file
+edited between the two is restored by a newer reader than its writer.
+The shapes differ -- a captured value is wrapped in a list -- and the
+reader met a bare string where it expected a pair: the console's own
+root, the first variable in `scalpel-console--session-variables',
+reached `car' as text and signalled `wrong-type-argument', which
+killed the reload before it had put a single variable back."
+  (let ((buf (scalpel-console-test--new-console-buffer))
+        (notices nil))
+    (unwind-protect
+        (with-current-buffer buf
+          (let* ((root scalpel-console--root)
+                 ;; The shape before the version tag: each entry is
+                 ;; (VAR . VALUE), so the console's root is one bare
+                 ;; string rather than a list holding it.
+                 (snapshot
+                  (list :buffers
+                        (list (cons (buffer-name buf)
+                                    (list (cons 'scalpel-console--root
+                                                root))))
+                        :globals nil)))
+            (cl-letf (((symbol-function 'message)
+                       (lambda (format-string &rest args)
+                         (push (apply #'format format-string args) notices))))
+              (scalpel-console--session-restore snapshot))
+            (ert-info ((format "Root: %S Notices: %S"
+                               scalpel-console--root notices))
+              (should (equal scalpel-console--root root))
+              (should (cl-some (lambda (notice)
+                                 (string-match-p "snapshot is format" notice))
+                               notices)))))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
+
 (provide 'scalpel-console-test)
 
 ;;; scalpel-console-test.el ends here

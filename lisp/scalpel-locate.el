@@ -161,14 +161,24 @@ refusal instead of deciding whether to make one."
 (defun scalpel-locate-list-symbols (file)
   "Return a list of top-level symbol names in FILE.
 Open FILE if needed.  Signal `user-error' when no locator is
-registered for FILE."
+registered for FILE.
+The result is the set of names FILE holds: a name defined twice is
+listed once.  A provider reports one entry per matching form, so a
+file that defines a name in two forms -- a redefinition, or two
+spellings of one thing -- would otherwise report it twice.  The list
+is read as a set in both places it is used: the planner prompt prints
+it on every round, and a zero-hit refusal counts it and prints it in
+full, so a duplicate spends the same tokens twice and states a count
+larger than the number of names the file holds."
   (scalpel-locate--sync-buffer file)
   (let* ((provider (scalpel-locate-provider-for-file file))
          (list-symbols (and provider (plist-get provider :list-symbols))))
     (unless list-symbols
       (user-error "Scalpel: no locator registered for %s" file))
     (with-current-buffer (get-file-buffer file)
-      (funcall list-symbols file))))
+      ;; `delete-dups' keeps the first occurrence, so the names stay in
+      ;; document order.
+      (delete-dups (funcall list-symbols file)))))
 
 ;; Built-in Emacs Lisp provider.
 (scalpel-locate-register-provider

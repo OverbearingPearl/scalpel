@@ -302,6 +302,22 @@ by the bracket answer."
     (should-not (scalpel-locate-form-count this-file "anything"))
     (should (scalpel-locate-balanced-p this-file "anything"))))
 
+(ert-deftest scalpel-locate-test-list-symbols-drops-duplicate-names ()
+  "A name a file defines twice is listed once.
+Regression: the list held one entry per matching form, so a file
+defining one name in two forms reported it twice.  The list is the
+set of names a file holds, and it is read that way in both places it
+is used: the planner prompt prints it on every round, and a zero-hit
+refusal counts it and prints it in full -- where the duplicate showed
+up as `defines 9 definition(s)' over eight names, on both the
+near-name line and the definition list."
+  (scalpel-utils-test-with-temp-file ".el"
+    (with-temp-file this-file
+      (insert "(defun dup ())\n(defvar dup nil)\n(defun other ())\n"))
+    (ert-info ((format "Symbols: %S" (scalpel-locate-list-symbols this-file)))
+      (should (equal (scalpel-locate-list-symbols this-file)
+                     '("dup" "other"))))))
+
 (provide 'scalpel-locate-test)
 
 ;;; scalpel-locate-test.el ends here
