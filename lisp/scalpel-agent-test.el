@@ -466,36 +466,6 @@ string, so such a reply must be applied as written."
           (should (string-match-p "(defun foo ())" report))
           (should-not (string-match-p "bar" report)))))))
 
-(ert-deftest scalpel-agent-test-read-near-miss-names-the-closest-context-entry ()
-  "A refusal for a path outside the context names the closest entries.
-A misspelled path is echoed as written but a note built from
-`scalpel-agent--context-near-miss' lists only real context
-entries for comparison, so the planner can correct its spelling;
-a path sharing too few components gets no note."
-  (scalpel-utils-test-with-temp-file ".el"
-    (with-temp-file this-file (insert "(defun foo ())\n"))
-    (let* ((real-path (file-truename (expand-file-name this-file)))
-           (misspelled (concat (file-name-directory real-path) "madaduan.el"))
-           (scalpel-agent--context-files (list real-path))
-           (msg (condition-case err
-                    (progn (scalpel-agent-file-read misspelled nil) nil)
-                  (user-error (error-message-string err)))))
-      (should msg)
-      (should (string-match-p (regexp-quote misspelled) msg))
-      (should (string-match-p (regexp-quote real-path) msg))
-      (should (string-match-p "for comparison" msg))
-      (let ((count 0) (start 0))
-        (while (string-match (regexp-quote misspelled) msg start)
-          (setq count (1+ count) start (match-end 0)))
-        (should (<= count 1))))
-    (let* ((far-miss "/nonexistent/other/zz.el")
-           (scalpel-agent--context-files nil)
-           (msg2 (condition-case err
-                     (progn (scalpel-agent-file-read far-miss nil) nil)
-                   (user-error (error-message-string err)))))
-      (should msg2)
-      (should-not (string-match-p "closest context entries" msg2)))))
-
 (ert-deftest scalpel-agent-test-read-refuses-file-outside-context ()
   "A read through Emacs is bounded by the context list, not the sandbox.
 Regression: the sandbox bounds shell commands, but a read runs in

@@ -165,6 +165,11 @@ Every context file is granted read access only."
                          (expand-file-name ".cache/pre-commit" "~")
                          (expand-file-name ".emacs.d/elpa" "~")
                          "/Applications/Emacs.app"))
+        (git-excludes (or (ignore-errors (string-trim
+                                          (car (process-lines
+                                                "git" "config" "--global"
+                                                "core.excludesFile"))))
+                          (expand-file-name ".gitignore_global" "~")))
         (git-dir (let ((dir (file-name-directory (car files))))
                    (catch 'found
                      (while dir
@@ -305,6 +310,13 @@ Every context file is granted read access only."
      (format "(allow file-read* (subpath %S))"
              (expand-file-name ".config/git" "~"))
      "\n"
+     ;; A user-level `core.excludesFile' is probed by every git
+     ;; invocation, including `check-ignore'; denying its read makes
+     ;; git emit a stderr warning naming the file, and that warning
+     ;; would be captured as command output and parsed as a filename.
+     ;; Grant it read-only when it exists; otherwise emit nothing.
+     (and (file-exists-p git-excludes)
+          (format "(allow file-read* (literal %S))\n" git-excludes))
      ;; Resolving `~/.gitconfig' by name requires the home directory
      ;; entry itself to be readable, just like the `~/.local' ancestor
      ;; grants above; `literal' covers the directory entry only, not
