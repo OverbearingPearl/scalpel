@@ -439,6 +439,8 @@ caller can delete them without invalidating earlier ones."
     (define-key map (kbd "C-c C-n") #'scalpel-console-send-replan)
     (define-key map (kbd "C-c C-w") #'scalpel-console-send-why)
     (define-key map (kbd "C-c C-s") #'scalpel-console-send-summarize)
+    ;; Analyze deeply and try again.
+    (define-key map (kbd "C-c C-t") #'scalpel-console-send-retry)
     map)
   "Keymap used in Scalpel console buffers.")
 
@@ -1526,6 +1528,16 @@ purpose, beside the planner's other prompt text."
   (with-current-buffer (scalpel-console--target-buffer)
     (goto-char (point-max))
     (insert (concat scalpel-prompt--summarize "\n"))
+    (scalpel-console-send-line)))
+
+(defun scalpel-console-send-retry ()
+  "Send a fixed prompt asking the model to analyze deeply and try again.
+The fixed prompt lives in `scalpel-prompt--retry' on purpose, beside
+the planner's other prompt text."
+  (interactive)
+  (with-current-buffer (scalpel-console--target-buffer)
+    (goto-char (point-max))
+    (insert (concat scalpel-prompt--retry "\n"))
     (scalpel-console-send-line)))
 
 (defun scalpel-console--busy-p ()

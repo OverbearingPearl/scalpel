@@ -40,30 +40,43 @@ backend's output limit, which loses the whole round, and the suite
 cannot see it because every reply there is mocked.")
 
 (defconst scalpel-prompt--decide-for-me
-  "I leave the choice to you: pick the best option yourself and act on it."
+  "The choice is yours: if you've reached a conclusion and judge the fix safe, implement it now; if a choice remains open, pick the best option and act."
   "Fixed prompt sent by `scalpel-console-send-decide-for-me' (C-c C-y).
 Structural contract shared by that command and
 `scalpel-console-mode-map', which binds it.")
 
 (defconst scalpel-prompt--replan
-  "I am not satisfied with your plan.  Think it over again and give me a better one."
+  "Your previous approach is rejected.  If you already applied changes, revert them cleanly first.  Abandon that line of thinking entirely, rethink from scratch, and give me a new plan (or carry it out directly if action was expected)."
   "Fixed prompt sent by `scalpel-console-send-replan' (C-c C-n).
-Structural contract shared by that command and
-`scalpel-console-mode-map', which binds it.")
+Covers two cases: the previous round may have been a mere
+proposal, or it may already have been implemented -- in the latter
+case the model must first revert the changes.  Structural contract
+shared by that command and `scalpel-console-mode-map', which binds
+it.")
 
 (defconst scalpel-prompt--why
-  "Why did this happen?  What does it mean?  Investigate thoroughly and
-explain in detail; I want the root cause."
+  "Explain why this happened and the root cause.  Strictly read-only:
+do not modify, create, or delete anything."
   "Fixed prompt sent by `scalpel-console-send-why' (C-c C-w).
 Structural contract shared by that command and
 `scalpel-console-mode-map', which binds it.")
 
 (defconst scalpel-prompt--summarize
-  "Too verbose -- summarize.  I do not have the patience to read
-all of it; give me the essence again, briefly."
+  "Too verbose -- give me a brief summary of the essence.
+Strictly read-only -- do not modify, create or delete anything."
   "Fixed prompt sent by `scalpel-console-send-summarize' (C-c C-s).
 Structural contract shared by that command and
 `scalpel-console-mode-map', which binds it.")
+
+(defconst scalpel-prompt--retry
+  "The last change failed. Analyze more deeply why, then continue with a
+new attempt."
+  "Prompt instructing the agent to diagnose the failed change and retry.
+
+Sent by the retry command bound in `scalpel-console-mode-map', via
+`scalpel-console-send-retry'.  Like `scalpel-prompt--why' and
+`scalpel-prompt--summarize', the response must not include any
+unrelated modification beyond the new attempt.")
 
 (defconst scalpel-prompt--summarize-continued
   "Continue from where the previous round stopped. Do not restate or
