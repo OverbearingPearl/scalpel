@@ -97,7 +97,8 @@ RET answered \"nothing to send\"."
       (scalpel-utils-test-kill-buffer (buffer-name buf)))))
 
 (ert-deftest scalpel-console-test-send-line ()
-  "Send a line to the agent and verify the reply is appended."
+  "Send a line to the agent and verify the reply is appended.
+The \"Roger. Working...\" acknowledgement is dropped once the reply arrives."
   (let ((buf (scalpel-console-test--new-console-buffer)))
     (unwind-protect
         (progn
@@ -117,7 +118,7 @@ RET answered \"nothing to send\"."
                 (should (search-forward "Scalpel: done" nil t)))
               (should-not (search-forward "thinking" nil t))
               (should (string= (buffer-string)
-                               "User: test instruction\nScalpel: Roger. Working...\nScalpel: done\n\nScalpel: Mission complete, over.\n\n")))))
+                               "User: test instruction\nScalpel: done\n\nScalpel: Mission complete, over.\n\n")))))
       (when (buffer-live-p buf) (kill-buffer buf)))))
 
 (ert-deftest scalpel-console-test-send-line-error ()
@@ -663,7 +664,7 @@ newly inserted Context block."
             (with-current-buffer buf
               (ert-info ((format "Buffer:\n%S" (buffer-string)))
                 (should (string= (buffer-string)
-                                 "User: line one\nline two\nScalpel: Roger. Working...\nScalpel: done\n\nScalpel: Mission complete, over.\n\n")))))
+                                 "User: line one\nline two\nScalpel: done\n\nScalpel: Mission complete, over.\n\n")))))
           (ert-info ((format "Prompt sent to the LLM:\n%S" prompt-sent))
             (should (string-suffix-p "User instruction:\nline one\nline two"
                                      prompt-sent))))
@@ -690,7 +691,7 @@ newly inserted Context block."
               (should (string= (buffer-string)
                                (concat "User: old\nScalpel: old reply\n\n"
                                        "User: new instruction\n"
-                                       "Scalpel: Roger. Working...\n"
+                                       ""
                                        "Scalpel: ack\n\n"
                                        "Scalpel: Mission complete, over.\n\n"))))))
       (scalpel-utils-test-kill-buffer (buffer-name buf)))))

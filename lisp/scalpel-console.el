@@ -856,6 +856,30 @@ consumed-body marks: that round is the cycle that processes the previous
 report's output, so the previous body stops being sent."
   (let ((buf (scalpel-console--target-buffer)))
     (with-current-buffer buf
+      ;; Drop any pending acknowledgement line: any reply or error that
+      ;; arrives now supersedes the "Roger. Working..." placeholder.
+      ;; The sweep searches the recent tail of the buffer for lines whose
+      ;; start carries the `scalpel-console-ack' text property, so it does
+      ;; not depend on marker validity at all.
+      (let ((limit (max (point-min) (- (point-max) 4096))))
+        (save-excursion
+          (goto-char (point-max))
+          (beginning-of-line)
+          (while (and (>= (point) limit)
+                      (not (= (point) (point-min))))
+            (let ((pos (point)))
+              (if (and (get-text-property pos 'scalpel-console-ack)
+                       (looking-at-p "Scalpel: Roger\\. Working\\.\\.\\."))
+                  (let ((inhibit-read-only t))
+                    (delete-region (line-beginning-position)
+                                   (min (point-max) (1+ (line-end-position)))))
+                (forward-line -1))))))
+      ;; Clear the acknowledgement marker if it is still live; the
+      ;; property sweep above is what actually removed the line.
+      (when (and (boundp 'scalpel-console--roger-marker)
+                 (markerp scalpel-console--roger-marker)
+                 (eq (marker-buffer scalpel-console--roger-marker) buf))
+        (setq scalpel-console--roger-marker nil))
       ;; Read the user's position BEFORE moving: whether the user was
       ;; reading the end is decided from where they actually were, and
       ;; the move below then places the insertion at the end.
@@ -1127,8 +1151,8 @@ session the next round will run against."
                        (eq (marker-buffer scalpel-console--roger-marker) target))
               (with-current-buffer target
                 (let ((inhibit-read-only t)
-                      (beg scalpel-console--roger-marker))
-                  (when (and (< beg (point-max))
+                      (beg (marker-position scalpel-console--roger-marker)))
+                  (when (and beg (< beg (point-max))
                              (string-prefix-p
                               "Scalpel: Roger. Working..."
                               (buffer-substring-no-properties

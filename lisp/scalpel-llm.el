@@ -164,7 +164,11 @@ freeze an earlier request's status updates; likewise the
 per-request download counter is local to this request and is the
 authoritative tally for the stream, with the global
 `scalpel-llm--tokens-received' mirrored from it after every chunk
-so existing readers keep working.  The mirror is informational
+so existing readers keep working, and the cumulative
+`scalpel-llm--total-received' incremented by each chunk's token
+count as it arrives, so the console's cumulative down count
+advances; it is never zeroed or reset at request start.  The
+per-request mirror is informational
 only and shows the most recent request's tally.  The global
 `scalpel-llm--tokens-received' mirrors this request's tally for
 readers outside the request; it is no longer reset at request
@@ -303,6 +307,9 @@ start, so a concurrent request cannot zero an earlier one's count."
                               (setq received
                                     (+ received
                                        (scalpel-llm--count-tokens resp)))
+                              (setq scalpel-llm--total-received
+                                    (+ scalpel-llm--total-received
+                                       (scalpel-llm--count-tokens resp)))
                               (setq scalpel-llm--tokens-received received)
                               (when progress
                                 (funcall progress)))
@@ -313,6 +320,9 @@ start, so a concurrent request cannot zero an earlier one's count."
                                 (scalpel-llm--append-reasoning (cdr resp))
                                 (setq received
                                       (+ received
+                                         (scalpel-llm--count-tokens (cdr resp))))
+                                (setq scalpel-llm--total-received
+                                      (+ scalpel-llm--total-received
                                          (scalpel-llm--count-tokens (cdr resp))))
                                 (setq scalpel-llm--tokens-received received)
                                 (when progress
