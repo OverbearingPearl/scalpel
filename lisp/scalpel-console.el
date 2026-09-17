@@ -858,27 +858,35 @@ report's output, so the previous body stops being sent."
     (with-current-buffer buf
       ;; Drop any pending acknowledgement line: any reply or error that
       ;; arrives now supersedes the "Roger. Working..." placeholder.
-      ;; The sweep searches the recent tail of the buffer for lines whose
-      ;; start carries the `scalpel-console-ack' text property, so it does
-      ;; not depend on marker validity at all.
-      (let ((limit (max (point-min) (- (point-max) 4096))))
-        (save-excursion
-          (goto-char (point-max))
-          (beginning-of-line)
-          (while (and (>= (point) limit)
-                      (not (= (point) (point-min))))
-            (let ((pos (point)))
-              (if (and (get-text-property pos 'scalpel-console-ack)
-                       (looking-at-p "Scalpel: Roger\\. Working\\.\\.\\."))
-                  (let ((inhibit-read-only t))
-                    (delete-region (line-beginning-position)
-                                   (min (point-max) (1+ (line-end-position)))))
-                (forward-line -1))))))
-      ;; Clear the acknowledgement marker if it is still live; the
-      ;; property sweep above is what actually removed the line.
-      (when (and (boundp 'scalpel-console--roger-marker)
-                 (markerp scalpel-console--roger-marker)
-                 (eq (marker-buffer scalpel-console--roger-marker) buf))
+      ;; `scalpel-console-send-line' is the only code that puts the
+      ;; `scalpel-console-ack' property on text, so we walk the recent
+      ;; tail in constant-property runs via
+      ;; `previous-single-property-change' and delete each run that
+      ;; carries a non-nil `scalpel-console-ack'.  Scanning by runs
+      ;; avoids both text comparison and the confusing match-boundary
+      ;; semantics of `text-property-search-backward' that caused
+      ;; off-by-one deletions ("calpel: Roger...").
+      (let ((inhibit-read-only t)
+            (scan-limit (max (point-min) (- (point-max) 4096)))
+            (pos (point-max))
+            done)
+        (while (not done)
+          (let* ((run-end pos)
+                 (run-beg (previous-single-property-change
+                           pos 'scalpel-console-ack nil scan-limit)))
+            (cond
+             ;; No change found within the scan limit: the run extends
+             ;; to the limit (or the whole scanned region is one run).
+             ((null run-beg)
+              (when (get-text-property scan-limit 'scalpel-console-ack)
+                (delete-region scan-limit run-end))
+              (setq done t))
+             (t
+              (when (get-text-property run-beg 'scalpel-console-ack)
+                (delete-region run-beg run-end))
+              (setq pos run-beg)
+              (when (<= pos scan-limit)
+                (setq done t))))))
         (setq scalpel-console--roger-marker nil))
       ;; Read the user's position BEFORE moving: whether the user was
       ;; reading the end is decided from where they actually were, and
