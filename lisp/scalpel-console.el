@@ -505,6 +505,12 @@ escape hatch it is.")
   "The instruction this console last sent, for `scalpel-console-repeat'.
 Buffer-local: each console session repeats its own last instruction.")
 
+(defvar-local scalpel-console--roger-marker nil
+  "Start of the acknowledgement line `send-line' just appended.
+The first round deletes the line when it installs the status
+spinner, so the acknowledgement is never mistaken for a turn of
+the conversation.  nil when no acknowledgement is pending.")
+
 (defvar-local scalpel-console--busy nil
   "Non-nil while an agent request is in flight for this console.
 Buffer-local: a busy console must not refuse instructions in
@@ -1105,11 +1111,31 @@ ON-COMPLETE, so it is never left pointing at a dead buffer.  The
 status line is installed before the token counts are measured, so
 a slow count never leaves the user without feedback: a placeholder
 breakdown appears immediately and is replaced with the real counts
-by an initial refresh.  A round
+by an initial refresh.  The acknowledgement line the send path
+appended is removed here, when the status spinner replaces it.  A round
 that changed the session's context file list redraws the context tree
 before ON-COMPLETE, so the file list on screen still describes the
 session the next round will run against."
   (let* ((target (scalpel-console--target-buffer))
+         ;; The acknowledgement `send-line' appended exists only for the
+         ;; gap before this status line appears: remove it now, so it
+         ;; neither lingers in the buffer nor lands in the conversation
+         ;; the next round reads.  Verified against its text, because a
+         ;; report may have been appended after it if an earlier settle
+         ;; ran first.
+         (_ (when (and (markerp scalpel-console--roger-marker)
+                       (eq (marker-buffer scalpel-console--roger-marker) target))
+              (with-current-buffer target
+                (let ((inhibit-read-only t)
+                      (beg scalpel-console--roger-marker))
+                  (when (and (< beg (point-max))
+                             (string-prefix-p
+                              "Scalpel: Roger. Working..."
+                              (buffer-substring-no-properties
+                               beg (min (point-max) (+ beg 28)))))
+                    (delete-region
+                     beg (min (point-max) (1+ (line-end-position beg))))))
+                (set-marker scalpel-console--roger-marker nil))))
          ;; Install the status line first with a placeholder breakdown,
          ;; so the busy indicator is visible before token counting runs.
          (status (with-current-buffer target
@@ -1344,7 +1370,11 @@ the round's output is noisy.  A continued round sends
 the original instruction is already inside the history, and
 re-sending it makes the planner run the same shell command again.
 `scalpel-console--busy' is set here and cleared at every terminal
-point, so a second RET during a round is refused."
+point, so a second RET during a round is refused.  When an
+operation ends, the cursor in the target buffer is also moved to
+`point-max', signalling that the answer is finished.  The
+completion acknowledgement is only shown for a successful final
+round."
   (let ((operation (cl-incf scalpel-console--operation-generation)))
     (setq scalpel-console--busy t)
     (let ((target (scalpel-console--target-buffer))
@@ -1352,13 +1382,18 @@ point, so a second RET during a round is refused."
           (conversation history)
           (next-instruction instruction))
       (cl-labels
-          ((finish-operation ()
+          ((finish-operation (&optional complete)
              (when (and (buffer-live-p target)
                         (= operation
                            (buffer-local-value
                             'scalpel-console--operation-generation target)))
                (with-current-buffer target
-                 (setq scalpel-console--busy nil))))
+                 (setq scalpel-console--busy nil)
+                 (when complete
+                   (scalpel-console--append
+                    (propertize "Scalpel: Mission complete, over."
+                                'face 'shadow)))
+                 (goto-char (point-max)))))
            (run-next ()
              (setq round (1+ round))
              (scalpel-console--run-round
@@ -1378,7 +1413,7 @@ point, so a second RET during a round is refused."
                                 (or (plist-get round-result :shells)
                                     (plist-get round-result :reads)
                                     (plist-get round-result :changes))))
-                          (finish-operation))
+                          (finish-operation (not (null round-result))))
                          ((>= round scalpel-console-max-rounds)
                           (finish-operation)
                           (let ((notice
@@ -1394,7 +1429,7 @@ point, so a second RET during a round is refused."
                                 scalpel-console--continuation-instruction)
                           (run-next))
                          (t
-                          (finish-operation))))
+                          (finish-operation t))))
                     ((error quit)
                      (finish-operation)
                      (signal (car err) (cdr err)))))))))
@@ -1434,9 +1469,12 @@ The pending instruction is every line typed since the last appended
 output, so text composed with S-RET is sent as a single message.
 Every round re-sends the conversation recorded in this buffer, so
 the agent can access its own earlier replies and shell output.
-An immediate acknowledgement line is appended right after the
-instruction is logged, giving instant feedback before the spinner
-appears.
+The typed input is rewritten into the logged user message, and an
+acknowledgement line is inserted immediately after that logged
+message, so the user sees both before the synchronous work of the
+round starts; the acknowledgement is removed by the first round once
+the status spinner takes over, so it never accumulates in the
+conversation.
 A send is refused while another console anchored to the same root
 has a round in flight -- two consoles on one root serialize their
 writes instead of interleaving them.  The gate reads only
@@ -1489,22 +1527,29 @@ is killed releases its hold with no separate lock cleanup."
                   (goto-char (point-max))
                   (scalpel-console--insert-tagged
                    (format "User: %s\n" instr) 'user))
-                ;; Immediate display-only acknowledgement so the user knows
-                ;; the instruction was accepted before the spinner appears.
-                ;; This line is temporary feedback and carries the
-                ;; `scalpel-console-ack' property: it is deleted once the
-                ;; status line appears.  The `scalpel-console-output'
-                ;; property makes both `scalpel-console--history' and
-                ;; `scalpel-console--pending-input-regions' skip this line,
-                ;; so it never leaks into the next round's prompt as typed
-                ;; input.  The rear-nonsticky property list keeps typed
-                ;; input after it from inheriting anything.
+                ;; Display-only acknowledgement on the line after the logged
+                ;; user message, so the user sees the round was accepted
+                ;; before the spinner appears.  It carries
+                ;; `scalpel-console-ack' and a dim `shadow' face, so it reads
+                ;; as secondary feedback, and is deleted by the first round
+                ;; once the status line replaces it.  The
+                ;; `scalpel-console-output' property makes both
+                ;; `scalpel-console--history' and
+                ;; `scalpel-console--pending-input-regions' skip this line;
+                ;; rear-nonsticky keeps later text from inheriting the face or
+                ;; anything else into typed input.
                 (let ((inhibit-read-only t))
                   (goto-char (point-max))
+                  (setq scalpel-console--roger-marker (copy-marker (point) t))
                   (insert (propertize "Scalpel: Roger. Working...\n"
+                                      'face 'shadow
                                       'scalpel-console-ack t
                                       'scalpel-console-output t
-                                      'rear-nonsticky '(scalpel-console-output))))
+                                      'rear-nonsticky '(scalpel-console-output face))))
+                ;; Paint the logged user message and the acknowledgement now,
+                ;; so they are visible before the synchronous work inside
+                ;; --run-rounds (e.g. token counting) hogs the display.
+                (redisplay)
                 (scalpel-console--run-rounds instr history)
                 (goto-char (point-max))
                 (message "Scalpel: instruction sent.")))))))))

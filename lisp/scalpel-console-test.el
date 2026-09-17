@@ -117,7 +117,7 @@ RET answered \"nothing to send\"."
                 (should (search-forward "Scalpel: done" nil t)))
               (should-not (search-forward "thinking" nil t))
               (should (string= (buffer-string)
-                               "User: test instruction\nScalpel: Roger. Working...\nScalpel: done\n\n")))))
+                               "User: test instruction\nScalpel: Roger. Working...\nScalpel: done\n\nScalpel: Mission complete, over.\n\n")))))
       (when (buffer-live-p buf) (kill-buffer buf)))))
 
 (ert-deftest scalpel-console-test-send-line-error ()
@@ -663,7 +663,7 @@ newly inserted Context block."
             (with-current-buffer buf
               (ert-info ((format "Buffer:\n%S" (buffer-string)))
                 (should (string= (buffer-string)
-                                 "User: line one\nline two\nScalpel: Roger. Working...\nScalpel: done\n\n")))))
+                                 "User: line one\nline two\nScalpel: Roger. Working...\nScalpel: done\n\nScalpel: Mission complete, over.\n\n")))))
           (ert-info ((format "Prompt sent to the LLM:\n%S" prompt-sent))
             (should (string-suffix-p "User instruction:\nline one\nline two"
                                      prompt-sent))))
@@ -691,7 +691,8 @@ newly inserted Context block."
                                (concat "User: old\nScalpel: old reply\n\n"
                                        "User: new instruction\n"
                                        "Scalpel: Roger. Working...\n"
-                                       "Scalpel: ack\n\n"))))))
+                                       "Scalpel: ack\n\n"
+                                       "Scalpel: Mission complete, over.\n\n"))))))
       (scalpel-utils-test-kill-buffer (buffer-name buf)))))
 
 (ert-deftest scalpel-console-test-history-keeps-only-conversation ()
