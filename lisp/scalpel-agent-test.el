@@ -1101,16 +1101,19 @@ Regression: the prompt showed only the reason, so a shell command
 was confirmed without ever being displayed."
   (should (string= (scalpel-agent--action-summary
                     '(:tool "shell" :command "make test" :reason "run tests"))
-                   "make test"))
+                   "shell: make test"))
   (should (string= (scalpel-agent--action-summary
                     '(:tool "block-edit" :file "/tmp/a.el" :symbol "foo"))
-                   "foo in /tmp/a.el"))
+                   "block-edit: foo in /tmp/a.el"))
   (should (string= (scalpel-agent--action-summary
                     '(:tool "reply" :text "hi"))
-                   "hi"))
+                   "reply: hi"))
+  (should (string= (scalpel-agent--action-summary
+                    '(:tool "file-substitute" :pattern "PATTERN" :files '("/tmp/a.el" "/tmp/b.el")))
+                   "file-substitute: replace PATTERN in 2 file(s)"))
   (should (string= (scalpel-agent--action-summary
                     '(:tool "confirm" :reason "need input"))
-                   "need input")))
+                   "confirm: need input")))
 
 (ert-deftest scalpel-agent-test-shell-confirm-gated-by-flags ()
   "Only a long-running shell action asks; every other one runs unattended.
@@ -1448,12 +1451,12 @@ already in it and is not a way into it."
   "The summary falls back through file, then reason, then a placeholder."
   (should (string= (scalpel-agent--action-summary
                     '(:tool "file-delete" :file "/tmp/a.el"))
-                   "/tmp/a.el"))
+                   "file-delete: /tmp/a.el"))
   (should (string= (scalpel-agent--action-summary
                     '(:tool "shell" :reason "look around"))
-                   "look around"))
+                   "shell: look around"))
   (should (string= (scalpel-agent--action-summary '(:tool "shell"))
-                   "no reason")))
+                   "shell: no reason")))
 
 (ert-deftest scalpel-agent-test-delete-corrects-a-misnamed-file ()
   "A symbol named with a hallucinated path is corrected, not refused.
@@ -2442,7 +2445,7 @@ confirmed a rewrite without seeing what it would match."
            (scalpel-agent--action-summary
             '(:tool "file-substitute" :pattern "old-" :replacement "new-"
                     :files ("/a.el" "/b.el") :reason "bulk"))
-           "old- over 2 file(s)")))
+           "file-substitute: replace old- in 2 file(s)")))
 
 (ert-deftest scalpel-agent-test-run-records-rewrites-for-continuation ()
   "A rewrite round carries its report in :changes, so the console continues.

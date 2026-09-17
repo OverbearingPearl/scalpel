@@ -2279,23 +2279,29 @@ the environment the command runs in."
 
 (defun scalpel-agent--action-summary (action)
   "Return a one-line description of ACTION for the confirmation prompt.
-Prefer the action's target over its stated reason, so the user can
-see what is about to run or change; fall back to `:reason' when
-the action has no target."
-  (or (plist-get action :command)
-      (when (plist-get action :pattern)
-        (format "%s over %d file(s)"
-                (plist-get action :pattern)
-                (length (plist-get action :files))))
-      (plist-get action :text)
-      (let ((file (plist-get action :file))
-            (symbol (plist-get action :symbol))
-            (to (plist-get action :to)))
-        (cond ((and file to) (format "%s -> %s" file to))
-              ((and file symbol) (format "%s in %s" symbol file))
-              (file file)))
-      (plist-get action :reason)
-      "no reason"))
+Prefix the description with the action's tool name so the user can
+tell what the prompt is asking about.  Prefer the action's target
+over its stated reason; fall back to `:reason' when the action has
+no target."
+  (let ((tool (plist-get action :tool))
+        (detail
+         (or (plist-get action :command)
+             (when (plist-get action :pattern)
+               (format "replace %s in %d file(s)"
+                       (plist-get action :pattern)
+                       (length (plist-get action :files))))
+             (plist-get action :text)
+             (let ((file (plist-get action :file))
+                   (symbol (plist-get action :symbol))
+                   (to (plist-get action :to)))
+               (cond ((and file to) (format "%s -> %s" file to))
+                     ((and file symbol) (format "%s in %s" symbol file))
+                     (file file)))
+             (plist-get action :reason)
+             "no reason")))
+    (if tool
+        (format "%s: %s" tool detail)
+      detail)))
 
 (defun scalpel-agent-execute-action (action on-success on-error)
   "Execute a single ACTION plist, without blocking.

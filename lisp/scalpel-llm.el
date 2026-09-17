@@ -22,7 +22,7 @@
 (require 'gptel)
 (require 'gptel-transient)
 
-(defcustom scalpel-llm-timeout 90
+(defcustom scalpel-llm-timeout 120
   "Seconds of total callback silence before a request is abandoned.
 This is an *idle* budget, not a wall-clock deadline: every gptel
 callback -- content chunk, reasoning chunk, or completion -- resets the
