@@ -156,15 +156,32 @@ API key, `setup' for a failure raised synchronously by
 raised.  ON-ERROR is the request's terminal callback; a success
 callback which raises is re-delivered through ON-ERROR with :type
 `callback', and an error raised by ON-ERROR itself is only reported
-in the echo area rather than escaping into gptel's process filter."
+in the echo area rather than escaping into gptel's process filter.
+
+The progress callback is captured once at request start into a
+request-local binding, so a later request cannot redirect or
+freeze an earlier request's status updates; likewise the
+per-request download counter is local to this request and is the
+authoritative tally for the stream, with the global
+`scalpel-llm--tokens-received' mirrored from it after every chunk
+so existing readers keep working.  The mirror is informational
+only and shows the most recent request's tally.  The global
+`scalpel-llm--tokens-received' mirrors this request's tally for
+readers outside the request; it is no longer reset at request
+start, so a concurrent request cannot zero an earlier one's count."
   (message "Scalpel-debug: llm request start")
   (let* ((cancelled nil)
          (accumulated "")
          (timer nil)
          (deadline-timer nil)
-         (cancel-fn nil))
+         (cancel-fn nil)
+         ;; Per-request streaming state: a fresh download counter and a
+         ;; snapshot of the progress callback taken now, so two
+         ;; concurrent requests each keep their own tallies and their
+         ;; own status-line updates.
+         (received 0)
+         (progress scalpel-llm--progress-callback))
     (setq scalpel-llm--tokens-uploaded (scalpel-llm--count-tokens prompt))
-    (setq scalpel-llm--tokens-received 0)
     (setq scalpel-llm--total-uploaded
           (+ scalpel-llm--total-uploaded scalpel-llm--tokens-uploaded))
     (scalpel-llm--reset-reasoning-buffer)
@@ -283,27 +300,23 @@ in the echo area rather than escaping into gptel's process filter."
                              ;; Content chunk.
                              ((stringp resp)
                               (setq accumulated (concat accumulated resp))
-                              (setq scalpel-llm--tokens-received
-                                    (+ scalpel-llm--tokens-received
+                              (setq received
+                                    (+ received
                                        (scalpel-llm--count-tokens resp)))
-                              (setq scalpel-llm--total-received
-                                    (+ scalpel-llm--total-received
-                                       (scalpel-llm--count-tokens resp)))
-                              (when scalpel-llm--progress-callback
-                                (funcall scalpel-llm--progress-callback)))
+                              (setq scalpel-llm--tokens-received received)
+                              (when progress
+                                (funcall progress)))
                              ;; Reasoning chunk: delivered as the RESPONSE
                              ;; argument (a (reasoning . TEXT) cons).
                              ((and (consp resp) (eq (car resp) 'reasoning))
                               (when (stringp (cdr resp))
                                 (scalpel-llm--append-reasoning (cdr resp))
-                                (setq scalpel-llm--tokens-received
-                                      (+ scalpel-llm--tokens-received
+                                (setq received
+                                      (+ received
                                          (scalpel-llm--count-tokens (cdr resp))))
-                                (setq scalpel-llm--total-received
-                                      (+ scalpel-llm--total-received
-                                         (scalpel-llm--count-tokens (cdr resp))))
-                                (when scalpel-llm--progress-callback
-                                  (funcall scalpel-llm--progress-callback))))))))
+                                (setq scalpel-llm--tokens-received received)
+                                (when progress
+                                  (funcall progress))))))))
             (unless cancelled
               (arm-timeout)))
         (error
