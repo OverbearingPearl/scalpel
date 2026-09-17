@@ -269,21 +269,6 @@ First, install and configure `gptel`. A minimal setup using `use-package` is:
 (use-package gptel
   :ensure t
   :config
-  (setq my-deepseek-backend
-        (gptel-make-openai "DeepSeek"
-          :host "api.deepseek.com"
-          :endpoint "/chat/completions"
-          :stream t
-          :key (auth-source-pick-first-password :host "api.deepseek.com")
-          :models '("deepseek-v4-flash")))
-  (setq my-openrouter-backend
-        (gptel-make-openai "OpenRouter"
-          :host "openrouter.ai"
-          :endpoint "/api/v1/chat/completions"
-          :stream t
-          :key (auth-source-pick-first-password :host "openrouter.ai")
-          :models '("minimax/minimax-m2.7"
-                    "poolside/laguna-s-2.1")))
   (setq my-glm-low-backend
         (gptel-make-openai "OpenRouter-GLM-Low"
           :host "openrouter.ai"
@@ -292,10 +277,7 @@ First, install and configure `gptel`. A minimal setup using `use-package` is:
           :key (auth-source-pick-first-password :host "openrouter.ai")
           :models '("z-ai/glm-5.3-flash")
           :request-params '(:reasoning (:effort "low"))))
-  (setq gptel-backends (list my-deepseek-backend
-                             my-openrouter-backend
-                             my-glm-low-backend))
-  (setq gptel-backend my-deepseek-backend))
+  (setq gptel-backend my-glm-low-backend))
 ```
 
 Then install Scalpel itself:
