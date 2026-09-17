@@ -156,7 +156,42 @@ files the user actually added."
   "Return a `sandbox-exec' profile for the context FILES.
 Every context file is granted read access only."
   (scalpel-sandbox--file-paths files)
-  (let ((files (mapcar #'expand-file-name files)))
+  (let ((files (mapcar #'expand-file-name files))
+        (user-dirs (list "/opt/homebrew"
+                         (expand-file-name ".local/bin" "~")
+                         (expand-file-name ".local/pipx" "~")
+                         (expand-file-name ".cargo/bin" "~")
+                         (expand-file-name ".pyenv" "~")
+                         (expand-file-name ".cache/pre-commit" "~")
+                         (expand-file-name ".emacs.d/elpa" "~")
+                         "/Applications/Emacs.app"))
+        (git-dir (let ((dir (file-name-directory (car files))))
+                   (catch 'found
+                     (while dir
+                       (let ((entry (expand-file-name ".git" dir)))
+                         (if (file-exists-p entry)
+                             (throw 'found
+                                    (cons dir
+                                          (if (file-directory-p entry)
+                                              entry
+                                            ;; `.git' is a pointer file
+                                            ;; (`gitdir: <path>'): resolve the
+                                            ;; path it names against the repo
+                                            ;; directory.
+                                            (let ((target
+                                                   (string-trim
+                                                    (with-temp-buffer
+                                                      (insert-file-contents entry)
+                                                      (buffer-string)))))
+                                              (if (string-prefix-p "gitdir: " target)
+                                                  (expand-file-name
+                                                   (substring target 8)
+                                                   (directory-file-name dir))
+                                                entry)))))
+                           (let ((parent (file-name-directory
+                                          (directory-file-name dir))))
+                             (setq dir (and (not (equal parent dir)) parent))))))
+                     nil))))
     (concat
      "(version 1)\n"
      "(deny default)\n"
@@ -188,27 +223,35 @@ Every context file is granted read access only."
      "(allow file-read* (literal \"/private/var\"))\n"
      ;; `/var' and `/tmp' are symlinks into `/private'; resolving a
      ;; symlink is a read of the link itself, which no subpath rule
-     ;; covers.
+     ;; covers.  `/etc' is likewise a symlink to `/private/etc', and
+     ;; without a literal grant git dies with "unable to access
+     ;; '/etc/gitconfig': Operation not permitted" while resolving it.
      "(allow file-read* (literal \"/var\"))\n"
      "(allow file-read* (literal \"/tmp\"))\n"
-     ;; Every directory a context file sits under, at every level,
-     ;; gets a `literal' read grant.  Without them the shell cannot
-     ;; resolve a context file's own parent: `cd' into it reports
-     ;; ENOTDIR and `getcwd' fails, so globs such as `lisp/*.el'
-     ;; expand to nothing -- and the error names the sandbox to the
-     ;; user, which the whole design is meant to hide.  The grant is
+     "(allow file-read* (literal \"/etc\"))\n"
+     ;; Every directory a context file or a user tool directory sits
+     ;; under, at every level, gets a `literal' read grant.  Without
+     ;; them the shell cannot resolve a file's own parent: `cd' into it
+     ;; reports ENOTDIR and `getcwd' fails, so globs such as
+     ;; `lisp/*.el' expand to nothing -- and the error names the
+     ;; sandbox to the user, which the whole design is meant to hide.
+     ;; A subpath rule on the leaf does not make `~' or `~/.local'
+     ;; themselves resolvable, so `~/.local/bin/pre-commit' would fail
+     ;; with "Operation not permitted" during lookup.  The grant is
      ;; `literal', never `subpath': the directory entry itself is
      ;; readable, so paths through it resolve and the shell can list
      ;; it, but opening a sibling file still needs a grant of its
      ;; own, which only the context files get.  Only the canonical
      ;; spelling is emitted, because the sandbox canonicalizes its
      ;; rules at compile time and the other spelling would be the
-     ;; same rule twice.
+     ;; same rule twice.  All ancestor chains, for context files and
+     ;; user tool directories alike, are computed in a single
+     ;; dedup'd pass over one list of strings.
      (mapconcat
       (lambda (dir)
         (format "(allow file-read* (literal %S))" (file-truename dir)))
       (delete-dups
-       (cl-loop for f in files
+       (cl-loop for f in (append files user-dirs)
                 append (scalpel-sandbox--ancestor-dirs f)))
       "\n")
      "\n"
@@ -228,20 +271,89 @@ Every context file is granted read access only."
       (list "/tmp" "/var/folders")
       "\n")
      "\n"
-     ;; System runtimes the shell and its tools need in order to start.
-     ;; These are read-only; writes stay bounded to context files and
-     ;; the temporary directories above.
-     (mapconcat #'identity
-                (list "(allow file-read* (subpath \"/bin\"))"
-                      "(allow file-read* (subpath \"/usr/bin\"))"
-                      "(allow file-read* (subpath \"/usr/sbin\"))"
-                      "(allow file-read* (subpath \"/sbin\"))"
-                      "(allow file-read* (subpath \"/usr/lib\"))"
-                      "(allow file-read* (subpath \"/usr/share\"))"
-                      "(allow file-read* (subpath \"/System/Library\"))"
-                      "(allow file-read* (subpath \"/Library/Apple\"))"
-                      "(allow file-read* (subpath \"/private/etc\"))")
-                "\n")
+     ;; System runtimes, Homebrew, and the user's tool directories that
+     ;; the shell and its tools need in order to start.  These are
+     ;; read-only; writes stay bounded to context files, `/dev/null',
+     ;; the temporary directories above, and pre-commit's cache.
+     (mapconcat
+      (lambda (dir)
+        (format "(allow file-read* (subpath %S))" (expand-file-name dir "~")))
+      (list "/bin" "/usr/bin" "/usr/sbin" "/sbin" "/usr/lib"
+            "/usr/share" "/System/Library" "/Library/Apple"
+            "/private/etc")
+      "\n")
+     "\n"
+     (mapconcat
+      (lambda (dir)
+        (format "(allow file-read* (subpath %S))"
+                (expand-file-name dir "~")))
+      (list "/opt/homebrew" ".local/bin" ".local/pipx" ".cargo/bin" ".pyenv" ".cache/pre-commit" ".emacs.d/elpa")
+      "\n")
+     "\n"
+     (mapconcat
+      (lambda (dir)
+        (format "(allow file-read* (subpath %S))" dir))
+      (list "/Applications/Emacs.app")
+      "\n")
+     "\n"
+     ;; Git reads the user-level git configuration before anything
+     ;; else it does, so the sandbox must grant it read access or
+     ;; every git invocation fails while probing the config.
+     (format "(allow file-read* (literal %S))"
+             (expand-file-name ".gitconfig" "~"))
+     "\n"
+     (format "(allow file-read* (subpath %S))"
+             (expand-file-name ".config/git" "~"))
+     "\n"
+     ;; Resolving `~/.gitconfig' by name requires the home directory
+     ;; entry itself to be readable, just like the `~/.local' ancestor
+     ;; grants above; `literal' covers the directory entry only, not
+     ;; its other contents.
+     (format "(allow file-read* (literal %S))" (expand-file-name "~"))
+     "\n"
+     (format "(allow file-write* (subpath %S))"
+             (expand-file-name ".cache/pre-commit" "~"))
+     "\n"
+     ;; The repository's git metadata is not a context file, but
+     ;; pre-commit's git invocations must read and lock it (index
+     ;; locks, hook state), so it is granted read and write access.
+     ;; This is the one non-context directory tree intentionally
+     ;; writable inside the sandbox.  Repositories reached through a
+     ;; submodule `gitdir:' pointer file put their metadata elsewhere
+     ;; (typically a sibling `.git/modules/...' tree), so the pointer
+     ;; is resolved and the real metadata directory is granted,
+     ;; read-write; everything else stays under the context-files
+     ;; boundary.  The ancestor chain of the resolved metadata
+     ;; directory also needs `literal' read grants, because a relative
+     ;; `gitdir:' path only resolves when every directory on the way
+     ;; is nameable.  The pointer file itself lives in the repo
+     ;; directory -- the directory whose `.git' entry was found, which
+     ;; may be above the first context file's directory -- so the
+     ;; literal grant must name that directory's `.git' entry, not the
+     ;; context file's.
+     (if git-dir
+         (concat (format "(allow file-read* (literal %S))\n"
+                         (expand-file-name ".git" (car git-dir)))
+                 (mapconcat
+                  (lambda (dir)
+                    (format "(allow file-read* (literal %S))" (file-truename dir)))
+                  (delete-dups
+                   (scalpel-sandbox--ancestor-dirs (cdr git-dir)))
+                  "\n")
+                 "\n"
+                 (format "(allow file-read* (subpath %S))" (cdr git-dir))
+                 "\n"
+                 (format "(allow file-write* (subpath %S))" (cdr git-dir))
+                 "\n")
+       "")
+     "\n"
+     ;; `/usr/bin/git' is an Xcode CLT shim: `xcode-select' locates the
+     ;; developer tools through this symlink, and the shim itself must
+     ;; read the real git under CommandLineTools.  Without these grants
+     ;; the shim fails with "xcode-select: error ... Operation not
+     ;; permitted" instead of running git.
+     "(allow file-read* (literal \"/var/db/xcode-select-link\"))\n"
+     "(allow file-read* (subpath \"/Library/Developer\"))\n"
      "\n"
      ;; Only the context files themselves are readable: each file is
      ;; named with a `literal' filter, never its parent directory.
