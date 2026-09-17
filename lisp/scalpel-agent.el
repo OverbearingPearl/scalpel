@@ -1831,6 +1831,50 @@ Names are compared as truenames, which is how
                scalpel-agent--context-files)
        t))
 
+(defconst scalpel-agent--context-near-miss-min-prefix 2
+  "Minimum number of path components that must agree for a near miss.
+With 2, at least the root and one directory must match; a shared
+home directory alone is not a hint.")
+
+(defun scalpel-agent--context-near-miss (file &optional min-prefix)
+  "Suggest the context entries closest to FILE for a refusal note.
+
+Resolve FILE the same way `scalpel-agent--context-file-p' does (via
+`file-truename' and `expand-file-name'), then score each entry in
+`scalpel-agent--context-files' by the length of the common
+directory-style prefix, comparing path components split on \"/\" so
+that /Users/madachuan and /Users/madaduan stop differing at the
+component level, not mid-word.  As a tiebreak within the same prefix
+length, prefer the entry whose basename is closest.
+
+Only entries sharing at least MIN-PREFIX path components (default
+`scalpel-agent--context-near-miss-min-prefix') are considered.
+Return nil when no entry qualifies, or the list of qualifying
+absolute path strings (all ties) otherwise.  This function never
+decides a correction, it only ranks facts for the caller to print as
+\"closest context entries (for comparison)\"."
+  (let* ((min (or min-prefix scalpel-agent--context-near-miss-min-prefix))
+         (target (file-truename (expand-file-name file)))
+         (target-parts (split-string target "/" t))
+         scored)
+    (dolist (entry scalpel-agent--context-files)
+      (let* ((entry-path (file-truename (expand-file-name entry)))
+             (entry-parts (split-string entry-path "/" t))
+             (common 0)
+             (limit (min (length target-parts) (length entry-parts))))
+        (while (and (< common limit)
+                    (string-equal (nth common target-parts)
+                                  (nth common entry-parts)))
+          (setq common (1+ common)))
+        (when (>= common min)
+          (push (cons entry common) scored))))
+    (when scored
+      (let ((top (apply #'max (mapcar #'cdr scored))))
+        (mapcar #'car
+                (nreverse (cl-remove-if-not
+                           (lambda (pair) (= (cdr pair) top))
+                           scored)))))))
+
 (defun scalpel-agent--byte-prefix (text max-bytes)
   "Return the longest prefix of TEXT within MAX-BYTES bytes.
 Return TEXT itself when it already fits.  The cut never lands
@@ -1867,8 +1911,13 @@ states the true size.  Output holding a NUL byte is withheld."
   (unless (scalpel-agent--context-file-p file)
     (user-error
      (concat "Scalpel: %s is not in the context; ask the user to add it "
-             "with a confirm action instead of reading it")
-     file))
+             "with a confirm action instead of reading it%s")
+     file
+     (let ((near (scalpel-agent--context-near-miss file)))
+       (if near
+           (format "\nNote: the closest context entries are: %s (for comparison only; verify the exact spelling against the context listing above)"
+                   (string-join near ", "))
+         ""))))
   (let ((resolved (file-truename (expand-file-name file))))
     (if symbol
         (let* ((hit (scalpel-agent--resolve-symbol resolved symbol))
