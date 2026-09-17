@@ -818,7 +818,7 @@ the same command over and over."
             ;; ...but the trailing instruction is the continuation, not
             ;; the user's original words.
             (should (string-suffix-p
-                     scalpel-console--continuation-instruction
+                     scalpel-prompt--continuation-instruction
                      (car prompts)))
             (should-not (string-match-p "User instruction:\nrun the tests"
                                         (car prompts)))))

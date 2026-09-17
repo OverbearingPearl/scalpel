@@ -180,6 +180,13 @@ larger than the number of names the file holds."
       ;; document order.
       (delete-dups (funcall list-symbols file)))))
 
+;; Built-in YAML provider.
+(scalpel-locate-register-provider
+ "\\.ya?ml\\'"
+ (list :locate #'scalpel-locate-yaml-range
+       :list-symbols #'scalpel-locate-yaml-list-symbols
+       :single-definition-p #'scalpel-locate-yaml--single-definition-p))
+
 ;; Built-in Emacs Lisp provider.
 (scalpel-locate-register-provider
  "\\.el\\'"

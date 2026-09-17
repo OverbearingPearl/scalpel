@@ -65,6 +65,27 @@ all of it; give me the essence again, briefly."
 Structural contract shared by that command and
 `scalpel-console-mode-map', which binds it.")
 
+(defconst scalpel-prompt--summarize-continued
+  "Continue from where the previous round stopped. Do not restate or
+repeat work already committed; pick up the task in progress and drive
+it to completion. When finished, emit the structured summary required
+below.
+
+Structural contract: scalpel-console--run-rounds parses this
+instruction's round output for the final summary block and uses it to
+decide whether another round is needed. Do not alter the delimiters or
+field names of that block."
+  "Fixed continuation instruction sent on every continued round.
+
+This text is the continuation-side half of the structural contract
+with `scalpel-console--run-rounds': the console drives rounds and
+inspects the summary block that this instruction requires the model
+to emit.  Moved verbatim from scalpel-console.el.")
+
+(defconst scalpel-prompt--continuation-instruction
+  "The action from the previous round already ran; its output\nis in the conversation above.  Read that output and decide\nnow: if it already answers the user's request, reply with\nthe conclusion; otherwise issue at most one concrete next\naction.  Do not repeat that action."
+  "Instruction sent on a continued round, after a report was\nproduced and the planner is asked to continue.\n\nThe user's original instruction is already in the\nconversation at that point, so re-sending it would only make\nthe planner re-issue the same action.  This wording instead\npoints the planner at the previous round's output and asks it\nto either conclude or issue at most one next action.\n\nIt deliberately names no action kind: a round that only read\na definition is continued the same way as one that ran a\nshell command, and scalpel-console--run-rounds tests :reads\nalongside :shells using this same text.\n\nThis is a structural contract shared with\nscalpel-console--run-rounds; changing the wording here\nrequires checking that caller.")
+
 (defconst scalpel-prompt--symbol-name-rule
   "A definition's name is taken literally, character for character.
 `llm-pick-view-cache-dir' and `llm-pick-view--cache-dir' are two
@@ -82,6 +103,14 @@ for while the file held `llm-pick-view-cache-dir', and
 separator the planner had re-spelled from memory, with the SYMBOLS
 list stating the right spelling all along.  Nothing in the code can
 prevent the spelling, so the rule has to be stated to the model.")
+
+(defconst scalpel-prompt--block-edit-prompt
+  (concat "Signature: %s\n\nCurrent block:\n%s\n\n" "Instruction: %s\n\n" "Return only the full replacement block, written in " "the same language as the block above, as plain " "text. Do not include markdown fences or " "explanations. If the requested change is impossible or " "unnecessary for this block, return exactly: NO_CHANGE")
+  "Replacement-round prompt sent by `scalpel-agent-block-edit'.
+It is formatted with the block's signature line, current body
+and the edit instruction.  The trailing NO_CHANGE literal is the
+structural contract shared with `scalpel-agent--no-change-sentinel',
+which the reply is compared against.")
 
 (defconst scalpel-prompt--substitute-pattern-rule
   "The regular-expression dialect a file-substitute pattern is read in.
@@ -121,6 +150,22 @@ placeholder of a *replacement*, and a pattern that writes it asks
 for a literal ampersand: nothing in the code can read the wanted
 backreference back out of it, so the writing rule has to be stated
 to the model as well.")
+
+(defconst scalpel-prompt--block-insert-prompt
+  (concat "Anchor signature: %s\n\n"
+          "Instruction: %s\n\n"
+          "Return only the full new definition to insert "
+          "immediately after the anchor, written in the "
+          "same language as the anchor, as plain text. Do "
+          "not include markdown fences or explanations. "
+          "If nothing should be created, return exactly: "
+          "NO_CHANGE")
+  "Creation-round prompt sent by `scalpel-agent-block-insert'.
+Formatted with two arguments: the anchor's signature line and
+the insertion instruction.  The trailing NO_CHANGE literal is
+the structural contract shared with
+`scalpel-agent--no-change-sentinel': an LLM response consisting
+exactly of that token signals that nothing should be created.")
 
 (defcustom scalpel-prompt-system-prompt
   (concat

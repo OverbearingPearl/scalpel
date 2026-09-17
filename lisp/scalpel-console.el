@@ -130,20 +130,6 @@ screen.  The console carries it as display properties only, never as
 buffer text, so it can reach neither the conversation nor the
 pending-input scanner.")
 
-(defconst scalpel-console--continuation-instruction
-  (concat "The action from the previous round already ran; its output\n"
-          "is in the conversation above.  Read that output and decide\n"
-          "now: if it already answers the user's request, reply with\n"
-          "the conclusion; otherwise issue at most one concrete next\n"
-          "action.  Do not repeat that action.")
-  "Instruction sent on a continued round after a report was produced.
-The user's original instruction is already in the conversation, so
-re-sending it makes the planner re-issue the same action.  The
-wording names no action kind on purpose: a round that only read a
-definition is continued the same way, and
-`scalpel-console--run-rounds' tests `:reads' alongside `:shells'.
-Structural contract shared with `scalpel-console--run-rounds'.")
-
 (defvar-local scalpel-console--root nil
   "Absolute directory this console session is anchored to.
 Set by `scalpel-console-open'; while non-nil, `default-directory'
@@ -1411,7 +1397,7 @@ read a file, may be followed by another, up to
 Whether a round actually continues is decided by
 `scalpel-console--continue-p', which questions the user only when
 the round's output is noisy.  A continued round sends
-`scalpel-console--continuation-instruction' instead of INSTRUCTION:
+`scalpel-prompt--continuation-instruction' instead of INSTRUCTION:
 the original instruction is already inside the history, and
 re-sending it makes the planner run the same shell command again.
 `scalpel-console--busy' is set here and cleared at every terminal
@@ -1471,7 +1457,7 @@ round."
                             (message "%s" notice)))
                          ((scalpel-console--continue-p round-result)
                           (setq next-instruction
-                                scalpel-console--continuation-instruction)
+                                scalpel-prompt--continuation-instruction)
                           (run-next))
                          (t
                           (finish-operation t))))

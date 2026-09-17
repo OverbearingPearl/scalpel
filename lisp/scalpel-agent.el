@@ -1237,13 +1237,7 @@ the edit."
                             (goto-char beg)
                             (buffer-substring-no-properties
                              beg (line-end-position))))
-               (prompt (concat "Signature: %s\n\nCurrent block:\n%s\n\n"
-                               "Instruction: %s\n\n"
-                               "Return only the full replacement block, written in "
-                               "the same language as the block above, as plain "
-                               "text. Do not include markdown fences or "
-                               "explanations. If the requested change is impossible or "
-                               "unnecessary for this block, return exactly: NO_CHANGE")))
+               (prompt scalpel-prompt--block-edit-prompt))
           (scalpel-llm-request-async
            (format prompt signature body instruction)
            (lambda (new-text)
@@ -1306,14 +1300,7 @@ ON-ERROR receives a plist (:type SYMBOL :message STRING)."
         (let* ((anchor-end (cdr anchor-range))
                (anchor-body (buffer-substring-no-properties
                              (car anchor-range) anchor-end))
-               (prompt (concat "Anchor signature: %s\n\n"
-                               "Instruction: %s\n\n"
-                               "Return only the full new definition to insert "
-                               "immediately after the anchor, written in the "
-                               "same language as the anchor, as plain text. Do "
-                               "not include markdown fences or explanations. "
-                               "If nothing should be created, return exactly: "
-                               "NO_CHANGE")))
+               (prompt scalpel-prompt--block-insert-prompt))
           (scalpel-llm-request-async
            (format prompt
                    (save-excursion

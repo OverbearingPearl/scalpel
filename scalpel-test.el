@@ -12,6 +12,7 @@
 (require 'package)
 (package-initialize)
 (require 'ert)
+(require 'scalpel)
 
 (defvar scalpel-test--package-root
   (or (and load-file-name (file-name-directory load-file-name))
