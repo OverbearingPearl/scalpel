@@ -286,7 +286,7 @@ Then install Scalpel itself:
 (use-package scalpel
   :load-path "~/path/to/scalpel"   ; replace with the actual path
   :after (gptel)
-  :commands (scalpel-open)
+  :commands (scalpel-open))
 ```
 
 After evaluating the above, run `M-x scalpel-open`.
