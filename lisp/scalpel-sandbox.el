@@ -40,7 +40,7 @@ experimental and keep it out of default trust decisions."
         (expand-file-name ".cargo" "~")
         (expand-file-name ".pyenv" "~")
         (cons (expand-file-name ".cache/pre-commit" "~") t)
-        (expand-file-name ".emacs.d/elpa" "~"))
+        (locate-user-emacs-file "elpa"))
   "Additional directories granted to the macOS sandbox profile.
 
 Each entry is passed to `scalpel-sandbox--macos-profile', which maps it
@@ -62,7 +62,8 @@ Only entries verified to be required by the toolchain are kept by
 default: Homebrew, Emacs.app (needed so pre-commit does not fall back
 to \"Operation not permitted\"), and the user tool trees under the
 home directory (~/.local, ~/.cargo, ~/.pyenv, ~/.cache/pre-commit as a
-writable grant, and ~/.emacs.d/elpa).  Do not add credential files,
+writable grant, and the Emacs package directory given by
+`locate-user-emacs-file' \"elpa\").  Do not add credential files,
 package caches, or broad home subpaths (~/.netrc, ~/.gem, ~/.npm,
 ~/.stack, ~/work etc.); each extra grant widens the sandbox profile
 for every spawned tool.
@@ -201,10 +202,12 @@ tool directories are granted according to `scalpel-sandbox-extra-grants'."
   (scalpel-sandbox--file-paths files)
   (let ((files (mapcar #'expand-file-name files))
         (extra-grants scalpel-sandbox-extra-grants)
-        (git-excludes (or (ignore-errors (string-trim
-                                          (car (process-lines
-                                                "git" "config" "--global"
-                                                "core.excludesFile"))))
+        (git-excludes (or (condition-case nil
+                            (string-trim
+                             (car (process-lines
+                                   "git" "config" "--global"
+                                   "core.excludesFile")))
+                          (error nil))
                           (expand-file-name ".gitignore_global" "~")))
         (git-dir (let ((dir (file-name-directory (car files))))
                    (catch 'found

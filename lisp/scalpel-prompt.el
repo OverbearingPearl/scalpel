@@ -10,21 +10,19 @@
 
 ;; The prompt text sent to the planner LLM, and nothing else: the
 ;; constants and the assembly of the system prompt.  No dispatch, no
-;; context, no execution logic lives here.  Names keep their
-;; `scalpel-agent-' spelling so existing references and tests keep
-;; working; the module boundary is about responsibility, not spelling.
+;; context, no execution logic lives here.
 
 ;;; Code:
 
-(defconst scalpel-agent--prompt-example
+(defconst scalpel-prompt--example
   "[{\"tool\":\"reply\",\"text\":\"hello\"}]"
-  "Correct-response example embedded in `scalpel-agent-system-prompt'.
+  "Correct-response example embedded in `scalpel-prompt-system-prompt'.
 Structural contract shared by the prompt, which shows it, and the
 test that parses it: an example the parser rejects would teach the
 planner a shape that fails, and the prompt would then be describing
 a system other than this one.")
 
-(defconst scalpel-agent--reply-brevity-rule
+(defconst scalpel-prompt--reply-brevity-rule
   (concat
    "Keep a reply action's \"text\" short: at most a few sentences "
    "stating the conclusion the user asked for.  Analysis, file "
@@ -34,14 +32,40 @@ a system other than this one.")
    "backend's output budget is cut off mid-JSON, and every action "
    "in it -- including the ones already complete -- is thrown away.")
   "Constraint bounding how long a reply may be.
-Structural contract shared by `scalpel-agent-system-prompt', which
+Structural contract shared by `scalpel-prompt-system-prompt', which
 appends it, and the test that guards it.  Nothing in the code can
 bound what the model writes, so the bound has to be stated to the
 model.  The failure it prevents is a reply cut off mid-JSON by the
 backend's output limit, which loses the whole round, and the suite
 cannot see it because every reply there is mocked.")
 
-(defconst scalpel-agent--symbol-name-rule
+(defconst scalpel-prompt--decide-for-me
+  "I leave the choice to you: pick the best option yourself and act on it."
+  "Fixed prompt sent by `scalpel-console-send-decide-for-me' (C-c C-y).
+Structural contract shared by that command and
+`scalpel-console-mode-map', which binds it.")
+
+(defconst scalpel-prompt--replan
+  "I am not satisfied with your plan.  Think it over again and give me a better one."
+  "Fixed prompt sent by `scalpel-console-send-replan' (C-c C-n).
+Structural contract shared by that command and
+`scalpel-console-mode-map', which binds it.")
+
+(defconst scalpel-prompt--why
+  "Why did this happen?  What does it mean?  Investigate thoroughly and
+explain in detail; I want the root cause."
+  "Fixed prompt sent by `scalpel-console-send-why' (C-c C-w).
+Structural contract shared by that command and
+`scalpel-console-mode-map', which binds it.")
+
+(defconst scalpel-prompt--summarize
+  "Too verbose -- summarize.  I do not have the patience to read
+all of it; give me the essence again, briefly."
+  "Fixed prompt sent by `scalpel-console-send-summarize' (C-c C-s).
+Structural contract shared by that command and
+`scalpel-console-mode-map', which binds it.")
+
+(defconst scalpel-prompt--symbol-name-rule
   "A definition's name is taken literally, character for character.
 `llm-pick-view-cache-dir' and `llm-pick-view--cache-dir' are two
 different names, and only one of them exists.  The SYMBOLS list under
@@ -50,7 +74,7 @@ there instead of re-spelling it from memory; a name the file does not
 hold fails the action before anything is edited, and the round is
 spent on the failure."
   "Rule that a symbol name is copied from the context, never re-spelled.
-Structural contract shared by `scalpel-agent-system-prompt', which
+Structural contract shared by `scalpel-prompt-system-prompt', which
 embeds it, and the test that guards it.  The failures it addressed
 returned across several rounds: `llm-pick-view--cache-dir' was asked
 for while the file held `llm-pick-view-cache-dir', and
@@ -59,7 +83,7 @@ separator the planner had re-spelled from memory, with the SYMBOLS
 list stating the right spelling all along.  Nothing in the code can
 prevent the spelling, so the rule has to be stated to the model.")
 
-(defconst scalpel-agent--substitute-pattern-rule
+(defconst scalpel-prompt--substitute-pattern-rule
   "The regular-expression dialect a file-substitute pattern is read in.
 A file-substitute \"pattern\" is an Emacs regular expression, not a
 sed or grep one, and the dialects disagree about escaped brackets:
@@ -83,7 +107,7 @@ really holds one.  To match the same run of text twice inside one
 pattern, name it once inside \"\\(\" and \"\\)\" and write \"\\1\"
 for the second occurrence."
   "Statement of the regular-expression dialect a pattern is read in.
-Structural contract shared by `scalpel-agent-system-prompt', which
+Structural contract shared by `scalpel-prompt-system-prompt', which
 embeds it, and the test that guards it.  The trap it closes is not
 hypothetical: a planner wrote \"\\(emacs ...\\)\" for a literal
 bracket, which in Emacs syntax is a group, so the brackets it aimed
@@ -98,7 +122,7 @@ for a literal ampersand: nothing in the code can read the wanted
 backreference back out of it, so the writing rule has to be stated
 to the model as well.")
 
-(defcustom scalpel-agent-system-prompt
+(defcustom scalpel-prompt-system-prompt
   (concat
    "You are a precise code transformation planner.
 
@@ -109,7 +133,7 @@ error naming what you wrote instead, and the work does not happen.
 
 Correct response:
 "
-   scalpel-agent--prompt-example
+   scalpel-prompt--example
    "
 
 Text outside the array is discarded unread, so a greeting, a
@@ -163,7 +187,7 @@ finding things -- grep, ls, git log -- and file-peek for looking
 at code itself.  Do not read the same definition twice: nothing changes
 between rounds unless you changed it.
 "
-   scalpel-agent--symbol-name-rule
+   scalpel-prompt--symbol-name-rule
    "
 A file-substitute applies one mechanical textual transformation
 across several files at once -- the bulk change no sequence of
@@ -179,7 +203,7 @@ many files; a change confined to one spot, even one definition,
 is block-edit work no matter how mechanical it is, and shell is
 only for reading.
 "
-   scalpel-agent--substitute-pattern-rule
+   scalpel-prompt--substitute-pattern-rule
    "
 Never invent commands the user did not ask for, and never use shell
 to change files: all file changes go through block-edit,
@@ -268,7 +292,7 @@ code to understand it is expected; simulating an edit against it is
 wasted effort.
 Never emit code or diff text in this response.
 "
-   scalpel-agent--reply-brevity-rule)
+   scalpel-prompt--reply-brevity-rule)
   "System prompt for the Scalpel agent planner.
 This controls only the wording sent to the LLM; the action schema
 is fixed by `scalpel-agent--tool-fields' and
@@ -276,7 +300,7 @@ is fixed by `scalpel-agent--tool-fields' and
   :type 'string
   :group 'scalpel)
 
-(defcustom scalpel-agent-cod-prompt
+(defcustom scalpel-prompt-cod-prompt
   (concat
    "You may write a short private draft of your reasoning before
 the JSON array, at most five words per step.  The draft is

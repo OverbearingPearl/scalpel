@@ -92,7 +92,7 @@ Structural contract shared by the replacement prompt in
 `scalpel-agent-block-edit' and its no-op check.")
 
 (defcustom scalpel-agent-cod-enabled nil
-  "Non-nil means append `scalpel-agent-cod-prompt' to the system prompt."
+  "Non-nil means append `scalpel-prompt-cod-prompt' to the system prompt."
   :type 'boolean
   :group 'scalpel)
 
@@ -745,8 +745,8 @@ as a planner error."
          (funcall on-success (cdr parsed)))))
    on-error
    (if scalpel-agent-cod-enabled
-       (concat scalpel-agent-system-prompt "\n\n" scalpel-agent-cod-prompt)
-     scalpel-agent-system-prompt)))
+       (concat scalpel-prompt-system-prompt "\n\n" scalpel-prompt-cod-prompt)
+     scalpel-prompt-system-prompt)))
 
 (defun scalpel-agent--locate-candidates (symbol)
   "Return one (FILE . RANGE) per context file that define SYMBOL.
@@ -1760,7 +1760,7 @@ file does not hold, so it truncates both walks at the same point, and
 the earlier wording was withheld on exactly that account while the
 quoted line held no reason the planner could act on.
 
-The worked example in `scalpel-agent--substitute-pattern-rule' is the
+The worked example in `scalpel-prompt--substitute-pattern-rule' is the
 prevention this sentence is the fallback for: the prose rule alone did
 not stop the escaped spelling, which came back three rounds running,
 each time refusing for matching nothing.")

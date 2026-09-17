@@ -1000,11 +1000,11 @@ whose text keeps the original answer readable."
 Regression: `shell' was dispatchable and implemented but absent
 from the system prompt, so the planner could never emit it."
   (dolist (tool scalpel-agent--tool-vocabulary)
-    (ert-info ((format "Tool %S is not declared in `scalpel-agent-system-prompt'"
+    (ert-info ((format "Tool %S is not declared in `scalpel-prompt-system-prompt'"
                        tool))
       (should (string-match-p
                (format "\"tool\"[ \t]*:[ \t]*\"%s\"" (regexp-quote tool))
-               scalpel-agent-system-prompt)))))
+               scalpel-prompt-system-prompt)))))
 
 (ert-deftest scalpel-agent-test-edit-prompt-asks-in-the-file-language ()
   "The edit prompt names no language of its own.
@@ -1065,12 +1065,12 @@ inside the same system message."
                           (lambda (_err) nil)))
     (ert-info ((format "System prompt:\n%S" system))
       (should system)
-      (should (string-match-p (regexp-quote scalpel-agent-cod-prompt)
+      (should (string-match-p (regexp-quote scalpel-prompt-cod-prompt)
                               system))
-      (should (string-match-p (regexp-quote scalpel-agent--prompt-example)
+      (should (string-match-p (regexp-quote scalpel-prompt--example)
                               system))
       (should (string-match-p
-               (regexp-quote scalpel-agent--reply-brevity-rule)
+               (regexp-quote scalpel-prompt--reply-brevity-rule)
                system)))))
 
 (ert-deftest scalpel-agent-test-shell-runs-command-through-a-shell ()
@@ -1180,7 +1180,7 @@ confirmation prompt even though nothing verified it; the prompt is
 now driven by \"long-running\" alone, so the field must not be
 requested from the planner."
   (should-not (memq :read-only (cdr (assoc "shell" scalpel-agent--tool-fields))))
-  (should-not (string-match-p "read-only" scalpel-agent-system-prompt)))
+  (should-not (string-match-p "read-only" scalpel-prompt-system-prompt)))
 
 (ert-deftest scalpel-agent-test-shell-report-is-delimited ()
   "Shell reports name the command, state the exit status, and end."

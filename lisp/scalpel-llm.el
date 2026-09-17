@@ -36,7 +36,7 @@ token arrives, which is why the default leaves room above the older
   :type 'integer
   :group 'scalpel-llm)
 
-(defcustom scalpel-llm-deadline 300
+(defcustom scalpel-llm-deadline 1800
   "Seconds from the moment a request is sent until it is abandoned.
 It is independent of `scalpel-llm-timeout'.  Unlike the idle
 budget, this deadline is never reset by callbacks, so a backend

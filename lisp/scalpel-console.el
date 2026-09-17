@@ -448,6 +448,11 @@ caller can delete them without invalidating earlier ones."
     (define-key map (kbd "C-c C-f") #'scalpel-console-forget-history)
     (define-key map (kbd "C-c C-e") #'scalpel-console-repeat)
     (define-key map (kbd "C-c C-o") #'scalpel-console-toggle-output)
+    ;; Fixed-prompt quick messages.
+    (define-key map (kbd "C-c C-y") #'scalpel-console-send-decide-for-me)
+    (define-key map (kbd "C-c C-n") #'scalpel-console-send-replan)
+    (define-key map (kbd "C-c C-w") #'scalpel-console-send-why)
+    (define-key map (kbd "C-c C-s") #'scalpel-console-send-summarize)
     map)
   "Keymap used in Scalpel console buffers.")
 
@@ -1181,7 +1186,7 @@ session the next round will run against."
          (breakdown
           (with-current-buffer target
             (list :system (scalpel-llm--count-tokens
-                           scalpel-agent-system-prompt)
+                           scalpel-prompt-system-prompt)
                   :context (scalpel-llm--count-tokens
                             (scalpel-agent-context))
                   :history (scalpel-llm--count-tokens (or history ""))
@@ -1493,6 +1498,48 @@ guard all behave exactly as if the user had typed it again."
       (user-error "Scalpel: no previous instruction to repeat"))
     (goto-char (point-max))
     (insert scalpel-console--last-instruction "\n")
+    (scalpel-console-send-line)))
+
+(defun scalpel-console-send-decide-for-me ()
+  "Send a fixed prompt telling the model to decide for the user.
+Interactive companion to `scalpel-console-repeat': the fixed prompt
+lives in `scalpel-prompt--decide-for-me' on purpose, beside
+the planner's other prompt text."
+  (interactive)
+  (with-current-buffer (scalpel-console--target-buffer)
+    (goto-char (point-max))
+    (insert (concat scalpel-prompt--decide-for-me "\n"))
+    (scalpel-console-send-line)))
+
+(defun scalpel-console-send-replan ()
+  "Send a fixed prompt asking the model to propose a better plan.
+The fixed prompt lives in `scalpel-prompt--replan' on
+purpose, beside the planner's other prompt text."
+  (interactive)
+  (with-current-buffer (scalpel-console--target-buffer)
+    (goto-char (point-max))
+    (insert scalpel-prompt--replan "\n")
+    (scalpel-console-send-line)))
+
+(defun scalpel-console-send-why ()
+  "Send a fixed prompt asking for the root cause.
+
+The fixed prompt lives in `scalpel-prompt--why' on purpose, beside the
+planner's other prompt text."
+  (interactive)
+  (with-current-buffer (scalpel-console--target-buffer)
+    (goto-char (point-max))
+    (insert scalpel-prompt--why "\n")
+    (scalpel-console-send-line)))
+
+(defun scalpel-console-send-summarize ()
+  "Send a fixed prompt asking the model to summarize more concisely.
+The fixed prompt lives in `scalpel-prompt--summarize' on
+purpose, beside the planner's other prompt text."
+  (interactive)
+  (with-current-buffer (scalpel-console--target-buffer)
+    (goto-char (point-max))
+    (insert (concat scalpel-prompt--summarize "\n"))
     (scalpel-console-send-line)))
 
 (defun scalpel-console--busy-p ()
