@@ -33,6 +33,48 @@ experimental and keep it out of default trust decisions."
   :type 'file
   :group 'scalpel)
 
+(defcustom scalpel-sandbox-extra-grants
+  (list "/opt/homebrew"
+        "/Applications/Emacs.app"
+        (expand-file-name ".local" "~")
+        (expand-file-name ".cargo" "~")
+        (expand-file-name ".pyenv" "~")
+        (cons (expand-file-name ".cache/pre-commit" "~") t)
+        (expand-file-name ".emacs.d/elpa" "~"))
+  "Additional directories granted to the macOS sandbox profile.
+
+Each entry is passed to `scalpel-sandbox--macos-profile', which maps it
+onto a sandbox profile grant:
+
+  * A string DIR is expanded with `expand-file-name' (so an absolute
+    path is used as-is, while a relative path is resolved against the
+    home directory) and granted read-only access as a subpath
+    (\"(subpath \\\"DIR\\\")\"), which covers DIR itself and every
+    file or subdirectory beneath it.
+
+  * A cons cell (DIR . t) is handled like a plain string, but the
+    directory is additionally granted read-write access, i.e. a write
+    subpath rule is appended on top of the read-only rule.  Reserve
+    this for directories a tool genuinely must modify (e.g. the
+    pre-commit cache).
+
+Only entries verified to be required by the toolchain are kept by
+default: Homebrew, Emacs.app (needed so pre-commit does not fall back
+to \"Operation not permitted\"), and the user tool trees under the
+home directory (~/.local, ~/.cargo, ~/.pyenv, ~/.cache/pre-commit as a
+writable grant, and ~/.emacs.d/elpa).  Do not add credential files,
+package caches, or broad home subpaths (~/.netrc, ~/.gem, ~/.npm,
+~/.stack, ~/work etc.); each extra grant widens the sandbox profile
+for every spawned tool.
+
+Entries are not validated beyond path expansion, so nonexistent or
+misspelled directories may cause `sandbox-exec' to reject the whole
+profile.  Prefer the narrowest grant that makes the tool work."
+  :type '(repeat (choice (string :tag "Read-only directory (subpath)")
+                         (cons (string :tag "Directory")
+                               (const :tag "Writable (DIR . t)" t))))
+  :group 'scalpel-sandbox)
+
 (defconst scalpel-sandbox--probe-sentinel "SCALPEL-SANDBOX-PROBE-OK"
   "Output a working sandbox must print back from its probe run.
 Structural contract shared by `scalpel-sandbox--preflight' and the
@@ -154,17 +196,11 @@ files the user actually added."
 
 (defun scalpel-sandbox--macos-profile (files)
   "Return a `sandbox-exec' profile for the context FILES.
-Every context file is granted read access only."
+Every context file is granted read access only.  Additional
+tool directories are granted according to `scalpel-sandbox-extra-grants'."
   (scalpel-sandbox--file-paths files)
   (let ((files (mapcar #'expand-file-name files))
-        (user-dirs (list "/opt/homebrew"
-                         (expand-file-name ".local/bin" "~")
-                         (expand-file-name ".local/pipx" "~")
-                         (expand-file-name ".cargo/bin" "~")
-                         (expand-file-name ".pyenv" "~")
-                         (expand-file-name ".cache/pre-commit" "~")
-                         (expand-file-name ".emacs.d/elpa" "~")
-                         "/Applications/Emacs.app"))
+        (extra-grants scalpel-sandbox-extra-grants)
         (git-excludes (or (ignore-errors (string-trim
                                           (car (process-lines
                                                 "git" "config" "--global"
@@ -234,29 +270,32 @@ Every context file is granted read access only."
      "(allow file-read* (literal \"/var\"))\n"
      "(allow file-read* (literal \"/tmp\"))\n"
      "(allow file-read* (literal \"/etc\"))\n"
-     ;; Every directory a context file or a user tool directory sits
-     ;; under, at every level, gets a `literal' read grant.  Without
-     ;; them the shell cannot resolve a file's own parent: `cd' into it
-     ;; reports ENOTDIR and `getcwd' fails, so globs such as
-     ;; `lisp/*.el' expand to nothing -- and the error names the
-     ;; sandbox to the user, which the whole design is meant to hide.
-     ;; A subpath rule on the leaf does not make `~' or `~/.local'
-     ;; themselves resolvable, so `~/.local/bin/pre-commit' would fail
-     ;; with "Operation not permitted" during lookup.  The grant is
-     ;; `literal', never `subpath': the directory entry itself is
-     ;; readable, so paths through it resolve and the shell can list
-     ;; it, but opening a sibling file still needs a grant of its
-     ;; own, which only the context files get.  Only the canonical
-     ;; spelling is emitted, because the sandbox canonicalizes its
-     ;; rules at compile time and the other spelling would be the
-     ;; same rule twice.  All ancestor chains, for context files and
-     ;; user tool directories alike, are computed in a single
-     ;; dedup'd pass over one list of strings.
+     ;; Every directory a context file sits under, at every level,
+     ;; gets a `literal' read grant.  Without them the shell cannot
+     ;; resolve a file's own parent: `cd' into it reports ENOTDIR and
+     ;; `getcwd' fails, so globs such as `lisp/*.el' expand to
+     ;; nothing -- and the error names the sandbox to the user, which
+     ;; the whole design is meant to hide.  A subpath rule on the leaf
+     ;; does not make `~' or `~/.local' themselves resolvable, so
+     ;; `~/.local/bin/pre-commit' would fail with "Operation not
+     ;; permitted" during lookup.  The grant is `literal', never
+     ;; `subpath': the directory entry itself is readable, so paths
+     ;; through it resolve and the shell can list it, but opening a
+     ;; sibling file still needs a grant of its own, which only the
+     ;; context files get.  Only the canonical spelling is emitted,
+     ;; because the sandbox canonicalizes its rules at compile time
+     ;; and the other spelling would be the same rule twice.  User
+     ;; tool directories granted through `scalpel-sandbox-extra-grants'
+     ;; get their own ancestor literal chains, generated the same way,
+     ;; so their paths are nameable too.
      (mapconcat
       (lambda (dir)
         (format "(allow file-read* (literal %S))" (file-truename dir)))
       (delete-dups
-       (cl-loop for f in (append files user-dirs)
+       (cl-loop for f in (append files
+                                 (mapcar (lambda (g)
+                                           (if (consp g) (car g) g))
+                                         extra-grants))
                 append (scalpel-sandbox--ancestor-dirs f)))
       "\n")
      "\n"
@@ -276,10 +315,11 @@ Every context file is granted read access only."
       (list "/tmp" "/var/folders")
       "\n")
      "\n"
-     ;; System runtimes, Homebrew, and the user's tool directories that
-     ;; the shell and its tools need in order to start.  These are
-     ;; read-only; writes stay bounded to context files, `/dev/null',
-     ;; the temporary directories above, and pre-commit's cache.
+     ;; System runtimes needed by the shell and its tools in order to
+     ;; start.  These are read-only; writes stay bounded to context
+     ;; files, `/dev/null', the temporary directories above, and
+     ;; whatever the user grants write access to via
+     ;; `scalpel-sandbox-extra-grants'.
      (mapconcat
       (lambda (dir)
         (format "(allow file-read* (subpath %S))" (expand-file-name dir "~")))
@@ -288,17 +328,21 @@ Every context file is granted read access only."
             "/private/etc")
       "\n")
      "\n"
+     ;; User tool directories.  Every entry is explicit configuration
+     ;; in `scalpel-sandbox-extra-grants': a plain string grants the
+     ;; directory read-only as a subpath, a cons cell (DIR . write)
+     ;; grants it read-write.  The defaults reproduce exactly what
+     ;; the profile builder used to hardcode.
      (mapconcat
-      (lambda (dir)
-        (format "(allow file-read* (subpath %S))"
-                (expand-file-name dir "~")))
-      (list "/opt/homebrew" ".local/bin" ".local/pipx" ".cargo/bin" ".pyenv" ".cache/pre-commit" ".emacs.d/elpa")
-      "\n")
-     "\n"
-     (mapconcat
-      (lambda (dir)
-        (format "(allow file-read* (subpath %S))" dir))
-      (list "/Applications/Emacs.app")
+      (lambda (grant)
+        (let ((dir (expand-file-name (if (consp grant) (car grant) grant) "~"))
+              (write (and (consp grant) (cdr grant))))
+          (concat (format "(allow file-read* (subpath %S))" dir)
+                  (if write
+                      (concat "\n"
+                              (format "(allow file-write* (subpath %S))" dir))
+                    ""))))
+      extra-grants
       "\n")
      "\n"
      ;; Git reads the user-level git configuration before anything
@@ -318,13 +362,10 @@ Every context file is granted read access only."
      (and (file-exists-p git-excludes)
           (format "(allow file-read* (literal %S))\n" git-excludes))
      ;; Resolving `~/.gitconfig' by name requires the home directory
-     ;; entry itself to be readable, just like the `~/.local' ancestor
-     ;; grants above; `literal' covers the directory entry only, not
-     ;; its other contents.
+     ;; entry itself to be readable, just like the ancestor grants
+     ;; above; `literal' covers the directory entry only, not its
+     ;; other contents.
      (format "(allow file-read* (literal %S))" (expand-file-name "~"))
-     "\n"
-     (format "(allow file-write* (subpath %S))"
-             (expand-file-name ".cache/pre-commit" "~"))
      "\n"
      ;; The repository's git metadata is not a context file, but
      ;; pre-commit's git invocations must read and lock it (index
