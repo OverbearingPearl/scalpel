@@ -1169,6 +1169,29 @@ it."
           (should (= asked 1)))
         (should (= ran 2))))))
 
+(ert-deftest scalpel-agent-test-shell-decline-is-successful-outcome ()
+  "A user decline of a confirmed action is a successful outcome.
+ON-SUCCESS is called with a report naming the decline, so the round continues
+instead of ending.  The shell function itself must never run."
+  (let* ((asks 0)
+         (ran-shell nil)
+         (success-report nil)
+         (error-called nil))
+    (cl-letf (((symbol-function 'yes-or-no-p)
+               (lambda (_prompt) (setq asks (1+ asks)) nil))
+              ((symbol-function 'scalpel-agent-shell)
+               (lambda (_command _callback) (setq ran-shell t) "report")))
+      (scalpel-agent-execute-action
+       '(:tool "shell" :command "make test" :reason "run" :long-running t)
+       (lambda (report) (setq success-report report))
+       (lambda (err) (setq error-called t)
+         (ert-fail (plist-get err :message))))
+      (should (= 1 asks))
+      (should-not ran-shell)
+      (should-not error-called)
+      (should (stringp success-report))
+      (should (string-match-p "declined by the user" success-report)))))
+
 (ert-deftest scalpel-agent-test-system-prompt-states-the-pattern-dialect ()
   "The prompt states the regular-expression dialect a pattern is read in.
 Regression: the prompt asked for \"a regular expression\" and named

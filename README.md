@@ -405,7 +405,10 @@ Scalpel is in active, deliberately small MVP stages.
   action runs without a confirmation prompt (the report names the created
   path in full), unlike the file-level actions (`file-rename`,
   `file-delete`), which are always confirmed because they decide which
-  files exist
+  files exist; when the user declines the confirmation, the action does not
+  run and the decline is reported back to the planner as a normal result, so
+  the round continues and the planner finds another way instead of the session
+  stopping
 - Mechanical batch rewriting through the `file-substitute` action: the planner names
   context files, a pattern and a replacement, Scalpel applies the change itself
   and reports every file and occurrence count; the whole rewrite is computed
@@ -428,8 +431,6 @@ Scalpel is in active, deliberately small MVP stages.
 
 Contributions are welcome, especially around locator providers and the agent
 loop.
-
----
 
 ## Contributing
 

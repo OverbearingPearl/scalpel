@@ -220,8 +220,13 @@ seconds: a test suite, a build, a formatter, a download.  It is
 required on every shell action.  A shell action marked
 long-running is confirmed with the user first, because the editor
 is frozen until the command returns; every other shell action
-runs immediately.  Declare it truthfully: leaving it false on a
-command that hangs the editor takes the choice away from the
+runs immediately.  When the user declines a confirmed action, the
+next round's report says that the action was declined and did not
+run; a decline is feedback about one means, not a failure of the
+task, so continue planning another way -- or explain, with a
+confirm action, when no alternative exists -- and never re-emit
+the same declined action.  Declare it truthfully: leaving it false
+on a command that hangs the editor takes the choice away from the
 user.
 Reading code is a file-peek action, not a shell command: use
 {\"tool\":\"file-peek\",\"file\":\"...\",\"symbol\":\"name\"} to see one
@@ -282,7 +287,11 @@ touch the definitions inside it and does not update any other
 file's require, import or path references, so those remain the
 user's responsibility.
 The file-rename and file-delete actions are effectful and are
-always confirmed by the user before they run.
+always confirmed by the user before they run.  A user decline of
+any confirmation is not a failure: the action simply did not run,
+and the report says so -- continue the work another way or explain
+why nothing else is possible, instead of repeating the declined
+action or stopping as if the task had failed.
 Shell commands run with the context files above as the whole
 filesystem: they are the only files you may read, whether through a
 shell command or a file-peek action, and they must be named by the
@@ -2487,13 +2496,16 @@ the action has no target."
 ON-SUCCESS receives the report string.  ON-ERROR receives a plist
 \(:type SYMBOL :message STRING); the type is `sandbox' when a shell
 action was refused by the sandbox, so a caller can keep the
-boundary out of the conversation.  Actions that issue no LLM
-request (`reply', `confirm', `file-create', `block-delete',
-`file-rename', `file-delete', `file-peek', `shell') settle
-synchronously; `block-edit' and `block-insert' settle
-from their LLM's callback.  ON-SUCCESS and ON-ERROR run outside
-the internal error guard, so an error they raise escapes instead
-of being re-framed as an action failure."
+boundary out of the conversation.  A declined confirmation is a
+successful outcome: ON-SUCCESS receives a report stating that the
+action was declined by the user and did not run, so the caller's
+loop continues; ON-ERROR is not used for user declines.  Actions
+that issue no LLM request (`reply', `confirm', `file-create',
+`block-delete', `file-rename', `file-delete', `file-peek',
+`shell') settle synchronously; `block-edit' and `block-insert'
+settle from their LLM's callback.  ON-SUCCESS and ON-ERROR run
+outside the internal error guard, so an error they raise escapes
+instead of being re-framed as an action failure."
   (cl-block scalpel-agent-execute-action
     (let ((tool (plist-get action :tool)))
       (unless (member tool scalpel-agent--tool-vocabulary)
@@ -2505,10 +2517,9 @@ of being re-framed as an action failure."
         (unless (yes-or-no-p (format "Execute %s action: %s?"
                                      tool
                                      (scalpel-agent--action-summary action)))
-          (funcall on-error
-                   (list :type 'cancelled
-                         :message (format "Scalpel: %s action cancelled by user"
-                                          tool)))
+          (funcall on-success
+                   (format "The %s action was declined by the user and did not run; continue without it or find another way."
+                           tool))
           (cl-return-from scalpel-agent-execute-action)))
       (pcase tool
         ("block-edit"

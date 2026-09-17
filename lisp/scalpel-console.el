@@ -1369,21 +1369,29 @@ user, because its output may cost more in tokens than it is
 worth.  The question names every command together with its output
 size, so a command that dumped a large file is visible before its
 output is sent back.  Batch runs never continue, so an unattended
-run can never block on a prompt."
+run can never block on a prompt.
+
+Return t to continue normally.  Return the symbol `declined' when
+the user refused to send the noisy output back, so the next round
+must continue without that output (the caller appends a note
+saying the commands ran but their output was withheld from the
+conversation).  Return nil to stop."
   (pcase scalpel-console-continue-after-shell
     ('always t)
     ('ask (or (not (scalpel-console--noisy-round-p result))
               (and (not noninteractive)
-                   (yes-or-no-p
-                    (format "Send the output of %s back to Scalpel anyway? (%s)?"
-                            (if (= (length (plist-get result :shells)) 1)
-                                "this command"
-                              (format "these %d commands"
-                                      (length (plist-get result :shells))))
-                            (string-join
-                             (mapcar #'scalpel-console--shell-description
-                                     (plist-get result :shells))
-                             ", "))))))
+                   (if (yes-or-no-p
+                        (format "Send the output of %s back to Scalpel anyway? (%s)?"
+                                (if (= (length (plist-get result :shells)) 1)
+                                    "this command"
+                                  (format "these %d commands"
+                                          (length (plist-get result :shells))))
+                                (string-join
+                                 (mapcar #'scalpel-console--shell-description
+                                         (plist-get result :shells))
+                                 ", ")))
+                       t
+                     'declined))))
     (_ nil)))
 
 (defun scalpel-console--run-rounds (instruction history)
@@ -1572,7 +1580,9 @@ is killed releases its hold with no separate lock cleanup."
                 ;; anything else into typed input.
                 (let ((inhibit-read-only t))
                   (goto-char (point-max))
-                  (setq scalpel-console--roger-marker (copy-marker (point) t))
+                  ;; The marker must not advance on insert, so it stays at the
+                  ;; start of the Roger line for --run-round to delete.
+                  (setq scalpel-console--roger-marker (copy-marker (point)))
                   (insert (propertize "Scalpel: Roger. Working...\n"
                                       'face 'shadow
                                       'scalpel-console-ack t
