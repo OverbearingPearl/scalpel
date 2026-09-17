@@ -1007,25 +1007,35 @@ from the system prompt, so the planner could never emit it."
                scalpel-prompt-system-prompt)))))
 
 (ert-deftest scalpel-agent-test-edit-prompt-asks-in-the-file-language ()
-  "The edit prompt names no language of its own.
-Regression: it asked for \"plain Emacs Lisp text\" while the
-locator layer serves Markdown, YAML and .gitignore too, so an edit
-aimed at a heading section was told to answer in a language the
-file is not written in; the replacement is validated per language
-by `scalpel-locate-single-definition-p'."
-  (scalpel-utils-test-with-temp-file ".md"
-    (with-temp-file this-file (insert "# Alpha\nbody\n\n# Beta\n"))
-    (let ((prompt nil))
-      (cl-letf (((symbol-function 'scalpel-llm-request-async)
-                 (lambda (p _on-success on-error &optional _system)
-                   (setq prompt p)
-                   (funcall on-error (list :type 'test :message "stop")))))
-        (scalpel-agent-block-edit this-file "Alpha" "tighten the wording"
-                            (lambda (_report) nil)
-                            (lambda (_err) nil)))
-      (ert-info ((format "Prompt:\n%S" prompt))
-        (should prompt)
-        (should-not (string-match-p "Emacs Lisp" prompt))))))
+  "The edit prompt uses the formatting rule for the target file."
+  (let ((prompt nil)
+        (elisp-rule (regexp-quote scalpel-prompt-elisp--format-rule)))
+    (cl-letf (((symbol-function 'scalpel-llm-request-async)
+               (lambda (p _on-success on-error &optional _system)
+                 (setq prompt p)
+                 (funcall on-error
+                          (list :type 'test :message "stop")))))
+      (scalpel-utils-test-with-temp-file ".md"
+        (with-temp-file this-file
+          (insert "# Alpha\nbody\n\n# Beta\n"))
+        (scalpel-agent-block-edit
+         this-file "Alpha" "tighten the wording"
+         (lambda (_report) nil)
+         (lambda (_err) nil))
+        (ert-info ((format "Markdown prompt:\n%S" prompt))
+          (should prompt)
+          (should-not (string-match-p elisp-rule prompt))))
+      (setq prompt nil)
+      (scalpel-utils-test-with-temp-file ".el"
+        (with-temp-file this-file
+          (insert "(defun alpha ()\n  \"Return alpha.\"\n  'alpha)\n"))
+        (scalpel-agent-block-edit
+         this-file "alpha" "tighten the wording"
+         (lambda (_report) nil)
+         (lambda (_err) nil))
+        (ert-info ((format "Emacs Lisp prompt:\n%S" prompt))
+          (should prompt)
+          (should (string-match-p elisp-rule prompt)))))))
 
 (ert-deftest scalpel-agent-test-create-prompt-requests-no-change-sentinel ()
   "The create prompt asks for the sentinel the code compares against.

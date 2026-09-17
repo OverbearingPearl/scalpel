@@ -40,13 +40,18 @@ backend's output limit, which loses the whole round, and the suite
 cannot see it because every reply there is mocked.")
 
 (defconst scalpel-prompt--decide-for-me
-  "The choice is yours: if you've reached a conclusion and judge the fix safe, implement it now; if a choice remains open, pick the best option and act."
+  "The choice is yours: if you've reached a conclusion and judge
+the fix safe, implement it now; if a choice remains open, pick
+the best option and act."
   "Fixed prompt sent by `scalpel-console-send-decide-for-me' (C-c C-y).
 Structural contract shared by that command and
 `scalpel-console-mode-map', which binds it.")
 
 (defconst scalpel-prompt--replan
-  "Your previous approach is rejected.  If you already applied changes, revert them cleanly first.  Abandon that line of thinking entirely, rethink from scratch, and give me a new plan (or carry it out directly if action was expected)."
+  "Your previous approach is rejected.  If you already applied
+changes, revert them cleanly first.  Abandon that line of
+thinking entirely, rethink from scratch, and give me a new plan
+(or carry it out directly if action was expected)."
   "Fixed prompt sent by `scalpel-console-send-replan' (C-c C-n).
 Covers two cases: the previous round may have been a mere
 proposal, or it may already have been implemented -- in the latter
@@ -96,8 +101,26 @@ inspects the summary block that this instruction requires the model
 to emit.  Moved verbatim from scalpel-console.el.")
 
 (defconst scalpel-prompt--continuation-instruction
-  "The action from the previous round already ran; its output\nis in the conversation above.  Read that output and decide\nnow: if it already answers the user's request, reply with\nthe conclusion; otherwise issue at most one concrete next\naction.  Do not repeat that action."
-  "Instruction sent on a continued round, after a report was\nproduced and the planner is asked to continue.\n\nThe user's original instruction is already in the\nconversation at that point, so re-sending it would only make\nthe planner re-issue the same action.  This wording instead\npoints the planner at the previous round's output and asks it\nto either conclude or issue at most one next action.\n\nIt deliberately names no action kind: a round that only read\na definition is continued the same way as one that ran a\nshell command, and scalpel-console--run-rounds tests :reads\nalongside :shells using this same text.\n\nThis is a structural contract shared with\nscalpel-console--run-rounds; changing the wording here\nrequires checking that caller.")
+  "The action from the previous round already ran; its output is in the
+conversation above.  Read that output and decide now: if it already
+answers the user's request, reply with the conclusion; otherwise issue
+at most one concrete next action.  Do not repeat that action."
+  "Instruction sent on a continued round, after a report was produced.
+The planner is asked to continue.
+
+The user's original instruction is already in the conversation at
+that point, so re-sending it would only make the planner re-issue the
+same action.  This wording instead points the planner at the previous
+round's output and asks it to either conclude or issue at most one
+next action.
+
+It deliberately names no action kind: a round that only read a
+definition is continued the same way as one that ran a shell command,
+and scalpel-console--run-rounds tests :reads alongside :shells using
+this same text.
+
+This is a structural contract shared with scalpel-console--run-rounds;
+changing the wording here requires checking that caller.")
 
 (defconst scalpel-prompt--symbol-name-rule
   "A definition's name is taken literally, character for character.
@@ -107,7 +130,7 @@ each file in the context states the spelling, so copy a name from
 there instead of re-spelling it from memory; a name the file does not
 hold fails the action before anything is edited, and the round is
 spent on the failure."
-  "Rule that a symbol name is copied from the context, never re-spelled.
+  "State that a symbol name is copied from the context, never re-spelled.
 Structural contract shared by `scalpel-prompt-system-prompt', which
 embeds it, and the test that guards it.  The failures it addressed
 returned across several rounds: `llm-pick-view--cache-dir' was asked
@@ -117,8 +140,66 @@ separator the planner had re-spelled from memory, with the SYMBOLS
 list stating the right spelling all along.  Nothing in the code can
 prevent the spelling, so the rule has to be stated to the model.")
 
+(defconst scalpel-prompt--format-rule
+  "Wrap generated prose in strings, docstrings, and comments readably
+within 80 columns at natural word boundaries.
+
+Preserve non-prose or layout-sensitive content, including regular
+expressions, JSON, code examples, URLs, tables, structured data, and
+exact-spacing text, even when it exceeds 80 columns."
+  "Language-agnostic formatting rule for generated text.
+Language-specific formatting belongs to per-language prompt providers.")
+
+(defvar scalpel-prompt-language-rules nil
+  "Store language-specific prompt rules as filename regexp entries.
+
+Each entry maps a filename regexp to a prompt string.  Later registration
+replaces an entry having the same regexp.")
+
+(defun scalpel-prompt-register-prompt-language-rule (filename-regexp rule)
+  "Register RULE as the prompt rule for FILENAME-REGEXP.
+FILENAME-REGEXP is a regular expression matched against a file name.
+RULE is the language-specific prompt rule used for matching files."
+  (setq scalpel-prompt-language-rules
+        (cons (cons filename-regexp rule)
+              (assoc-delete-all filename-regexp
+                                scalpel-prompt-language-rules))))
+
+(defun scalpel-prompt-language-rule-for-file (file)
+  "Return the rule string registered for FILE's language, or nil.
+The registry contains (FILENAME-REGEXP . RULE) pairs.  A rule
+matches when FILE, the full absolute name, matches the entry's
+regexp."
+  (assoc-default file scalpel-prompt-language-rules
+                 (lambda (regexp name)
+                   (string-match-p regexp name))))
+
+(defconst scalpel-prompt--code-format-rule
+  "The code you emit must be readable, not merely balanced.  Keep
+lines at most 80 characters, counting from column 0, when doing so
+is safe.  When prose in a string, docstring, or comment would run
+past 80 columns, wrap it at a safe word boundary and continue at
+the indentation appropriate to the language.  Never wrap content
+whose layout is meaningful, including regular expressions, JSON,
+code examples, URLs, tables, and heredoc-style text.  Leave such
+content unchanged even when it is long.  Apply language-specific
+formatting rules separately."
+  "Language-agnostic rule for readable code and safe prose wrapping.
+
+This structural contract is embedded by `scalpel-prompt-system-prompt'
+and guarded by its tests.  It covers only formatting shared across
+languages.  Emacs Lisp-specific string, docstring, and sentence-spacing
+conventions belong in `scalpel-prompt-elisp--format-rule'.  The locate
+and execute layers guarantee balanced forms, not readability.")
+
 (defconst scalpel-prompt--block-edit-prompt
-  (concat "Signature: %s\n\nCurrent block:\n%s\n\n" "Instruction: %s\n\n" "Return only the full replacement block, written in " "the same language as the block above, as plain " "text. Do not include markdown fences or " "explanations. If the requested change is impossible or " "unnecessary for this block, return exactly: NO_CHANGE")
+  (concat "Signature: %s\n\nCurrent block:\n%s\n\n"
+          "Instruction: %s\n\n"
+          "Return only the full replacement block, written in "
+          "the same language as the block above, as plain "
+          "text. Do not include markdown fences or "
+          "explanations. If the requested change is impossible or "
+          "unnecessary for this block, return exactly: NO_CHANGE")
   "Replacement-round prompt sent by `scalpel-agent-block-edit'.
 It is formatted with the block's signature line, current body
 and the edit instruction.  The trailing NO_CHANGE literal is the
@@ -246,6 +327,7 @@ at code itself.  Do not read the same definition twice: nothing changes
 between rounds unless you changed it.
 "
    scalpel-prompt--symbol-name-rule
+   scalpel-prompt--format-rule
    "
 A file-substitute applies one mechanical textual transformation
 across several files at once -- the bulk change no sequence of

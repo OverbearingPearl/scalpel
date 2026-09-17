@@ -41,6 +41,8 @@
 Structural contract, not user configuration: dispatch in
 `scalpel-agent-execute-action' must stay in sync with it.")
 
+(require 'scalpel-prompt-elisp)
+
 (require 'scalpel-prompt)
 
 (defconst scalpel-agent--tool-fields
@@ -1237,9 +1239,13 @@ the edit."
                             (goto-char beg)
                             (buffer-substring-no-properties
                              beg (line-end-position))))
-               (prompt scalpel-prompt--block-edit-prompt))
+               (prompt scalpel-prompt--block-edit-prompt)
+               (language-rule
+                (scalpel-prompt-language-rule-for-file file)))
           (scalpel-llm-request-async
-           (format prompt signature body instruction)
+           (concat (format prompt signature body instruction)
+                   (when language-rule
+                     (concat "\n\n" language-rule)))
            (lambda (new-text)
              (message "Scalpel-debug: edit reply arrived for %s" symbol)
              (let ((new-text (scalpel-agent--usable-replacement file new-text)))
@@ -1300,15 +1306,19 @@ ON-ERROR receives a plist (:type SYMBOL :message STRING)."
         (let* ((anchor-end (cdr anchor-range))
                (anchor-body (buffer-substring-no-properties
                              (car anchor-range) anchor-end))
-               (prompt scalpel-prompt--block-insert-prompt))
+               (prompt scalpel-prompt--block-insert-prompt)
+               (language-rule (scalpel-prompt-language-rule-for-file file)))
           (scalpel-llm-request-async
-           (format prompt
-                   (save-excursion
-                     (goto-char (car anchor-range))
-                     (buffer-substring-no-properties
-                      (car anchor-range)
-                      (line-end-position)))
-                   instruction)
+           (concat
+            (format prompt
+                    (save-excursion
+                      (goto-char (car anchor-range))
+                      (buffer-substring-no-properties
+                       (car anchor-range)
+                       (line-end-position)))
+                    instruction)
+            (when language-rule
+              (concat "\n\n" language-rule)))
            (lambda (new-text)
              (let ((new-text (scalpel-agent--usable-replacement file new-text)))
                (cond

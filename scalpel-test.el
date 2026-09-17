@@ -23,11 +23,19 @@
 (add-to-list 'load-path (expand-file-name "lisp" scalpel-test--package-root))
 
 (defun scalpel-test--lisp-files ()
-  "Return Scalpel `lisp' directory file names (no directory)."
+  "Return Lisp file names sorted alphabetically.
+Place `scalpel-prompt.el' first to allow it to register rules before
+`scalpel-prompt-elisp.el' runs."
   (sort
    (directory-files (expand-file-name "lisp" scalpel-test--package-root)
                     nil "^[^.]+\\.el$")
-   #'string<))
+   (lambda (a b)
+    (cond
+     ((and (equal a "scalpel-prompt.el")
+           (equal b "scalpel-prompt-elisp.el")) t)
+     ((and (equal a "scalpel-prompt-elisp.el")
+           (equal b "scalpel-prompt.el")) nil)
+     (t (string< a b))))))
 
 (defun scalpel-test--file-feature (file)
   "Return the feature symbol FILE provides.
