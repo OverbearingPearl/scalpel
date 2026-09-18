@@ -1281,21 +1281,30 @@ session the next round will run against."
                            (scalpel-console--append
                             (format "Scalpel error: %s" (plist-get err :message)))
                          (let* ((inhibit-read-only t)
-                                (err-beg (point)))
+                                (err-beg (point))
+                                (category (scalpel-diagnose-category
+                                           (plist-get err :type)))
+                                (header
+                                 (cond
+                                  ((eq category 'planner)
+                                   (format "Scalpel planner error: %s\n%s\n\n"
+                                           (plist-get err :message)
+                                           (scalpel-diagnose-advice err)))
+                                  ((eq category 'context)
+                                   ;; Retry advice is useless here: the
+                                   ;; instruction will fail again until the
+                                   ;; missing context exists, but the remedy
+                                   ;; must still be stated, so the
+                                   ;; category-advice table is no longer dead
+                                   ;; code on the render path.
+                                   (format "Scalpel context error: %s\n%s\n\n"
+                                           (plist-get err :message)
+                                           (scalpel-diagnose-advice err)))
+                                  (t
+                                   (format "Scalpel error: %s\n\n"
+                                           (plist-get err :message))))))
                            (scalpel-console--insert-tagged
-                            (if (scalpel-console--planner-error-p err)
-                                ;; A planner-output failure ran nothing, so
-                                ;; the header names the model as the part that
-                                ;; failed and the advice comes from the
-                                ;; diagnose module, keyed by the error type:
-                                ;; a retry for a malformed reply, a backend
-                                ;; switch for one written as a tool call, a
-                                ;; rephrasing for one written as prose.
-                                (format "Scalpel planner error: %s\n%s\n\n"
-                                        (plist-get err :message)
-                                        (scalpel-diagnose-advice err))
-                              (format "Scalpel error: %s\n\n"
-                                      (plist-get err :message)))
+                            header
                             'assistant)
                            ;; The failure is dimmed for reading only: the
                            ;; turn still joins the conversation, so this

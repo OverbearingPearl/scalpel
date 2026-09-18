@@ -1771,6 +1771,41 @@ not tell that resending the instruction was the whole fix."
                        (scalpel-console--history))))))
       (scalpel-utils-test-kill-buffer (buffer-name buf)))))
 
+(ert-deftest scalpel-console-test-context-error-gets-retry-header ()
+  "A context-category failure is headed with its remedy like a planner failure.
+
+Regression: the context advice in the diagnose table was unreachable from
+the console render path, so an out-of-context file read printed only the raw
+message with no advice."
+  (let ((scalpel-agent--context-files nil)
+        (buf (scalpel-console-test--new-console-buffer)))
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'scalpel-llm-request-async)
+                     (lambda (_prompt _on-success on-error &rest _)
+                       (funcall on-error
+                                (list :type 'file-outside-context
+                                      :message "/tmp/foo.el is not in the context")))))
+            (with-current-buffer buf
+              (erase-buffer)
+              (insert "read /tmp/foo.el\n")
+              (goto-char (point-min))
+              (scalpel-console-send-line)))
+          (with-current-buffer buf
+            (goto-char (point-min))
+            (should (re-search-forward
+                     "^Scalpel context error" nil t))
+            (goto-char (match-beginning 0))
+            (should (eq (get-text-property (point) 'face)
+                        'scalpel-console-planner-error-face))
+            (let ((remedy (scalpel-diagnose-advice-for 'file-outside-context)))
+              (should remedy)
+              (should (string-match-p (regexp-quote remedy)
+                                      (buffer-string))))
+            (should (string-match-p "context error"
+                                    (scalpel-console--history)))))
+      (scalpel-utils-test-kill-buffer (buffer-name buf)))))
+
 (ert-deftest scalpel-console-test-tool-call-advice-names-the-backend-switch ()
   "A reply in tool-call syntax is answered with the backend switch.
 Regression: this failure was met with the same retry advice as a
