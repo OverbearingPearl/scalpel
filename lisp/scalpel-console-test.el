@@ -1756,7 +1756,7 @@ not tell that resending the instruction was the whole fix."
               (should (string-match-p "Scalpel planner error" (buffer-string)))
               (should (string-match-p "missing required field" (buffer-string)))
               (should (string-match-p
-                       (regexp-quote scalpel-console--retry-advice)
+                       (regexp-quote (scalpel-diagnose-advice-for 'parse))
                        (buffer-string)))
               ;; The failure header is dimmed for reading, while the
               ;; turn still joins the conversation.
@@ -1776,6 +1776,7 @@ not tell that resending the instruction was the whole fix."
 Regression: this failure was met with the same retry advice as a
 truncated or malformed reply, so a user whose backend reproduces
 the reply verbatim had no exit from the loop.
+The advice asserted here comes from scalpel-diagnose.
 The subject is the advice, not dispatch: no dialect is registered
 here, so the reply reaches the default parser and is refused there
 whatever backend and model the test session carries."
@@ -1787,9 +1788,7 @@ whatever backend and model the test session carries."
           (cl-letf (((symbol-function 'scalpel-llm-request-async)
                      (lambda (_prompt on-success _on-error &optional _system)
                        (funcall on-success
-                                (concat "<tool_call>shell<arg_key>command"
-                                        "</arg_key><arg_value>ls</arg_value>"
-                                        "</tool_call>")))))
+                                (concat "<tool_call>shell<arg_key>command</arg_key><arg_value>ls</arg_value></tool_call>")))))
             (with-current-buffer buf
               (erase-buffer)
               (insert "look around\n")
@@ -1800,12 +1799,12 @@ whatever backend and model the test session carries."
               (should (string-match-p "Scalpel planner error"
                                       (buffer-string)))
               (should (string-match-p
-                       (regexp-quote scalpel-console--tool-call-advice)
+                       (regexp-quote (scalpel-diagnose-advice-for 'tool-call))
                        (buffer-string)))
               ;; The advice must name the binding that switches
               ;; backends, not a key that happens to exist.
               (should (string-match-p "C-c C-b"
-                                      scalpel-console--tool-call-advice)))))
+                                      (scalpel-diagnose-advice-for 'tool-call))))))
       (scalpel-utils-test-kill-buffer (buffer-name buf)))))
 
 (ert-deftest scalpel-console-test-prose-reply-is-delivered ()

@@ -39,6 +39,7 @@
 
 (require 'cl-lib)
 (require 'scalpel-agent)
+(require 'scalpel-diagnose)
 (require 'scalpel-token)
 
 (defcustom scalpel-console-buffer-name-format "*scalpel: %s*"
@@ -1285,16 +1286,14 @@ session the next round will run against."
                             (if (scalpel-console--planner-error-p err)
                                 ;; A planner-output failure ran nothing, so
                                 ;; the header names the model as the part that
-                                ;; failed and the advice says what helps: a
-                                ;; retry for a malformed reply, a backend
+                                ;; failed and the advice comes from the
+                                ;; diagnose module, keyed by the error type:
+                                ;; a retry for a malformed reply, a backend
                                 ;; switch for one written as a tool call, a
                                 ;; rephrasing for one written as prose.
                                 (format "Scalpel planner error: %s\n%s\n\n"
                                         (plist-get err :message)
-                                        (pcase (plist-get err :type)
-                                          ('tool-call scalpel-console--tool-call-advice)
-                                          ('prose scalpel-console--prose-advice)
-                                          (_ scalpel-console--retry-advice)))
+                                        (scalpel-diagnose-advice err))
                               (format "Scalpel error: %s\n\n"
                                       (plist-get err :message)))
                             'assistant)
@@ -1472,8 +1471,9 @@ round."
   "Return non-nil when ERR names a planner-output failure.
 Such a round executed nothing and failed because the model's reply
 did not follow the action contract, so retrying the same
-instruction is the natural next step."
-  (memq (plist-get err :type) scalpel-console--planner-error-types))
+instruction is the natural next step.  Delegates to
+`scalpel-diagnose-planner-error-p', which owns the type list."
+  (scalpel-diagnose-planner-error-p err))
 
 (defun scalpel-console-repeat ()
   "Re-send the previous instruction without retyping it.
