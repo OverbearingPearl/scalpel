@@ -1819,8 +1819,9 @@ planner reports the task complete or the user calls
 `scalpel-console-abort'.  A timestamped mark opens the run, and a
 mark naming the stop reason closes it, so the console transcript
 shows where to start reading when the user comes back.  Run this
-after sending the instruction it should carry out: the command
-continues from the conversation the buffer already holds."
+after sending the instruction it should carry out: subsequent
+rounds continue from the callbacks of the operation already in
+flight; this command itself sends no request."
   (interactive "P")
   (when (scalpel-console--busy-p)
     (user-error "Scalpel: an operation is already in flight"))
@@ -1833,9 +1834,7 @@ continues from the conversation the buffer already holds."
     (format "Scalpel: Unattended begin at %s. Auto-stop after %d rounds."
             (format-time-string "%H:%M")
             scalpel-console--unattended-limit)
-   'face 'shadow))
-  (scalpel-console--run-rounds scalpel-prompt--continuation-instruction
-                               (scalpel-console--history)))
+   'face 'shadow)))
 
 (defun scalpel-console-unload-function ()
   "Suppress `unload-feature's default cleanup for this module.
