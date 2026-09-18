@@ -1619,6 +1619,7 @@ while the planner already saw the error as the newest turn."
         (scalpel-console-continue-after-shell 'always)
         (scalpel-console-max-rounds 5)
         (scalpel-console-trim-consumed-output t)
+        (scalpel-console-self-heal-max 0)
         (buf (scalpel-console-test--new-console-buffer))
         (requests 0))
     (unwind-protect

@@ -116,6 +116,16 @@ Set it to nil to show every body."
   :type 'boolean
   :group 'scalpel)
 
+(defcustom scalpel-console-self-heal-max 2
+  "Maximum automatic retries per instruction for self-healable planner errors.
+A planner error whose type is in `scalpel-diagnose-self-heal-types' is
+retried automatically -- the failure report stays in the conversation,
+so the model can correct its own reply -- until this many retries have
+been spent or the same error type keeps recurring.  Exceeding the budget
+falls through to the usual retry header for the user."
+  :type 'natnum
+  :group 'scalpel-console)
+
 (defconst scalpel-console--consumed-output-marker "[output consumed]"
   "Placeholder left where a consumed report body was trimmed.
 Structural contract shared by `scalpel-console--trim-report' and
@@ -509,6 +519,13 @@ the conversation.  nil when no acknowledgement is pending.")
   "Non-nil while an agent request is in flight for this console.
 Buffer-local: a busy console must not refuse instructions in
 another console.")
+
+(defvar-local scalpel-console--round-error nil
+  "Per-round error state set by `scalpel-console--run-round'.
+Before rendering the header for a round, `scalpel-console--run-round'
+sets this to the failing round's error plist; it clears it at the start
+of every round.  `scalpel-console--run-rounds' reads it to decide
+whether an automatic self-heal retry should be attempted.")
 
 (defvar-local scalpel-console--operation-generation 0
   "Generation identifying the current console operation.
@@ -1141,7 +1158,13 @@ by an initial refresh.  The acknowledgement line the send path
 appended is removed here, when the status spinner replaces it.  A round
 that changed the session's context file list redraws the context tree
 before ON-COMPLETE, so the file list on screen still describes the
-session the next round will run against."
+session the next round will run against.  The failing round's error
+plist is recorded in `scalpel-console--round-error' before the header
+rendering; that recorded plist is the signal the round loop in
+`scalpel-console--run-rounds' consults for the automatic self-heal
+retry decision, and it is cleared to nil at the start of each round
+on success paths."
+  (setq scalpel-console--round-error nil)
   (let* ((target (scalpel-console--target-buffer))
          ;; The acknowledgement `send-line' appended exists only for the
          ;; gap before this status line appears: remove it now, so it
@@ -1263,6 +1286,11 @@ session the next round will run against."
                     (signal (car err) (cdr err)))))
                (funcall settle round-result))
              (lambda (err)
+               ;; Record the failing round's error plist before rendering
+               ;; the header: the round loop in `scalpel-console--run-rounds'
+               ;; reads `scalpel-console--round-error' to decide on a
+               ;; self-heal retry.
+               (setq scalpel-console--round-error err)
                (condition-case handler-err
                    (when (and (buffer-live-p target)
                               (= operation
@@ -1293,8 +1321,8 @@ session the next round will run against."
                                   ((eq category 'context)
                                    ;; Retry advice is useless here: the
                                    ;; instruction will fail again until the
-                                   ;; missing context exists, but the remedy
-                                   ;; must still be stated, so the
+                                   ;; missing context exists, but the
+                                   ;; remedy must still be stated, so the
                                    ;; category-advice table is no longer dead
                                    ;; code on the render path.
                                    (format "Scalpel context error: %s\n%s\n\n"
@@ -1410,6 +1438,10 @@ the round's output is noisy.  A continued round sends
 `scalpel-prompt--continuation-instruction' instead of INSTRUCTION:
 the original instruction is already inside the history, and
 re-sending it makes the planner run the same shell command again.
+Planner errors that are self-healable are retried automatically:
+at most `scalpel-console-self-heal-max' retries per instruction
+are allowed, counted both per error type and in total, and the
+attempt counters reset with each invocation of this function.
 `scalpel-console--busy' is set here and cleared at every terminal
 point, so a second RET during a round is refused.  When an
 operation ends, the cursor in the target buffer is also moved to
@@ -1421,7 +1453,9 @@ round."
     (let ((target (scalpel-console--target-buffer))
           (round 0)
           (conversation history)
-          (next-instruction instruction))
+          (next-instruction instruction)
+          (self-heal-attempts nil)
+          (self-heal-total 0))
       (cl-labels
           ((finish-operation (&optional complete)
              (when (and (buffer-live-p target)
@@ -1448,29 +1482,61 @@ round."
                   (condition-case err
                       (with-current-buffer target
                         (setq conversation (scalpel-console--history))
-                        (cond
-                         ((not
-                           (and round-result
-                                (or (plist-get round-result :shells)
-                                    (plist-get round-result :reads)
-                                    (plist-get round-result :changes))))
-                          (finish-operation (not (null round-result))))
-                         ((>= round scalpel-console-max-rounds)
-                          (finish-operation)
-                          (let ((notice
-                                 (format
-                                  (concat
-                                   "Scalpel: round limit (%d) reached; "
-                                   "send the next instruction when ready")
-                                  scalpel-console-max-rounds)))
-                            (scalpel-console--append notice)
-                            (message "%s" notice)))
-                         ((scalpel-console--continue-p round-result)
-                          (setq next-instruction
-                                scalpel-prompt--continuation-instruction)
-                          (run-next))
-                         (t
-                          (finish-operation t))))
+                        (let ((round-error
+                               (prog1 (buffer-local-value
+                                       'scalpel-console--round-error
+                                       target)
+                                 (setq scalpel-console--round-error nil))))
+                          (cond
+                           ((and round-error
+                                 (scalpel-diagnose-self-heal-p round-error)
+                                 (< self-heal-total
+                                    scalpel-console-self-heal-max)
+                                 (< (or (cdr (assq (plist-get round-error :type)
+                                                   self-heal-attempts))
+                                        0)
+                                    scalpel-console-self-heal-max))
+                            (setq self-heal-total (1+ self-heal-total))
+                            (let* ((etype (plist-get round-error :type))
+                                   (count
+                                    (1+ (or (cdr (assq etype
+                                                       self-heal-attempts))
+                                            0))))
+                              (setq self-heal-attempts
+                                    (cons (cons etype count)
+                                          (assq-delete-all
+                                           etype self-heal-attempts)))
+                              (scalpel-console--append
+                               (format
+                                (concat
+                                 "Scalpel: retrying after %s error "
+                                 "(attempt %d/%d)")
+                                etype count scalpel-console-self-heal-max))
+                              (setq next-instruction
+                                    scalpel-prompt--continuation-instruction)
+                              (run-next)))
+                           ((not
+                             (and round-result
+                                  (or (plist-get round-result :shells)
+                                      (plist-get round-result :reads)
+                                      (plist-get round-result :changes))))
+                            (finish-operation (not (null round-result))))
+                           ((>= round scalpel-console-max-rounds)
+                            (finish-operation)
+                            (let ((notice
+                                   (format
+                                    (concat
+                                     "Scalpel: round limit (%d) reached; "
+                                     "send the next instruction when ready")
+                                    scalpel-console-max-rounds)))
+                              (scalpel-console--append notice)
+                              (message "%s" notice)))
+                           ((scalpel-console--continue-p round-result)
+                            (setq next-instruction
+                                  scalpel-prompt--continuation-instruction)
+                            (run-next))
+                           (t
+                            (finish-operation t)))))
                     ((error quit)
                      (finish-operation)
                      (signal (car err) (cdr err)))))))))

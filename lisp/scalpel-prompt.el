@@ -149,10 +149,10 @@ next action.
 
 It deliberately names no action kind: a round that only read a
 definition is continued the same way as one that ran a shell command,
-and scalpel-console--run-rounds tests :reads alongside :shells using
+and `scalpel-console--run-rounds' tests :reads alongside :shells using
 this same text.
 
-This is a structural contract shared with scalpel-console--run-rounds;
+This is a structural contract shared with `scalpel-console--run-rounds';
 changing the wording here requires checking that caller.")
 
 (defconst scalpel-prompt--symbol-name-rule

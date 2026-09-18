@@ -48,6 +48,22 @@ Such a round executed nothing and failed because the model's reply
 did not follow the action contract."
   (eq (scalpel-diagnose-category (plist-get err :type)) 'planner))
 
+(defconst scalpel-diagnose-self-heal-types
+  '(parse malformed no-replacement no-such-symbol pattern-no-match
+          bad-path unbalanced)
+  "Planner error types the console may retry automatically.
+Their failure reports carry enough context (near-miss lines, closest
+symbols) for the model to correct its own reply next round.")
+
+(defun scalpel-diagnose-self-heal-p (err)
+  "Return non-nil when ERR is a plist whose :type is self-healable.
+Such an error names a planner-output failure that a retry with
+the error text in the conversation can fix; see the variable
+`scalpel-diagnose-self-heal-types'."
+  (and (listp err)
+       (plist-member err :type)
+       (memq (plist-get err :type) scalpel-diagnose-self-heal-types)))
+
 (defconst scalpel-diagnose-advice
   '((tool-call
      . "the model answered in a tool-calling convention Scalpel does not
