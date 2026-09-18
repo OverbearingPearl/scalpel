@@ -158,6 +158,11 @@ callback which raises is re-delivered through ON-ERROR with :type
 `callback', and an error raised by ON-ERROR itself is only reported
 in the echo area rather than escaping into gptel's process filter.
 
+The cancel closure is stored buffer-locally in the buffer that
+started the request, so a concurrent request from another console
+neither overwrites nor cancels it, and the variable no longer holds
+only the most recent request globally.
+
 The progress callback is captured once at request start into a
 request-local binding, so a later request cannot redirect or
 freeze an earlier request's status updates; likewise the
@@ -179,6 +184,10 @@ start, so a concurrent request cannot zero an earlier one's count."
          (timer nil)
          (deadline-timer nil)
          (cancel-fn nil)
+         ;; The buffer this request belongs to; the cancel closure is
+         ;; installed as a buffer-local value here so two consoles with
+         ;; concurrent requests cannot cancel each other's request.
+         (owner (current-buffer))
          ;; Per-request streaming state: a fresh download counter and a
          ;; snapshot of the progress callback taken now, so two
          ;; concurrent requests each keep their own tallies and their
@@ -191,8 +200,9 @@ start, so a concurrent request cannot zero an earlier one's count."
     (scalpel-llm--reset-reasoning-buffer)
     (cl-labels
         ((clear-cancel-current ()
-           (when (eq scalpel-llm--cancel-current cancel-fn)
-             (setq scalpel-llm--cancel-current nil)))
+           (when (eq (buffer-local-value 'scalpel-llm--cancel-current owner) cancel-fn)
+             (with-current-buffer owner
+               (setq scalpel-llm--cancel-current nil))))
          (notify-error (payload)
            (message "Scalpel-debug: llm notify-error %S" payload)
            ;; ON-ERROR runs after `abandon' has cancelled the idle timer
@@ -254,7 +264,8 @@ start, so a concurrent request cannot zero an earlier one's count."
               (list :type 'cancelled
                     :message "Scalpel: request cancelled")))))
       (setq cancel-fn (lambda () (cancel-request)))
-      (setq scalpel-llm--cancel-current cancel-fn)
+      (with-current-buffer owner
+        (set (make-local-variable 'scalpel-llm--cancel-current) cancel-fn))
       ;; Preflight: with `gptel-backend' nil, `gptel-request' dispatches
       ;; into gptel's default path that neither raises synchronously nor
       ;; calls back, and the round dies on the idle timer with a

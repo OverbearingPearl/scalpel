@@ -1655,12 +1655,14 @@ This cancels the whole console operation -- not only the current
 LLM request -- so a console busy with a synchronous action that has
 no current LLM request can still be aborted.  The operation's
 generation is advanced, so any callback from the aborted operation
-is dropped instead of writing a report or continuing a round."
+is dropped instead of writing a report or continuing a round.
+The cancel closure is per-console (buffer-local), read from this
+console's target buffer."
   (interactive)
   (let ((target (scalpel-console--target-buffer)))
     (with-current-buffer target
       (if scalpel-console--busy
-          (let ((cancel (prog1 scalpel-llm--cancel-current
+          (let ((cancel (prog1 (buffer-local-value 'scalpel-llm--cancel-current target)
                           (cl-incf scalpel-console--operation-generation))))
             (setq scalpel-console--busy nil)
             (scalpel-console--append
