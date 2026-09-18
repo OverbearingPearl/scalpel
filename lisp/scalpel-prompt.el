@@ -39,6 +39,30 @@ model.  The failure it prevents is a reply cut off mid-JSON by the
 backend's output limit, which loses the whole round, and the suite
 cannot see it because every reply there is mocked.")
 
+(defcustom scalpel-prompt-reply-language nil
+  "Language the planner's reply actions are written in, or nil.
+Nil lets the model choose freely; a non-nil value is stated to the
+model as a constraint on reply text only, leaving reasoning,
+planning and code untouched."
+  :type '(choice (string :tag "Language")
+                 (const :tag "Let the model choose" nil))
+  :group 'scalpel)
+
+(defconst scalpel-prompt--reply-language-rule-header
+  "Write the \"text\" of every reply action in %s.  This bounds the
+user-facing reply only: reasoning, planning, code, comments and
+prompt wording stay in the language best suited to them.\n")
+
+(defun scalpel-prompt--reply-language-rule ()
+  "Return the reply-language rule appended by `scalpel-prompt-system-prompt'.
+Returns nil when `scalpel-prompt-reply-language' is unset, so the
+model chooses freely; otherwise returns a paragraph stating the
+chosen language as a constraint on reply text only."
+  (when scalpel-prompt-reply-language
+    (concat
+     (format scalpel-prompt--reply-language-rule-header
+             scalpel-prompt-reply-language))))
+
 (defconst scalpel-prompt--decide-for-me
   "The choice is yours: if you've reached a conclusion and judge
 the fix safe, implement it now; if a choice remains open, pick
@@ -441,11 +465,17 @@ code to understand it is expected; simulating an edit against it is
 wasted effort.
 Never emit code or diff text in this response.
 "
-   scalpel-prompt--reply-brevity-rule)
+   scalpel-prompt--reply-brevity-rule
+   (if scalpel-prompt-reply-language
+       (concat "\n" (scalpel-prompt--reply-language-rule))
+     ""))
   "System prompt for the Scalpel agent planner.
 This controls only the wording sent to the LLM; the action schema
 is fixed by `scalpel-agent--tool-fields' and
-`scalpel-agent--tool-vocabulary' and must not be overridden here."
+`scalpel-agent--tool-vocabulary' and must not be overridden here.
+Whether a reply language is imposed is controlled by
+`scalpel-prompt-reply-language'; nil there leaves the prompt
+unchanged."
   :type 'string
   :group 'scalpel)
 

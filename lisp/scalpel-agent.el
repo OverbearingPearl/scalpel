@@ -1551,10 +1551,14 @@ Names are compared as truenames, which is how
                scalpel-agent--context-files)
        t))
 
-(defconst scalpel-agent--context-near-miss-min-prefix 2
+(defconst scalpel-agent--context-near-miss-min-prefix 1
   "Minimum number of path components that must agree for a near miss.
-With 2, at least the root and one directory must match; a shared
-home directory alone is not a hint.")
+With 1, an entry sharing only the home directory still counts as a
+near miss, which is exactly the single-user-machine case this covers
+-- a mistyped user name like \"madajuan\" vs \"madachuan\" shares
+only Users.  Callers rank by prefix length and basename, so
+unrelated entries elsewhere on the filesystem do not flood the
+note.")
 
 (defun scalpel-agent--context-near-miss (file &optional min-prefix)
   "Suggest the context entries closest to FILE for a refusal note.
