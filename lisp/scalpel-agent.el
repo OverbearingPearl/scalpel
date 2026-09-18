@@ -157,6 +157,15 @@ predict its reach and the user must always approve it."
   :type '(repeat string)
   :group 'scalpel)
 
+(defvar scalpel-agent-unattended-confirm nil
+  "When non-nil, every confirmable action runs without asking.
+Set by an unattended console run and cleared when it settles, so
+shell, file-rename, file-delete and file-substitute all proceed
+while the user is away.  The sandbox still bounds what a shell
+command may touch, and every executed action is reported in the
+console record, so the user reviews the transcript afterwards
+instead of answering prompts during the run.")
+
 (defvar-local scalpel-agent--context-files nil
   "Files in this buffer's session context, as absolute names.
 Buffer-local: each console buffer is one session, so two console
@@ -2255,11 +2264,13 @@ The planner must emit this as its final action."
 
 (defun scalpel-agent--confirm-needed-p (action)
   "Return non-nil when ACTION must be confirmed before execution.
-A file-level tool is always confirmed: it decides which files
-exist, which no setting can waive.  `file-create' is deliberately
-excluded here and from the confirm gate altogether: the creation is
-reported in full, so it never runs with a prompt, regardless of that
-list.  A tool in
+An unattended run (`scalpel-agent-unattended-confirm' non-nil)
+confirms nothing: the user is away, so a prompt would only hang
+the run.  Otherwise a file-level tool is always confirmed: it
+decides which files exist, which no setting can waive.
+`file-create' is deliberately excluded here and from the confirm
+gate altogether: the creation is reported in full, so it never
+runs with a prompt, regardless of that list.  A tool in
 `scalpel-agent-confirm-tools' is confirmed, except a shell action
 the planner did not flag as long-running: the sandbox already
 bounds what a command may touch, so only the editor-freezing case
@@ -2267,16 +2278,19 @@ needs an answer.  JSON booleans arrive as t and :false; only t
 counts as true, so a missing or false flag still asks.  The flag
 gates the prompt only: it never relaxes the working directory or
 the environment the command runs in."
-  (let ((tool (plist-get action :tool)))
-    (and (not (equal tool "file-create"))
-         (or (member tool scalpel-agent--file-level-tools)
-             ;; A file-substitute's reach spans every file it names,
-             ;; wider than any single edit; the one confirmation is where
-             ;; the user sees the pattern and the file list together.
-             (equal tool "file-substitute")
-             (and (member tool scalpel-agent-confirm-tools)
-                  (not (and (equal tool "shell")
-                            (not (eq (plist-get action :long-running) t)))))))))
+  (and (not scalpel-agent-unattended-confirm)
+       (let ((tool (plist-get action :tool)))
+         (and (not (equal tool "file-create"))
+              (or (member tool scalpel-agent--file-level-tools)
+                  ;; A file-substitute's reach spans every file it
+                  ;; names, wider than any single edit; the one
+                  ;; confirmation is where the user sees the pattern
+                  ;; and the file list together.
+                  (equal tool "file-substitute")
+                  (and (member tool scalpel-agent-confirm-tools)
+                       (not (and (equal tool "shell")
+                                 (not (eq (plist-get action :long-running)
+                                          t))))))))))
 
 (defun scalpel-agent--action-summary (action)
   "Return a one-line description of ACTION for the confirmation prompt.

@@ -126,6 +126,22 @@ falls through to the usual retry header for the user."
   :type 'natnum
   :group 'scalpel-console)
 
+(defcustom scalpel-console-unattended-max-rounds 30
+  "Rounds an unattended run may spend before it stops itself.
+`scalpel-console-unattended' accepts a prefix argument to override
+this for one run.  The limit is a guard rail, not a goal: the run
+stops earlier when the task completes or the user aborts."
+  :type 'natnum
+  :group 'scalpel)
+
+(defvar-local scalpel-console--unattended-p nil
+  "Non-nil while an unattended run owns this console.
+Suppresses every question a round could ask and arms the round
+limit; cleared at every terminal point of the run.")
+
+(defvar-local scalpel-console--unattended-limit nil
+  "Round limit of the unattended run in flight, or nil.")
+
 (defconst scalpel-console--consumed-output-marker "[output consumed]"
   "Placeholder left where a consumed report body was trimmed.
 Structural contract shared by `scalpel-console--trim-report' and
@@ -1432,9 +1448,12 @@ buffer, so shell output reaches the next round without anything
 being carried in a variable.  A round that ran shell commands, or
 read a file, may be followed by another, up to
 `scalpel-console-max-rounds'.
+
 Whether a round actually continues is decided by
 `scalpel-console--continue-p', which questions the user only when
-the round's output is noisy.  A continued round sends
+the round's output is noisy.  An unattended run continues through
+noise without asking: the user is away, and the report bodies stay
+in the buffer for them to read afterwards.  A continued round sends
 `scalpel-prompt--continuation-instruction' instead of INSTRUCTION:
 the original instruction is already inside the history, and
 re-sending it makes the planner run the same shell command again.
@@ -1442,32 +1461,66 @@ Planner errors that are self-healable are retried automatically:
 at most `scalpel-console-self-heal-max' retries per instruction
 are allowed, counted both per error type and in total, and the
 attempt counters reset with each invocation of this function.
+An unattended run also arms `scalpel-agent-unattended-confirm', so
+no action confirms, and stops at its own round limit with a
+timestamped mark instead of the interactive round-limit notice.
 `scalpel-console--busy' is set here and cleared at every terminal
 point, so a second RET during a round is refused.  When an
 operation ends, the cursor in the target buffer is also moved to
 `point-max', signalling that the answer is finished.  The
 completion acknowledgement is only shown for a successful final
 round."
-  (let ((operation (cl-incf scalpel-console--operation-generation)))
+  (let ((operation (cl-incf scalpel-console--operation-generation))
+        (unattended scalpel-console--unattended-p))
     (setq scalpel-console--busy t)
+    (when unattended
+      (setq scalpel-agent-unattended-confirm t))
     (let ((target (scalpel-console--target-buffer))
           (round 0)
+          (round-limit (if unattended
+                           (or scalpel-console--unattended-limit
+                               scalpel-console-unattended-max-rounds)
+                         scalpel-console-max-rounds))
           (conversation history)
           (next-instruction instruction)
           (self-heal-attempts nil)
           (self-heal-total 0))
       (cl-labels
-          ((finish-operation (&optional complete)
+          ((stop-unattended (reason)
+             (setq scalpel-console--unattended-p nil
+                   scalpel-agent-unattended-confirm nil)
+             (scalpel-console--append
+              (propertize
+               (format "Scalpel: Unattended stopped at %s: %s."
+                       (format-time-string "%H:%M") reason)
+               'face 'shadow)))
+           (finish-operation (&optional complete)
              (when (and (buffer-live-p target)
                         (= operation
                            (buffer-local-value
                             'scalpel-console--operation-generation target)))
                (with-current-buffer target
                  (setq scalpel-console--busy nil)
-                 (when complete
+                 (cond
+                  ((and unattended complete)
+                   (setq scalpel-console--unattended-p nil
+                         scalpel-agent-unattended-confirm nil)
+                   (scalpel-console--append
+                    (propertize
+                     (format
+                      (concat "Scalpel: Mission complete, over. "
+                              "(unattended, %s)")
+                      (format-time-string "%H:%M"))
+                     'face 'shadow)))
+                  (complete
                    (scalpel-console--append
                     (propertize "Scalpel: Mission complete, over."
                                 'face 'shadow)))
+                  (unattended
+                   ;; The branch that ended the run has already
+                   ;; printed its own timestamped stop mark.
+                   (setq scalpel-console--unattended-p nil
+                         scalpel-agent-unattended-confirm nil)))
                  (goto-char (point-max)))))
            (run-next ()
              (setq round (1+ round))
@@ -1521,17 +1574,23 @@ round."
                                       (plist-get round-result :reads)
                                       (plist-get round-result :changes))))
                             (finish-operation (not (null round-result))))
-                           ((>= round scalpel-console-max-rounds)
-                            (finish-operation)
-                            (let ((notice
-                                   (format
-                                    (concat
-                                     "Scalpel: round limit (%d) reached; "
-                                     "send the next instruction when ready")
-                                    scalpel-console-max-rounds)))
-                              (scalpel-console--append notice)
-                              (message "%s" notice)))
-                           ((scalpel-console--continue-p round-result)
+                           ((>= round round-limit)
+                            (if unattended
+                                (progn
+                                  (finish-operation)
+                                  (stop-unattended "round limit reached"))
+                              (finish-operation)
+                              (let ((notice
+                                     (format
+                                      (concat
+                                       "Scalpel: round limit (%d) reached; "
+                                       "send the next instruction when ready")
+                                      round-limit)))
+                                (scalpel-console--append notice)
+                                (message "%s" notice))))
+                           ((if unattended
+                                t
+                              (scalpel-console--continue-p round-result))
                             (setq next-instruction
                                   scalpel-prompt--continuation-instruction)
                             (run-next))
@@ -1722,8 +1781,10 @@ LLM request -- so a console busy with a synchronous action that has
 no current LLM request can still be aborted.  The operation's
 generation is advanced, so any callback from the aborted operation
 is dropped instead of writing a report or continuing a round.
-The cancel closure is per-console (buffer-local), read from this
-console's target buffer."
+An unattended run is also disarmed here, with its own timestamped
+mark, so the transcript records why the run ended.  The cancel
+closure is per-console (buffer-local), read from this console's
+target buffer."
   (interactive)
   (let ((target (scalpel-console--target-buffer)))
     (with-current-buffer target
@@ -1731,6 +1792,14 @@ console's target buffer."
           (let ((cancel (prog1 (buffer-local-value 'scalpel-llm--cancel-current target)
                           (cl-incf scalpel-console--operation-generation))))
             (setq scalpel-console--busy nil)
+            (when scalpel-console--unattended-p
+              (setq scalpel-console--unattended-p nil
+                    scalpel-agent-unattended-confirm nil)
+              (scalpel-console--append
+               (propertize
+                (format "Scalpel: Unattended aborted at %s."
+                        (format-time-string "%H:%M"))
+                'face 'shadow)))
             (scalpel-console--append
              (propertize "Scalpel: Mission aborted, breaking off, out."
                          'face 'shadow))
@@ -1739,6 +1808,34 @@ console's target buffer."
             (message "Scalpel: current operation aborted."))
         (ding)
         (message "Scalpel: no request in flight to cancel.")))))
+
+(defun scalpel-console-unattended (&optional rounds)
+  "Continue the current task unattended until it completes.
+ROUNDS, from a prefix argument, overrides
+`scalpel-console-unattended-max-rounds' for this run.  The run
+confirms nothing, continues through noisy output, and stops at the
+latest when the round limit is reached; it stops earlier when the
+planner reports the task complete or the user calls
+`scalpel-console-abort'.  A timestamped mark opens the run, and a
+mark naming the stop reason closes it, so the console transcript
+shows where to start reading when the user comes back.  Run this
+after sending the instruction it should carry out: the command
+continues from the conversation the buffer already holds."
+  (interactive "P")
+  (when (scalpel-console--busy-p)
+    (user-error "Scalpel: an operation is already in flight"))
+  (setq scalpel-console--unattended-p t
+        scalpel-console--unattended-limit
+        (or (and (numberp rounds) rounds)
+            scalpel-console-unattended-max-rounds))
+  (scalpel-console--append
+   (propertize
+    (format "Scalpel: Unattended begin at %s. Auto-stop after %d rounds."
+            (format-time-string "%H:%M")
+            scalpel-console--unattended-limit)
+   'face 'shadow))
+  (scalpel-console--run-rounds scalpel-prompt--continuation-instruction
+                               (scalpel-console--history)))
 
 (defun scalpel-console-unload-function ()
   "Suppress `unload-feature's default cleanup for this module.
