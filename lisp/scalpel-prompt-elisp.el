@@ -15,10 +15,14 @@
 (require 'scalpel-prompt)
 
 (defconst scalpel-prompt-elisp--format-rule
-  "For Emacs Lisp, split long prose strings into a `concat' form whose
-segments stay short.  Format docstrings according to Emacs conventions:
-use a complete summary sentence on the first line, then a blank line
-before additional paragraphs, and keep two spaces between sentences."
+  (concat
+   "For Emacs Lisp, strictly adhere to the regexp dialect guidelines:\n"
+   "avoid the parenthesis escaping trap by explicitly distinguishing between\n"
+   "grouping constructs and literal parens, always escaping the latter;\n"
+   "handle newlines explicitly, noting that the dot metacharacter excludes\n"
+   "them by default; and account for the complete lack of non-greedy\n"
+   "matching by relying on negated character classes, anchoring, or\n"
+   "backtracking constraints to prevent unintended match expansion.")
   "Formatting guidance for generated Emacs Lisp text.")
 
 (scalpel-prompt-register-prompt-language-rule
