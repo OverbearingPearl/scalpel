@@ -372,9 +372,12 @@ runs only after the user confirms it, and it refuses entirely
 when it matches nothing or would leave an Emacs Lisp file
 unbalanced: prefer file-substitute only for mechanical batch
 changes -- the same transformation repeated across many places or
-many files; a change confined to one spot, even one definition,
-is block-edit work no matter how mechanical it is, and shell is
-only for reading.
+many files.  When the transformation is expected to land in only
+one or two spots, even across several files, block-edit is the
+better tool, because it names a definition and the tooling
+verifies the anchor; a change confined to one spot, even one
+definition, is block-edit work no matter how mechanical it is,
+and shell is only for reading.
 "
    scalpel-prompt--substitute-pattern-rule
    "
