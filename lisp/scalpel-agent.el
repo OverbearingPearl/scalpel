@@ -699,9 +699,9 @@ answered in another convention -- the condition
 through `scalpel-llm-dialect-error-message' -- otherwise the type
 forwarded by `scalpel-llm-request-async'.  A reply that is pure
 prose is not an error: it degrades to a single reply action whose
-text is the dialect's message, so an answer the planner wrote in
-the wrong convention is still delivered instead of the round being
-refused whole.  Only the parse step is guarded, so an error raised
+text is wrapped in an explicit failure notice, so an answer the
+planner wrote in the wrong convention is still delivered, marked
+as unexecuted.  Only the parse step is guarded, so an error raised
 inside ON-SUCCESS escapes to the caller rather than being re-framed
 as a planner error."
   (scalpel-llm-request-async
@@ -745,8 +745,14 @@ as a planner error."
                                                    ;; along as the answer, or
                                                    ;; the planner reads it back
                                                    ;; and repeats it as
-                                                   ;; content.
-                                                   :text (or (caddr err) text))))
+                                                   ;; content.  It is wrapped
+                                                   ;; in an explicit failure
+                                                   ;; notice so the next round
+                                                   ;; knows no action ran.
+                                                   :text (concat
+                                                          "[Scalpel: this round held no JSON action array, so no action was executed. "
+                                                          (or (caddr err) text)
+                                                          "]"))))
                               nil)
                           (funcall on-error
                                    (list :type (or (cdr dialect) 'parse)
