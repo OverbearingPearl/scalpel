@@ -70,7 +70,7 @@ repos:
         name: Emacs package lint and byte compile
         entry: >-
           emacs -Q --batch --directory . --directory ./lisp
-          --eval "(progn (require 'package) (setq package-load-list '((full-gtd nil) all)) (package-initialize) (setq load-prefer-newer t) (setq load-path (append (list (expand-file-name \"lisp\") (expand-file-name \".\")) load-path)))"
+          --eval "(progn (require 'package) (setq package-load-list '(all)) (package-initialize) (setq load-prefer-newer t) (setq load-path (append (list (expand-file-name \"lisp\") (expand-file-name \".\")) load-path)))"
           --eval "(progn
                     (require 'checkdoc)
                     (require 'package-lint)
