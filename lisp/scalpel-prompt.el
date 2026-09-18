@@ -74,12 +74,21 @@ Structural contract shared by that command and
 `scalpel-console-mode-map', which binds it.")
 
 (defconst scalpel-prompt--retry
-  "The last change failed. Analyze more deeply why, then continue with a
-new attempt."
-  "Prompt instructing the agent to diagnose the failed change and retry.
+  "The last change failed.  Do not change direction and do not replan:
+keep the original design.  Analyze more deeply why the last change
+failed, then continue with a more careful new attempt along the same
+line."
+  "Prompt instructing the agent to retry a failed change.
+The last change failed, and the agent must not change direction or
+replan; it should keep the original design, analyze more deeply why
+the last change failed, and continue with a more careful new attempt
+along the same line.
 
 Sent by the retry command bound in `scalpel-console-mode-map', via
-`scalpel-console-send-retry'.  Like `scalpel-prompt--why' and
+`scalpel-console-send-retry'.  Unlike `scalpel-prompt--replan', which
+abandons the current approach and reverts it, this prompt keeps the
+original design: the agent must stay on the same line and make a more
+careful attempt.  Like `scalpel-prompt--why' and
 `scalpel-prompt--summarize', the response must not include any
 unrelated modification beyond the new attempt.")
 
