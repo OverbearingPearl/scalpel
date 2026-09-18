@@ -1663,6 +1663,9 @@ is dropped instead of writing a report or continuing a round."
           (let ((cancel (prog1 scalpel-llm--cancel-current
                           (cl-incf scalpel-console--operation-generation))))
             (setq scalpel-console--busy nil)
+            (scalpel-console--append
+             (propertize "Scalpel: Mission aborted, breaking off, out."
+                         'face 'shadow))
             (when cancel
               (funcall cancel))
             (message "Scalpel: current operation aborted."))
