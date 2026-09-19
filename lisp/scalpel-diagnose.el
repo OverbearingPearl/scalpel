@@ -53,10 +53,13 @@ did not follow the action contract."
 
 (defconst scalpel-diagnose-self-heal-types
   '(parse malformed no-replacement no-such-symbol pattern-no-match
-          bad-path unbalanced no-validation)
+          bad-path unbalanced prose no-validation)
   "Planner error types the console may retry automatically.
 Their failure reports carry enough context (near-miss lines, closest
 symbols) for the model to correct its own reply next round.
+PROSE is an output-contract violation: the planner replied with prose
+instead of the required JSON array.  When the retry names the required
+JSON array format, the model can correct its own reply next round.
 NO-VALIDATION is the capability gate's refusal -- its message already
 names the remedy (block-edit), so the retried round can plan the
 right command from it.")

@@ -1843,13 +1843,13 @@ whatever backend and model the test session carries."
                                       (scalpel-diagnose-advice-for 'tool-call))))))
       (scalpel-utils-test-kill-buffer (buffer-name buf)))))
 
-(ert-deftest scalpel-console-test-prose-reply-is-delivered ()
-  "A reply written as prose is delivered as the answer, not refused.
-Regression: it arrived as a planner failure carrying the answer
-inside the error text, so the round was thrown away and the user
-was advised to rephrase -- advice that does not fix a model that
-keeps answering in the same shape.  The prose now degrades to a
-reply action, so the answer reaches the console like any reply."
+(ert-deftest scalpel-console-test-prose-reply-is-refused ()
+  "A reply written as prose is refused as a planner error, not delivered.
+Regression: prose was degraded to a reply action, so a round that
+violated the output contract looked complete and ended silently --
+no further request was sent.  Prose is now forwarded to the error
+path like any other planner failure, so the console can self-heal
+retry it and only report failure once the budget is spent."
   (let ((scalpel-agent--context-files nil)
         (scalpel-llm-dialect-providers nil)
         (buf (scalpel-console-test--new-console-buffer)))
@@ -1868,21 +1868,20 @@ reply action, so the answer reaches the console like any reply."
               (scalpel-console-send-line)))
           (with-current-buffer buf
             (ert-info ((format "Buffer:\n%S" (buffer-string)))
-              ;; The answer is delivered verbatim as a reply report.
-              (should (string-match-p "The gateway" (buffer-string)))
-              (should (string-match-p "calls gptel" (buffer-string)))
-              (should-not (string-match-p "Scalpel planner error"
-                                          (buffer-string)))
-              (should-not (string-match-p
-                           (regexp-quote scalpel-console--prose-advice)
-                           (buffer-string)))
-              (should-not (string-match-p
-                           (regexp-quote scalpel-console--retry-advice)
-                           (buffer-string)))
-              ;; The answer joins the conversation, so a follow-up
-              ;; instruction keeps its referent.
-              (should (string-match-p "The gateway"
-                                      (scalpel-console--history))))))
+              ;; The prose round is a planner failure with the
+              ;; diagnose advice, not a silently completed answer.
+              (should (string-match-p "Scalpel planner error"
+                                      (buffer-string)))
+              (should (string-match-p
+                       "the model followed no parseable convention at all"
+                       (buffer-string)))
+              ;; The prose itself is quoted inside the planner-error
+              ;; header only.  Quoting it there is deliberate: the user
+              ;; can still read what the model wrote, but it must never
+              ;; be delivered as an executed reply report, which would
+              ;; render as "Scalpel: <text>".
+              (should-not (string-match-p "Scalpel: The dependency"
+                                          (buffer-string))))))
       (scalpel-utils-test-kill-buffer (buffer-name buf)))))
 
 (ert-deftest scalpel-console-test-repeat-resends-last-instruction ()

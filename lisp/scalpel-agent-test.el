@@ -959,12 +959,14 @@ followed three times without the reply changing."
                                   (plist-get error :message))))))))
 
 (ert-deftest scalpel-agent-test-plan-degrades-a-prose-reply-to-a-reply-action ()
-  "A reply written as prose is delivered as a reply action, not refused.
-Regression: a prose reply was reported as a planner error and the
-whole round was thrown away, so an answer the model had already
-written -- such as instructions it could not execute itself --
-never reached the user.  The prose now degrades to a reply action
-whose text keeps the original answer readable."
+  "Degrade a prose reply to a `prose' planner error, not a reply action.
+Regression: a prose reply was degraded to a reply action, which made
+the round look complete and ended the run silently -- an answer the
+model had already written, such as instructions it could not execute
+itself, was shipped as if the plan had succeeded.  The prose is now
+forwarded as a `prose' planner error, letting the console
+self-heal-retry it under `scalpel-console-self-heal-max' and only
+report failure when the budget is spent."
   ;; Dispatch reads the session's own backend and model, so a dialect
   ;; registered for them would decide this test's outcome.  None is
   ;; registered here: the subject is the parser's own report.
@@ -975,25 +977,18 @@ whose text keeps the original answer readable."
                           (concat "The dependency lives in two layers.\n\n"
                                   "**The gateway** is the hard coupling: it\n"
                                   "calls gptel.\n")))))
-      (let (actions)
+      (let (err)
         (scalpel-agent-plan
          "analyse the dependency" nil
-         (lambda (a) (setq actions a))
-         (lambda (err) (ert-fail (plist-get err :message))))
-        (ert-info ((format "Actions: %S" actions))
-          (should (= (length actions) 1))
-          (should (equal (plist-get (car actions) :tool) "reply"))
-          ;; The answer stays readable: it is the whole evidence the
-          ;; user has of what the planner wrote instead of an array.
+         (lambda (_a) (ert-fail "on-success fired for a prose reply"))
+         (lambda (e) (setq err e)))
+        (ert-info ((format "Error: %S" err))
+          (should err)
+          (should (eq (plist-get err :type) 'prose))
+          ;; The message carries the dialect's report, which includes
+          ;; the raw prose so the user can still see what was written.
           (should (string-match-p "The gateway"
-                                  (plist-get (car actions) :text)))
-          (should-not (string-match-p "\\\\n"
-                                      (plist-get (car actions) :text)))
-          ;; The answer is the prose itself, not the error narrative:
-          ;; shipping "nothing was executed" as the reply is what made
-          ;; the planner read it back and repeat it as content.
-          (should-not (string-match-p "nothing was executed"
-                                      (plist-get (car actions) :text))))))))
+                                  (plist-get err :message))))))))
 
 (ert-deftest scalpel-agent-test-system-prompt-declares-every-tool ()
   "Every dispatchable tool must be declared to the planner.

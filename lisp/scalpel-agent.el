@@ -694,16 +694,17 @@ HISTORY is the conversation text recorded before INSTRUCTION, or
 nil.  ON-SUCCESS receives the projected action list.  ON-ERROR
 receives a plist (:type SYMBOL :message STRING): `parse' when the
 reply does not yield a valid action array, `tool-call' when it
-answered in another convention -- the condition
-`scalpel-agent--dialect-error-types' names, whose message is read
-through `scalpel-llm-dialect-error-message' -- otherwise the type
-forwarded by `scalpel-llm-request-async'.  A reply that is pure
-prose is not an error: it degrades to a single reply action whose
-text is wrapped in an explicit failure notice, so an answer the
-planner wrote in the wrong convention is still delivered, marked
-as unexecuted.  Only the parse step is guarded, so an error raised
-inside ON-SUCCESS escapes to the caller rather than being re-framed
-as a planner error."
+answered in another convention, `prose' when the reply is pure
+prose -- the conditions `scalpel-agent--dialect-error-types' names,
+whose messages are read through `scalpel-llm-dialect-error-message'
+-- otherwise the type forwarded by `scalpel-llm-request-async'.
+Forwarding a prose reply to ON-ERROR instead of delivering it keeps
+the loop honest: the console can self-heal-retry it like any other
+planner error and only reports failure once the retry budget is
+spent, instead of the round looking complete and ending silently.
+Only the parse step is guarded, so an error raised inside
+ON-SUCCESS escapes to the caller rather than being re-framed as a
+planner error."
   (scalpel-llm-request-async
    (scalpel-agent--prompt instruction history)
    (lambda (raw)
@@ -722,42 +723,10 @@ as a planner error."
                              (text (if dialect
                                        (scalpel-llm-dialect-error-message err)
                                      (error-message-string err))))
-                        (if (eq (cdr dialect) 'prose)
-                            ;; Pure prose is an answer in the wrong
-                            ;; convention, not a lost round: deliver it
-                            ;; as a reply action through the normal
-                            ;; report path instead of refusing whole.
-                            ;; ON-SUCCESS fires here exactly once, and
-                            ;; the outcome is forced to nil: the
-                            ;; handler's value is what `parsed' binds,
-                            ;; so a non-nil value from the callback --
-                            ;; the test's `setq' returns the list -- or
-                            ;; any relayed value would make the `(when
-                            ;; parsed ...)' after the guard deliver a
-                            ;; second, empty round on top of it.
-                            (progn
-                              (funcall on-success
-                                       (list (list :tool "reply"
-                                                   ;; The condition's second
-                                                   ;; data element is the
-                                                   ;; prose itself; the error
-                                                   ;; narrative must not ride
-                                                   ;; along as the answer, or
-                                                   ;; the planner reads it back
-                                                   ;; and repeats it as
-                                                   ;; content.  It is wrapped
-                                                   ;; in an explicit failure
-                                                   ;; notice so the next round
-                                                   ;; knows no action ran.
-                                                   :text (concat
-                                                          "[Scalpel: this round held no JSON action array, so no action was executed. "
-                                                          (or (caddr err) text)
-                                                          "]"))))
-                              nil)
-                          (funcall on-error
-                                   (list :type (or (cdr dialect) 'parse)
-                                         :message text))
-                          nil))))))
+                        (funcall on-error
+                                 (list :type (or (cdr dialect) 'parse)
+                                       :message text))
+                        nil)))))
        (when parsed
          (funcall on-success (cdr parsed)))))
    on-error
