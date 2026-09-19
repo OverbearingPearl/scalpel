@@ -274,6 +274,16 @@ blocks on the prompt."
        (format "Kill Scalpel console %s?  Its conversation record will be lost? "
                (buffer-name)))))
 
+(defun scalpel-console--kill-reasoning-buffer ()
+  "Kill the console's reasoning buffer along with the console.
+Runs from the console's buffer-local `kill-buffer-hook': killing the
+console kills its thinking buffer so per-console reasoning buffers
+never linger after the session is gone.  Safe when the buffer does
+not exist."
+  (let ((buf (get-buffer (scalpel-llm--reasoning-buffer-name (current-buffer)))))
+    (when (buffer-live-p buf)
+      (kill-buffer buf))))
+
 (defconst scalpel-console--session-variables
   '(scalpel-console--root
     scalpel-console--context-baseline
@@ -665,7 +675,10 @@ also anchors the buffer to a root directory."
   ;; Buffer-local, so only console buffers ask; every killer of this
   ;; buffer goes through the query.
   (add-hook 'kill-buffer-query-functions
-            #'scalpel-console--confirm-kill nil t))
+            #'scalpel-console--confirm-kill nil t)
+  ;; Buffer-local: the console's reasoning buffer dies with the console,
+  ;; so it cannot accumulate.
+  (add-hook 'kill-buffer-hook #'scalpel-console--kill-reasoning-buffer nil t))
 
 (defun scalpel-console--insert-tagged (text role)
   "Insert TEXT at point tagged with ROLE in `scalpel-console-role'.

@@ -114,17 +114,34 @@ every CJK-heavy prompt."
                          and return t))
     (+ cjk (ceiling (/ (- (length text) cjk) 4.0)))))
 
-(defun scalpel-llm--reset-reasoning-buffer ()
-  "Clear the reasoning buffer for a new request."
-  (with-current-buffer (get-buffer-create scalpel-llm-reasoning-buffer-name)
+(defun scalpel-llm--reset-reasoning-buffer (&optional buffer-name)
+  "Clear the reasoning buffer for a new request.
+BUFFER-NAME names the buffer to clear, defaulting to
+`scalpel-llm-reasoning-buffer-name'.  Because the caller names the
+buffer, concurrent consoles each clear their own reasoning buffer."
+  (with-current-buffer (get-buffer-create (or buffer-name scalpel-llm-reasoning-buffer-name))
     (erase-buffer)))
 
-(defun scalpel-llm--append-reasoning (chunk)
-  "Append CHUNK to the reasoning buffer.
+(defun scalpel-llm--reasoning-buffer-name (buffer)
+  "Return the reasoning buffer name to use for BUFFER.
+When BUFFER is a console buffer (its buffer-local `scalpel-console--root'
+is non-nil), reuse the per-console reasoning buffer derived from the
+console's name, so each console has exactly one reasoning buffer.  When
+BUFFER is not associated with a console, return the base name
+`scalpel-llm-reasoning-buffer-name' unchanged, keeping behavior identical
+for tests and other non-console callers."
+  (if (buffer-local-value 'scalpel-console--root buffer)
+      (format "*scalpel-thinking<%s>*" (buffer-name buffer))
+    scalpel-llm-reasoning-buffer-name))
+
+(defun scalpel-llm--append-reasoning (chunk &optional buffer-name)
+  "Append CHUNK to the reasoning buffer named BUFFER-NAME.
+BUFFER-NAME defaults to `scalpel-llm-reasoning-buffer-name'.
 Follow the end of the buffer only when point is already there, so
 that scrolling back through earlier output is not interrupted by
 new chunks."
-  (with-current-buffer (get-buffer-create scalpel-llm-reasoning-buffer-name)
+  (with-current-buffer (get-buffer-create (or buffer-name
+                                              scalpel-llm-reasoning-buffer-name))
     (let ((follow (or (null (get-buffer-window (current-buffer) t))
                       (eobp))))
       (if follow
@@ -190,6 +207,10 @@ start, so a concurrent request cannot zero an earlier one's count."
          ;; installed as a buffer-local value here so two consoles with
          ;; concurrent requests cannot cancel each other's request.
          (owner (current-buffer))
+         ;; Per-console naming keeps concurrent requests' reasoning
+         ;; streams separate; each console reuses its own buffer, so no
+         ;; bookkeeping or cleanup growth.
+         (reasoning-buffer (scalpel-llm--reasoning-buffer-name owner))
          ;; Per-request streaming state: a fresh download counter and a
          ;; snapshot of the progress callback taken now, so two
          ;; concurrent requests each keep their own tallies and their
@@ -199,7 +220,7 @@ start, so a concurrent request cannot zero an earlier one's count."
     (setq scalpel-llm--tokens-uploaded (scalpel-llm--count-tokens prompt))
     (setq scalpel-llm--total-uploaded
           (+ scalpel-llm--total-uploaded scalpel-llm--tokens-uploaded))
-    (scalpel-llm--reset-reasoning-buffer)
+    (scalpel-llm--reset-reasoning-buffer reasoning-buffer)
     (cl-labels
         ((clear-cancel-current ()
            (when (eq (buffer-local-value 'scalpel-llm--cancel-current owner) cancel-fn)
@@ -253,7 +274,7 @@ start, so a concurrent request cannot zero an earlier one's count."
              (message "Scalpel-debug: llm finish kind=%s" kind)
              (if (eq kind 'success)
                  (condition-case err
-                     ;; Restore redaction placeholders (e.g. {{SCALPEL_USER}})
+                     ;; Restore redaction placeholders (e.g. /Users/madachuan)
                      ;; back to real values on the whole raw reply before
                      ;; dialect parse, so every downstream consumer sees
                      ;; real paths.
@@ -334,7 +355,7 @@ start, so a concurrent request cannot zero an earlier one's count."
                              ;; argument (a (reasoning . TEXT) cons).
                              ((and (consp resp) (eq (car resp) 'reasoning))
                               (when (stringp (cdr resp))
-                                (scalpel-llm--append-reasoning (cdr resp))
+                                (scalpel-llm--append-reasoning (cdr resp) reasoning-buffer)
                                 (setq received
                                       (+ received
                                          (scalpel-llm--count-tokens (cdr resp))))
