@@ -1623,12 +1623,17 @@ states the true size.  Output holding a NUL byte is withheld."
   (unless (scalpel-agent--context-file-p file)
     (user-error
      (concat "Scalpel: %s is not in the context; ask the user to add it "
-             "with a confirm action instead of reading it%s")
+             "with a confirm action instead of reading it%s%s")
      file
      (let ((near (scalpel-agent--context-near-miss file)))
        (if near
            (format "\nNote: the closest context entries are: %s (for comparison only; verify the exact spelling against the context listing above)"
                    (string-join near ", "))
+         ""))
+     (let ((drift (and (fboundp 'scalpel-redact-placeholder-drift)
+                       (scalpel-redact-placeholder-drift file))))
+       (if drift
+           (format "\nNote: %s" drift)
          ""))))
   (let ((resolved (file-truename (expand-file-name file))))
     (if symbol
@@ -1652,7 +1657,8 @@ states the true size.  Output holding a NUL byte is withheld."
                           "--- output ---\n%s\n--- end output ---")
                   symbol resolved bytes body))
       (let* ((raw (with-current-buffer (find-file-noselect resolved)
-                    (buffer-substring-no-properties (point-min) (point-max))))
+                    (buffer-substring-no-properties
+                     (point-min) (point-max))))
              (bytes (string-bytes raw))
              (binary (and (cl-position 0 raw) t))
              (truncated (and (not binary)

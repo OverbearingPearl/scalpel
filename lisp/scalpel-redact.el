@@ -116,6 +116,75 @@ silently dropped."
                'fixedcase 'literal)))
       result)))
 
+(defun scalpel-redact-placeholder-drift (text)
+  "Detect mistyped REDACT placeholders in TEXT and return a diagnostic or nil.
+Redaction is only active when `scalpel-redact-enabled' is non-nil;
+defaults are installed first so the built-in rules are considered.
+We scan TEXT for {{...}} tokens made of uppercase letters and
+underscores and compare each token, as a whole, against the
+registered placeholders' inner names: an edit distance of one or
+two characters counts as drift (e.g. {{SCCALPEL_USER}} vs
+{{SCALPEL_USER}}).  Restore works by literal match only, so a
+drifted token will never be restored; naming the exact placeholder
+lets the model spell it character for character next round and
+keeps the restore path exact.  Returns nil when redaction is off
+or no drifted token is found."
+  (when (and (boundp 'scalpel-redact-enabled)
+             scalpel-redact-enabled
+             (fboundp 'scalpel-redact-install-defaults)
+             (scalpel-redact-install-defaults)
+             (boundp 'scalpel-redact-rules)
+             scalpel-redact-rules)
+    (let ((placeholders (mapcar (lambda (rule)
+                                  (let ((ph (plist-get rule :placeholder)))
+                                    (and (stringp ph)
+                                         (string-match
+                                          "\\`{{\\([A-Z_]+\\)}}\\'" ph)
+                                         (match-string 1 ph))))
+                                scalpel-redact-rules))
+          (found nil)
+          (pos 0))
+      (while (string-match "{{[A-Z_]+}}" text pos)
+        (let* ((token (match-string 0 text))
+               (inner (substring token 2 (- (length token) 2))))
+          (setq pos (match-end 0))
+          (unless (member token (mapcar (lambda (rule)
+                                          (plist-get rule :placeholder))
+                                        scalpel-redact-rules))
+            (let ((close (seq-find
+                          (lambda (name)
+                            (let ((d (scalpel-redact--levenshtein inner name)))
+                              (and (>= d 1) (<= d 2))))
+                          (delq nil placeholders))))
+              (when close
+                (push (concat "\"" token "\" looks like a mistyped "
+                              "redaction placeholder; the exact placeholder "
+                              "is " close " -- spell it character for "
+                              "character so it can be restored")
+                      found))))))
+      (when found
+        (string-join (nreverse found) "\n")))))
+
+(defun scalpel-redact--levenshtein (a b)
+  "Return the edit distance between strings A and B."
+  (let* ((la (length a))
+         (lb (length b))
+         (w (1+ lb))
+         (grid (make-vector (* (1+ la) w) 0)))
+    (dotimes (i (1+ la))
+      (aset grid (* i w) i))
+    (dotimes (j (1+ lb))
+      (aset grid j j))
+    (dotimes (i la)
+      (dotimes (j lb)
+        (let ((idx (+ (* (1+ i) w) (1+ j))))
+          (aset grid idx
+                (min (1+ (aref grid (+ (* i w) (1+ j))))
+                     (1+ (aref grid (+ (* (1+ i) w) j)))
+                     (+ (aref grid (+ (* i w) j))
+                        (if (= (aref a i) (aref b j)) 0 1)))))))
+    (aref grid (+ (* la w) lb))))
+
 (provide 'scalpel-redact)
 
 ;;; scalpel-redact.el ends here

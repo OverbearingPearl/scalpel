@@ -580,10 +580,11 @@ current received total and whole elapsed seconds, and takes an
 optional NEW-BREAKDOWN that replaces the four segment counts it
 shows, so a caller can install the line with a placeholder
 breakdown and then restate the real counts once they are known;
-called with no argument -- as the streaming progress callback does
--- it re-renders the counts it was last given.  STOP removes the
-line together with its trailing newline, so the cursor returns to
-the line the status occupied."
+called with no argument -- as the streaming progress callback and
+the per-second timer do -- it re-renders the counts it was last
+given.  STOP cancels the timer and removes the line together with
+its trailing newline, so the cursor returns to the line the status
+occupied."
   (let* ((inhibit-read-only t)
          (start (float-time))
          (sys (plist-get breakdown :system))
@@ -595,7 +596,7 @@ the line the status occupied."
          (line (lambda (down seconds)
                  (format "Scalpel: up %d = sys %d + ctx %d + hist %d + instr %d, down %d, %ds\n"
                          up sys ctx hist instr down seconds)))
-         beg)
+         timer beg)
     (goto-char (point-max))
     (setq beg (point-marker))
     (insert (funcall line (- scalpel-llm--total-received down0) 0))
@@ -604,8 +605,8 @@ the line the status occupied."
              ;; The line is installed with a placeholder breakdown so the
              ;; busy indicator shows before token counting runs; a caller
              ;; restates the four segment counts here once they are known.
-             ;; A zero-arg call -- the streaming progress callback --
-             ;; re-renders the counts it was last given.
+             ;; A zero-arg call -- the streaming progress callback and the
+             ;; per-second timer -- re-renders the counts it was last given.
              (when new-breakdown
                (setq sys (plist-get new-breakdown :system))
                (setq ctx (plist-get new-breakdown :context))
@@ -620,17 +621,21 @@ the line the status occupied."
                      (delete-region (point) (1+ (line-end-position)))
                      (insert (funcall line
                                       (- scalpel-llm--total-received down0)
-                                      (round (- (float-time) start))))))))))
-          (stop
-           (lambda ()
-             (when (marker-buffer beg)
-               (with-current-buffer (marker-buffer beg)
-                 (save-excursion
-                   (let ((inhibit-read-only t))
-                     (goto-char beg)
-                     (delete-region (point) (1+ (line-end-position)))))
-                 (set-marker beg nil))))))
-      (cons refresh stop))))
+                                      (round (- (float-time) start)))))))))))
+      (setq timer (run-with-timer 1 1 refresh))
+      (let ((stop
+             (lambda ()
+               (when timer
+                 (cancel-timer timer)
+                 (setq timer nil))
+               (when (marker-buffer beg)
+                 (with-current-buffer (marker-buffer beg)
+                   (save-excursion
+                     (let ((inhibit-read-only t))
+                       (goto-char beg)
+                       (delete-region (point) (1+ (line-end-position)))))
+                   (set-marker beg nil))))))
+        (cons refresh stop)))))
 
 (define-derived-mode scalpel-console-mode text-mode "Scalpel Console"
   "Major mode for Scalpel's interactive console buffer.
