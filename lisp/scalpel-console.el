@@ -156,6 +156,9 @@ limit; cleared at every terminal point of the run.")
 (defvar-local scalpel-console--unattended-deadline nil
   "Absolute time when the unattended run in flight ends itself, or nil.")
 
+(defvar-local scalpel-console--unattended-start nil
+  "Time when the unattended run in flight began, or nil.")
+
 (defconst scalpel-console--consumed-output-marker "[output consumed]"
   "Placeholder left where a consumed report body was trimmed.
 Structural contract shared by `scalpel-console--trim-report' and
@@ -1507,12 +1510,14 @@ and the attempt counters reset with each invocation of this
 function.  An unattended run also arms
 `scalpel-agent-unattended-confirm', so no action confirms, and
 stops at its own round limit with a timestamped mark instead of
-the interactive round-limit notice.  `scalpel-console--busy' is
-set here and cleared at every terminal point, so a second RET
-during a round is refused.  When an operation ends, the cursor in
-the target buffer is also moved to `point-max', signalling that
-the answer is finished.  The completion acknowledgement is only
-shown for a successful final round."
+the interactive round-limit notice.  Closing marks for an
+unattended run name how long the run lasted, not only when it
+ended.  `scalpel-console--busy' is set here and cleared at every
+terminal point, so a second RET during a round is refused.  When
+an operation ends, the cursor in the target buffer is also moved
+to `point-max', signalling that the answer is finished.  The
+completion acknowledgement is only shown for a successful final
+round."
   (let ((operation (cl-incf scalpel-console--operation-generation)))
     (setq scalpel-console--busy t)
     (let ((target (scalpel-console--target-buffer))
@@ -1527,15 +1532,31 @@ shown for a successful final round."
           (self-heal-total 0))
       (cl-labels
           ((unattended-p () scalpel-console--unattended-p)
+           (elapsed-text (start)
+             (if (null start)
+                 nil
+               (let ((secs (round
+                            (float-time
+                             (time-subtract (current-time) start)))))
+                 (if (< secs 60)
+                     (format "%ds" secs)
+                   (format "%dm%02ds" (/ secs 60) (% secs 60))))))
            (stop-unattended (reason)
-             (setq scalpel-console--unattended-p nil
-                   scalpel-console--unattended-deadline nil
-                   scalpel-agent-unattended-confirm nil)
-             (scalpel-console--append
-              (propertize
-               (format "Scalpel: Unattended stopped at %s: %s."
-                       (format-time-string "%H:%M") reason)
-               'face 'shadow)))
+             (let ((elapsed (elapsed-text
+                             scalpel-console--unattended-start)))
+               (setq scalpel-console--unattended-p nil
+                     scalpel-console--unattended-deadline nil
+                     scalpel-console--unattended-start nil
+                     scalpel-agent-unattended-confirm nil)
+               (scalpel-console--append
+                (propertize
+                 (if elapsed
+                     (format "Scalpel: Unattended stopped at %s \
+after %s: %s."
+                             (format-time-string "%H:%M") elapsed reason)
+                   (format "Scalpel: Unattended stopped at %s: %s."
+                           (format-time-string "%H:%M") reason))
+                 'face 'shadow))))
            (finish-operation (&optional complete)
              (when (and (buffer-live-p target)
                         (= operation
@@ -1545,15 +1566,23 @@ shown for a successful final round."
                  (setq scalpel-console--busy nil)
                  (cond
                   ((and (unattended-p) complete)
-                   (setq scalpel-console--unattended-p nil
-                         scalpel-agent-unattended-confirm nil)
-                   (scalpel-console--append
-                    (propertize
-                     (format
-                      (concat "Scalpel: Mission complete, over. "
-                              "(unattended, %s)")
-                      (format-time-string "%H:%M"))
-                     'face 'shadow)))
+                   (let ((elapsed (elapsed-text
+                                   scalpel-console--unattended-start)))
+                     (setq scalpel-console--unattended-p nil
+                           scalpel-console--unattended-start nil
+                           scalpel-agent-unattended-confirm nil)
+                     (scalpel-console--append
+                      (propertize
+                       (if elapsed
+                           (format
+                            (concat "Scalpel: Mission complete, over. "
+                                    "(unattended, %s, ran %s)")
+                            (format-time-string "%H:%M") elapsed)
+                         (format
+                          (concat "Scalpel: Mission complete, over. "
+                                  "(unattended, %s)")
+                          (format-time-string "%H:%M")))
+                       'face 'shadow))))
                   (complete
                    (scalpel-console--append
                     (propertize "Scalpel: Mission complete, over."
@@ -1562,24 +1591,36 @@ shown for a successful final round."
                    ;; The branch that ended the run has already
                    ;; printed its own timestamped stop mark.
                    (setq scalpel-console--unattended-p nil
+                         scalpel-console--unattended-start nil
                          scalpel-agent-unattended-confirm nil)))
                  (goto-char (point-max)))))
            (run-next ()
              (when (unattended-p)
+               (unless scalpel-console--unattended-start
+                 (setq scalpel-console--unattended-start (current-time)))
                (setq scalpel-agent-unattended-confirm t))
              (when (and scalpel-console--unattended-deadline
                         (time-less-p scalpel-console--unattended-deadline
                                      (current-time)))
-               (setq scalpel-console--unattended-p nil
-                     scalpel-console--unattended-deadline nil
-                     scalpel-agent-unattended-confirm nil)
-               (scalpel-console--append
-                (propertize
-                 (format
-                  (concat "Scalpel: Unattended stopped at %s: time "
-                          "limit reached; continuing attended.")
-                  (format-time-string "%H:%M"))
-                 'face 'shadow)))
+               (let ((elapsed (elapsed-text
+                               scalpel-console--unattended-start)))
+                 (setq scalpel-console--unattended-p nil
+                       scalpel-console--unattended-deadline nil
+                       scalpel-console--unattended-start nil
+                       scalpel-agent-unattended-confirm nil)
+                 (scalpel-console--append
+                  (propertize
+                   (if elapsed
+                       (format
+                        (concat "Scalpel: Unattended stopped at %s after "
+                                "%s: time limit reached; continuing "
+                                "attended.")
+                        (format-time-string "%H:%M") elapsed)
+                     (format
+                      (concat "Scalpel: Unattended stopped at %s: time "
+                              "limit reached; continuing attended.")
+                      (format-time-string "%H:%M")))
+                   'face 'shadow))))
              (setq round (1+ round))
              (scalpel-console--run-round
               next-instruction conversation
@@ -1879,20 +1920,25 @@ confirms ask again, but rounds keep running attended.  The run
 confirms nothing, continues through noisy output, and stops at the
 latest when the round limit is reached; it stops earlier when the
 planner reports the task complete or the user calls
-`scalpel-console-abort'.  A timestamped mark opens the run, and a
-mark naming the stop reason closes it, so the console transcript
-shows where to start reading when the user comes back.  Run this
-after sending the instruction it should carry out: subsequent
-rounds continue from the callbacks of the operation already in
-flight; this command itself sends no request."
+`scalpel-console-abort'.  The run's start time is recorded here so
+the closing mark can say how long it lasted.  A timestamped mark
+opens the run, and a mark naming the stop reason closes it, so the
+console transcript shows where to start reading when the user
+comes back.  Run this after sending the instruction it should
+carry out: subsequent rounds continue from the callbacks of the
+operation already in flight; this command itself sends no
+request."
   (interactive "P")
-  (setq scalpel-console--unattended-p t
-        scalpel-console--unattended-limit
-        (or (and (numberp rounds) rounds)
-            scalpel-console-unattended-max-rounds))
-  (setq-local scalpel-console--unattended-deadline
-              (time-add (current-time)
-                        (* 60 scalpel-console-unattended-max-minutes)))
+  (let ((just-started (null scalpel-console--unattended-p)))
+    (setq scalpel-console--unattended-p t
+          scalpel-console--unattended-limit
+          (or (and (numberp rounds) rounds)
+              scalpel-console-unattended-max-rounds))
+    (setq-local scalpel-console--unattended-deadline
+                (time-add (current-time)
+                          (* 60 scalpel-console-unattended-max-minutes)))
+    (when just-started
+      (setq scalpel-console--unattended-start (current-time))))
   (scalpel-console--append
    (propertize
     (if (scalpel-console--busy-p)
