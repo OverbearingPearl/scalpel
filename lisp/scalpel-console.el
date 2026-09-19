@@ -37,6 +37,8 @@
 
 ;;; Code:
 
+(require 'scalpel-redact)
+
 (require 'cl-lib)
 (require 'scalpel-agent)
 (require 'scalpel-diagnose)
@@ -1191,7 +1193,14 @@ plist is recorded in `scalpel-console--round-error' before the header
 rendering; that recorded plist is the signal the round loop in
 `scalpel-console--run-rounds' consults for the automatic self-heal
 retry decision, and it is cleared to nil at the start of each round
-on success paths."
+on success paths.  Outbound text is redacted through
+`scalpel-redact-apply' before it reaches the model -- the
+instruction and the history are wrapped so the real user name never
+leaves the machine -- and inbound text is restored through
+`scalpel-redact-restore' as it arrives: report text in the success
+callback and rendered error headers in the error handler.  The
+conversation buffer therefore never shows placeholders; it always
+holds the real paths the user typed."
   (setq scalpel-console--round-error nil)
   (let* ((target (scalpel-console--target-buffer))
          ;; The acknowledgement `send-line' appended exists only for the
@@ -1294,7 +1303,11 @@ on success paths."
       (with-current-buffer target
         (condition-case err
             (scalpel-agent-run
-             instruction history
+             ;; Outbound text is redacted here, at the console's single
+             ;; send point: the model sees placeholders, never the real
+             ;; user name, for both the instruction and the history.
+             (scalpel-redact-apply instruction)
+             (scalpel-redact-apply history)
              (lambda (round-result)
                (when (and (buffer-live-p target)
                           (= operation
@@ -1302,12 +1315,14 @@ on success paths."
                               'scalpel-console--operation-generation target)))
                  (condition-case err
                      (with-current-buffer target
-                       ;; Point belongs to the user now that the status refresh is
-                       ;; wrapped in `save-excursion'; a bare insert would land at
-                       ;; the cursor.  `--append' goes to point-max and is the same
-                       ;; conversation-tagged writer the rest of the console uses.
+                       ;; Placeholders in the report are restored before
+                       ;; formatting: the console -- and the conversation
+                       ;; history it records -- always holds real paths,
+                       ;; so the next round never round-trips a placeholder.
                        (scalpel-console--append
-                        (format "Scalpel: %s" (plist-get round-result :report))
+                        (format "Scalpel: %s"
+                                (scalpel-redact-restore
+                                 (plist-get round-result :report)))
                         'assistant))
                    ((error quit)
                     (funcall settle nil)
@@ -1335,16 +1350,24 @@ on success paths."
                            ;; round failure that says something about the planner
                            ;; -- malformed JSON, for one -- stays in the history.
                            (scalpel-console--append
-                            (format "Scalpel error: %s" (plist-get err :message)))
+                            (format "Scalpel error: %s"
+                                    (scalpel-redact-restore
+                                     (plist-get err :message))))
                          (let* ((inhibit-read-only t)
                                 (err-beg (point))
+                                ;; Planner errors may quote the raw reply,
+                                ;; which was sent redacted: restore before
+                                ;; rendering, so the header shows real paths.
+                                (err-message
+                                 (scalpel-redact-restore
+                                  (plist-get err :message)))
                                 (category (scalpel-diagnose-category
                                            (plist-get err :type)))
                                 (header
                                  (cond
                                   ((eq category 'planner)
                                    (format "Scalpel planner error: %s\n%s\n\n"
-                                           (plist-get err :message)
+                                           err-message
                                            (scalpel-diagnose-advice err)))
                                   ((eq category 'context)
                                    ;; Retry advice is useless here: the
@@ -1354,11 +1377,11 @@ on success paths."
                                    ;; category-advice table is no longer dead
                                    ;; code on the render path.
                                    (format "Scalpel context error: %s\n%s\n\n"
-                                           (plist-get err :message)
+                                           err-message
                                            (scalpel-diagnose-advice err)))
                                   (t
                                    (format "Scalpel error: %s\n\n"
-                                           (plist-get err :message))))))
+                                           err-message)))))
                            (scalpel-console--insert-tagged
                             header
                             'assistant)

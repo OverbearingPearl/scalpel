@@ -18,6 +18,8 @@
 
 ;;; Code:
 
+(require 'scalpel-redact)
+
 (require 'cl-lib)
 (require 'gptel)
 (require 'gptel-transient)
@@ -251,7 +253,11 @@ start, so a concurrent request cannot zero an earlier one's count."
              (message "Scalpel-debug: llm finish kind=%s" kind)
              (if (eq kind 'success)
                  (condition-case err
-                     (funcall on-success payload)
+                     ;; Restore redaction placeholders (e.g. {{SCALPEL_USER}})
+                     ;; back to real values on the whole raw reply before
+                     ;; dialect parse, so every downstream consumer sees
+                     ;; real paths.
+                     (funcall on-success (scalpel-redact-restore payload))
                    (error
                     (notify-error
                      (list :type 'callback
