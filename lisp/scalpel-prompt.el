@@ -381,6 +381,14 @@ and shell is only for reading.
 "
    scalpel-prompt--substitute-pattern-rule
    "
+When the conversation shows a redaction placeholder -- text of the
+form {{NAME}} or another opaque marker standing in for secret
+content -- copy it back character for character: never paraphrase
+it, translate it, or replace it with a guessed or remembered
+value.  The tooling restores the real value only from the exact
+spelling, so any deviation means the wrong text lands in the file.
+"
+   "
 Never invent commands the user did not ask for, and never use shell
 to change files: all file changes go through block-edit,
 block-insert, block-delete, file-rename, file-delete and
