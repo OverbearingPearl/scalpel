@@ -29,6 +29,16 @@ rule may not produce text another rule's placeholder contains."
   :type '(repeat plist)
   :group 'scalpel)
 
+(defcustom scalpel-redact-enabled t
+  "Non-nil means redaction is active at the LLM boundary.
+When non-nil, `scalpel-redact-apply' applies the rules to outbound
+text and `scalpel-redact-restore' rewrites placeholders back to the
+original text.  When nil, BOTH functions are no-ops: text passes
+through untouched in either direction, so a placeholder the user
+types by hand is never rewritten."
+  :type 'boolean
+  :group 'scalpel)
+
 (defun scalpel-redact-register (pattern placeholder secret)
   "Register a redaction rule mapping PATTERN to PLACEHOLDER with SECRET.
 A rule for the same PATTERN replaces the earlier one, so reloading
@@ -45,16 +55,21 @@ SECRET is the original secret text that replaces PLACEHOLDER on restore."
 
 (defun scalpel-redact--home-pattern ()
   "Regexp matching the user name part of absolute home paths."
-  (concat "/Users/" (regexp-quote (user-real-login-name)) "/"))
+  (concat "/Users/" (regexp-quote (user-real-login-name))))
 
 (defun scalpel-redact--home-placeholder ()
   "Placeholder standing in for the user name in home paths."
-  "{{SCALPEL_USER}}/")
+  "{{SCALPEL_USER}}")
 
 (defun scalpel-redact-install-defaults ()
   "Install the built-in rules when none are registered yet.
 The built-in rule rewrites the user name inside \"/Users/NAME/\"
-home paths, the value models most often mistype."
+home paths, the value models most often mistype.  The pattern,
+placeholder, and secret all use the slash-less \"/Users/NAME\"
+prefix with no trailing slash; the slash after the user name
+always comes from the surrounding text itself, so apply and
+restore are exact inverse operations and no double slash can
+ever appear."
   (unless scalpel-redact-rules
     (scalpel-redact-register
      (scalpel-redact--home-pattern)
@@ -65,33 +80,41 @@ home paths, the value models most often mistype."
   "Return TEXT with every rule's pattern replaced by its placeholder.
 Applies rules in registration order; later rules see the output of
 earlier ones, so a rule must not match another's placeholder."
-  (scalpel-redact-install-defaults)
-  (let ((result text))
-    (dolist (rule scalpel-redact-rules)
-      (setq result
-            (replace-regexp-in-string
-             (plist-get rule :pattern)
-             (plist-get rule :placeholder)
-             result
-             'fixedcase 'literal)))
-    result))
+  (if (not scalpel-redact-enabled)
+      text
+    (scalpel-redact-install-defaults)
+    (let ((result text))
+      (dolist (rule scalpel-redact-rules)
+        (setq result
+              (replace-regexp-in-string
+               (plist-get rule :pattern)
+               (plist-get rule :placeholder)
+               result
+               'fixedcase 'literal)))
+      result)))
 
 (defun scalpel-redact-restore (text)
   "Return TEXT with every placeholder replaced back by its secret.
 Applies rules in reverse registration order, mirroring
-`scalpel-redact-apply'.  Placeholders the model split or altered
-are left alone: they surface in the reply and are diagnosed there
-rather than being silently dropped."
-  (scalpel-redact-install-defaults)
-  (let ((result text))
-    (dolist (rule (reverse scalpel-redact-rules))
-      (setq result
-            (replace-regexp-in-string
-             (regexp-quote (plist-get rule :placeholder))
-             (plist-get rule :secret)
-             result
-             'fixedcase 'literal)))
-    result))
+`scalpel-redact-apply'.  Only rewrites placeholders that were
+redacted while `scalpel-redact-enabled' was on; when the switch is
+off, restore is a no-op and TEXT is returned unchanged, so a
+placeholder typed manually by the user is never rewritten into the
+secret.  Placeholders the model split or altered are left alone:
+they surface in the reply and are diagnosed there rather than being
+silently dropped."
+  (if (not scalpel-redact-enabled)
+      text
+    (scalpel-redact-install-defaults)
+    (let ((result text))
+      (dolist (rule (reverse scalpel-redact-rules))
+        (setq result
+              (replace-regexp-in-string
+               (regexp-quote (plist-get rule :placeholder))
+               (plist-get rule :secret)
+               result
+               'fixedcase 'literal)))
+      result)))
 
 (provide 'scalpel-redact)
 
