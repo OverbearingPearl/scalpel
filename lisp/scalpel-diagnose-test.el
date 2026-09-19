@@ -36,7 +36,9 @@
 
 (ert-deftest scalpel-diagnose-test-advice-for-covers-every-type ()
   (dolist (type (append scalpel-diagnose-planner-types
-                        scalpel-diagnose-context-types))
+                        scalpel-diagnose-context-types
+                        scalpel-diagnose-self-heal-types
+                        '(no-validation)))
     (should (stringp (scalpel-diagnose-advice-for type)))))
 
 (ert-deftest scalpel-diagnose-test-advice-for-unknown-type-is-nil ()

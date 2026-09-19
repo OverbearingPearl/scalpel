@@ -2120,6 +2120,15 @@ the action carried, including nil: a malformed action describes itself
 instead of raising a second error inside the message builder."
   (format "pattern %S -> replacement %S" pattern replacement))
 
+(define-error 'scalpel-no-validation
+  "A rewrite refused because the file's language cannot validate it:
+a registered locate provider declares no :balanced-p, so a rewrite
+there has no structural check to pass.  It derives from `error' so
+existing catchers keep working, but its own name lets the execute
+path tag the failure as `no-validation', which the diagnose side
+offers a block-edit retry for."
+  'error)
+
 (defun scalpel-agent--first-unbalance-offset (text)
   "Return the offset in TEXT where it first becomes bracket-unbalanced.
 Scans the text as a plain character string, so the answer is the
@@ -2183,9 +2192,10 @@ together, through `scalpel-agent--substitute-invocation', because
 the two are one action: a refusal naming only the half which failed
 leaves the other half to be restored from memory.  Return a
 human-readable report.  Signal `user-error' on malformed input, a
-file outside the context, a structured language whose provider
-declares no :balanced-p, a bad replacement, no matches, or an
-unbalanced result."
+file outside the context, a bad replacement, no matches, or an
+unbalanced result.  Signal `scalpel-no-validation' for a structured
+language whose provider declares no :balanced-p, so the diagnose
+side can offer block-edit as the retry."
   (unless (and files pattern (stringp replacement))
     (user-error "Scalpel: malformed file-substitute action: %s, files %S"
                 (scalpel-agent--substitute-invocation pattern replacement)
@@ -2213,14 +2223,16 @@ unbalanced result."
     (let* ((resolved (file-truename (expand-file-name file)))
            (provider (scalpel-locate-provider-for-file resolved)))
       (when (and provider (not (plist-get provider :balanced-p)))
-        (user-error
-         (concat "Scalpel: file-substitute is a structured-language tool "
-                 "and %s's provider declares no bracket check "
-                 "(:balanced-p), so a rewrite there cannot be validated; "
-                 "refused.  Edit this file with block-edit instead, one "
-                 "named definition at a time\n%s")
-         resolved
-         (scalpel-agent--substitute-invocation pattern replacement)))))
+        (signal 'scalpel-no-validation
+                (list
+                 (format
+                  (concat "Scalpel: file-substitute is a structured-language tool "
+                          "and %s's provider declares no bracket check "
+                          "(:balanced-p), so a rewrite there cannot be validated; "
+                          "refused.  Retry next round with block-edit instead, "
+                          "one named definition at a time\n%s")
+                  resolved
+                  (scalpel-agent--substitute-invocation pattern replacement)))))))
   ;; First pass: compute every new content in memory, so a failure in
   ;; the last file cannot leave the first ones half-rewritten.
   (let (staged)
@@ -2520,6 +2532,11 @@ instead of being re-framed as an action failure."
                            (plist-get action :files)
                            (plist-get action :pattern)
                            (plist-get action :replacement))
+                        (scalpel-no-validation
+                         (funcall on-error
+                                  (list :type 'no-validation
+                                        :message (error-message-string err)))
+                         nil)
                         (error
                          (funcall on-error
                                   (list :type 'action

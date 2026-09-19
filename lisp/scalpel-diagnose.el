@@ -19,11 +19,14 @@
 
 (defconst scalpel-diagnose-planner-types
   '(parse tool-call prose malformed unknown-tool no-replacement
-          no-such-symbol pattern-no-match bad-path unbalanced)
+          no-such-symbol pattern-no-match bad-path unbalanced no-validation)
   "Error types caused by the planner's reply, not by Scalpel or the user.
 A round that fails with one of these did not run anything: the
 model's output broke the action contract.  Retry advice differs
-type by type, so see the variable `scalpel-diagnose-advice'.")
+type by type, so see the variable `scalpel-diagnose-advice'.
+NO-VALIDATION means the planner picked file-substitute for a structured
+language whose provider cannot validate a rewrite; the remedy is
+block-edit, which the retry round can plan directly.")
 
 (defconst scalpel-diagnose-context-types
   '(file-outside-context)
@@ -50,10 +53,13 @@ did not follow the action contract."
 
 (defconst scalpel-diagnose-self-heal-types
   '(parse malformed no-replacement no-such-symbol pattern-no-match
-          bad-path unbalanced)
+          bad-path unbalanced no-validation)
   "Planner error types the console may retry automatically.
 Their failure reports carry enough context (near-miss lines, closest
-symbols) for the model to correct its own reply next round.")
+symbols) for the model to correct its own reply next round.
+NO-VALIDATION is the capability gate's refusal -- its message already
+names the remedy (block-edit), so the retried round can plan the
+right command from it.")
 
 (defun scalpel-diagnose-self-heal-p (err)
   "Return non-nil when ERR is a plist whose :type is self-healable.
@@ -65,7 +71,13 @@ the error text in the conversation can fix; see the variable
        (memq (plist-get err :type) scalpel-diagnose-self-heal-types)))
 
 (defconst scalpel-diagnose-advice
-  '((tool-call
+  '((no-validation
+     . "file-substitute was refused because this file's language has no
+structural check (:balanced-p), so a batch rewrite there cannot be
+validated.  Redo the edit as one block-edit per named definition
+next round; the refusal is what frees the retry, so nothing is
+broken.  To try again anyway: C-c C-e")
+    (tool-call
      . "the model answered in a tool-calling convention Scalpel does not
 parse, so nothing was executed.  A backend that answers this way
 tends to answer this way again, so retrying the same request
@@ -82,7 +94,9 @@ scalpel-console-repeat to retry"))
   "Advice text by exact error type.
 Looked up by function `scalpel-diagnose-advice-for', which falls
 back to variable `scalpel-diagnose-category-advice' via the
-type's category when no exact entry matches.")
+type's category when no exact entry matches.
+NO-VALIDATION has its own entry because its remedy is a
+different tool, not a corrected spelling of the same one.")
 
 (defconst scalpel-diagnose-category-advice
   '((planner
