@@ -1582,6 +1582,7 @@ after %s: %s."
                    (let ((elapsed (elapsed-text
                                    scalpel-console--unattended-start)))
                      (setq scalpel-console--unattended-p nil
+                           scalpel-console--unattended-deadline nil
                            scalpel-console--unattended-start nil
                            scalpel-agent-unattended-confirm nil)
                      (scalpel-console--append
@@ -1604,6 +1605,7 @@ after %s: %s."
                    ;; The branch that ended the run has already
                    ;; printed its own timestamped stop mark.
                    (setq scalpel-console--unattended-p nil
+                         scalpel-console--unattended-deadline nil
                          scalpel-console--unattended-start nil
                          scalpel-agent-unattended-confirm nil)))
                  (goto-char (point-max)))))
