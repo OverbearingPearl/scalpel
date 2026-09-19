@@ -670,12 +670,16 @@ HISTORY is the conversation text recorded before INSTRUCTION, or
 nil on the first turn.  History goes before the instruction so the
 instruction stays the last thing the LLM reads.  The agent holds no
 state of its own: everything the LLM may rely on arrives here."
-  (concat (scalpel-agent-context)
-          "\n\n"
-          (when (and history (not (string-empty-p history)))
-            (format "Conversation so far:\n%s\n\n" history))
-          "User instruction:\n"
-          instruction))
+  ;; Outbound redaction: the assembled prompt (context, history and
+  ;; instruction) is passed through scalpel-redact-apply so secrets are
+  ;; scrubbed before anything leaves the agent.
+  (scalpel-redact-apply
+   (concat (scalpel-agent-context)
+           "\n\n"
+           (when (and history (not (string-empty-p history)))
+             (format "Conversation so far:\n%s\n\n" history))
+           "User instruction:\n"
+           instruction)))
 
 (defconst scalpel-agent--dialect-error-types
   '((scalpel-llm-dialect-tool-call-error . tool-call)
