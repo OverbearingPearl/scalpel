@@ -1813,6 +1813,32 @@ planner the tokens the rewrite was meant to save."
             (push trimmed lines)))))
     (nreverse lines)))
 
+(defun scalpel-agent--line-at (text offset)
+  "Return the whole line of TEXT holding OFFSET.
+The substitute report pairs the line each match sat on before the
+rewrite with the line the same occurrence sits on after it, so a
+damaging replacement is quoted rather than only counted."
+  (let ((beg (save-match-data
+               ;; An empty match at position zero and a one-character
+               ;; match elsewhere both end just after a line start, so
+               ;; match-end names the beginning of OFFSET's line.
+               (if (string-match "\\`\\|." text (max 0 (1- offset)))
+                   (match-end 0)
+                 0)))
+        (end (save-match-data
+               (string-match "\\n" text offset))))
+    (substring text beg (or end (length text)))))
+
+(defun scalpel-agent--excerpt-line (text)
+  "Return line TEXT for display.
+Collapse any embedded newlines (or carriage returns) to a literal
+\\n sequence, then truncate the result to 60 characters, appending
+\"...\" if truncation occurred."
+  (let ((line (replace-regexp-in-string "[\n\r]+" "\\\\n" text)))
+    (if (> (length line) 60)
+        (concat (substring line 0 60) "...")
+      line)))
+
 (defun scalpel-agent--substitute-prefix-lines (text pattern)
   "Return the lines of TEXT holding the longest prefix of PATTERN.
 Return nil when no prefix of at least
@@ -2126,6 +2152,16 @@ match as `replace-regexp-in-string' reads them.  All FILES must be
 in the session context; a path outside it is refused, the same
 boundary a read obeys.
 
+Only files whose locate provider is registered but declares no
+:balanced-p are refused: the bracket check is the only structural
+validation a rewrite gets, so a registered language that cannot
+answer it has no safety net, and prose damage like emptied
+backtick pairs would pass silently.  Files with no registered
+provider are not structured languages and are outside this
+contract; they remain governed by the guards below.  Block-edit is
+the channel for such structured files, one named definition at a
+time.
+
 The whole transformation is computed and validated before anything
 reaches disk: new contents are built in memory, an `.el' file whose
 new content has unbalanced brackets refuses the whole rewrite, and
@@ -2140,12 +2176,15 @@ the planner's hands and the next round's locate failure explains
 nothing on its own.  A zero-match refusal quotes the lines that
 begin like the pattern, so the planner can correct the pattern it
 wrote rather than spend a round reading the text it had already
-misremembered.  Every refusal states the pattern and the replacement
+misremembered.  The report quotes before/after lines for the first
+occurrences, so a prose-damaging replacement is visible, not just
+counted.  Every refusal states the pattern and the replacement
 together, through `scalpel-agent--substitute-invocation', because
 the two are one action: a refusal naming only the half which failed
 leaves the other half to be restored from memory.  Return a
 human-readable report.  Signal `user-error' on malformed input, a
-file outside the context, a bad replacement, no matches, or an
+file outside the context, a structured language whose provider
+declares no :balanced-p, a bad replacement, no matches, or an
 unbalanced result."
   (unless (and files pattern (stringp replacement))
     (user-error "Scalpel: malformed file-substitute action: %s, files %S"
@@ -2163,6 +2202,25 @@ unbalanced result."
            "The file exists on disk"
          "No such file exists on disk")
        (scalpel-agent--substitute-invocation pattern replacement))))
+  ;; The balance check is the only structural validation a rewrite
+  ;; gets, so a language that cannot answer it has no safety net,
+  ;; and prose damage like emptied backtick pairs passes silently;
+  ;; steering those files to block-edit is the fix, not a special
+  ;; case for markdown.  Files whose provider is not registered are
+  ;; not structured languages and are not under this gate; their
+  ;; guard is the zero-match refusal below.
+  (dolist (file files)
+    (let* ((resolved (file-truename (expand-file-name file)))
+           (provider (scalpel-locate-provider-for-file resolved)))
+      (when (and provider (not (plist-get provider :balanced-p)))
+        (user-error
+         (concat "Scalpel: file-substitute is a structured-language tool "
+                 "and %s's provider declares no bracket check "
+                 "(:balanced-p), so a rewrite there cannot be validated; "
+                 "refused.  Edit this file with block-edit instead, one "
+                 "named definition at a time\n%s")
+         resolved
+         (scalpel-agent--substitute-invocation pattern replacement)))))
   ;; First pass: compute every new content in memory, so a failure in
   ;; the last file cannot leave the first ones half-rewritten.
   (let (staged)
@@ -2229,6 +2287,7 @@ unbalanced result."
       (pcase-dolist (`(,resolved ,old ,new) staged)
         (let ((count 0)
               (pos 0)
+              (excerpts nil)
               ;; The count has to read the pattern exactly as the
               ;; replacement did.  The replacement above runs with case
               ;; folding off, so counting with the buffer's default would
@@ -2239,6 +2298,30 @@ unbalanced result."
           (while (string-match pattern old pos)
             (setq count (1+ count)
                   pos (match-end 0)))
+          ;; Pair the match lines by index: the Nth match in OLD and the
+          ;; Nth match in NEW both come from the same scan order, so the
+          ;; Nth line of each names the same occurrence before and after
+          ;; the rewrite.
+          (let ((new-lines
+                 (let ((ls nil)
+                       (npos 0))
+                   (while (string-match pattern new npos)
+                     (push (scalpel-agent--line-at new (match-beginning 0))
+                           ls)
+                     (setq npos (match-end 0)))
+                   (nreverse ls)))
+                (old-lines
+                 (let ((ls nil)
+                       (opos 0))
+                   (while (string-match pattern old opos)
+                     (push (scalpel-agent--line-at old (match-beginning 0))
+                           ls)
+                     (setq opos (match-end 0)))
+                   (nreverse ls))))
+            (setq excerpts
+                  (seq-take
+                   (cl-pairlis old-lines new-lines)
+                   5)))
           ;; The definition listing is taken from the two texts before
           ;; anything is written: it is the only record of what the
           ;; rewrite did to the definitions, and the next round has no
@@ -2254,6 +2337,15 @@ unbalanced result."
               (save-buffer))
             (push (format "Rewrote %d occurrence(s) in %s" count resolved)
                   lines)
+            (dolist (pair excerpts)
+              (push
+               (format "  %s -> %s"
+                       (scalpel-agent--excerpt-line (car pair))
+                       (scalpel-agent--excerpt-line (cdr pair)))
+               lines))
+            (when (> count (length excerpts))
+              (push (format "  ... and %d more" (- count (length excerpts)))
+                    lines))
             (let ((note (scalpel-agent--rewrite-definition-note
                          resolved before after)))
               (when note (push note lines))))))

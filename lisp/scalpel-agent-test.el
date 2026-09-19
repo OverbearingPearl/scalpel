@@ -2312,7 +2312,7 @@ already there\" -- the whole-match placeholder of a replacement --
 and the refusal quoted the file's lines without saying that no file
 holds an ampersand at all, so a pattern that cannot match looked like
 a near miss, and the next attempt was spent on it."
-  (scalpel-utils-test-with-temp-file ".md"
+  (scalpel-utils-test-with-temp-file ".txt"
     (with-temp-file this-file
       (insert "| `some-report-marginal-threshold-ofmarginal-threshold`"
               " | `2.0` |\n"))
