@@ -291,7 +291,9 @@ not exist."
   '(scalpel-console--root
     scalpel-console--context-baseline
     scalpel-console--last-instruction
-    scalpel-agent--context-files)
+    scalpel-agent--context-files
+    scalpel-commit--style
+    scalpel-commit--language)
   "Buffer-local variables that together hold one console session.
 `scalpel-console--session-snapshot' captures exactly these and
 `scalpel-console--session-restore' puts them back, so a module reload
@@ -304,7 +306,10 @@ and `scalpel-console--operation-generation' must not survive a reload,
 and the reload is refused while busy is set, so restoring them would
 only risk resurrecting a dead round.
 `scalpel-agent--shell-output' is reset before and read within a
-single action, so its value belongs to no session.")
+single action, so its value belongs to no session.
+The commit defaults `scalpel-commit--style' and
+`scalpel-commit--language' are carried here so they survive a
+module reload.")
 
 (defconst scalpel-console--session-globals
   '(scalpel-token--console-totals
