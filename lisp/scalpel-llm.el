@@ -222,7 +222,6 @@ only and shows the most recent request's tally.  The global
 `scalpel-llm--tokens-received' mirrors this request's tally for
 readers outside the request; it is no longer reset at request
 start, so a concurrent request cannot zero an earlier one's count."
-  (message "Scalpel-debug: llm request start")
   (let* ((cancelled nil)
          (accumulated "")
          (timer nil)
@@ -252,7 +251,6 @@ start, so a concurrent request cannot zero an earlier one's count."
              (with-current-buffer owner
                (setq scalpel-llm--cancel-current nil))))
          (notify-error (payload)
-           (message "Scalpel-debug: llm notify-error %S" payload)
            ;; ON-ERROR runs after `abandon' has cancelled the idle timer
            ;; and the total deadline, so an error raised inside it can no
            ;; longer be rescued by either timer and would escape into
@@ -296,7 +294,6 @@ start, so a concurrent request cannot zero an earlier one's count."
          (finish (kind payload)
            (unless cancelled
              (abandon)
-             (message "Scalpel-debug: llm finish kind=%s" kind)
              (if (eq kind 'success)
                  (condition-case err
                      ;; Restore redaction placeholders (e.g. /Users/madachuan)

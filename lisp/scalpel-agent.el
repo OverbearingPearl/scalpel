@@ -1235,7 +1235,6 @@ the edit."
                    (when language-rule
                      (concat "\n\n" language-rule)))
            (lambda (new-text)
-             (message "Scalpel-debug: edit reply arrived for %s" symbol)
              (let ((new-text (scalpel-agent--usable-replacement file new-text)))
                (cond
                 ((string= new-text scalpel-agent--no-change-sentinel)
@@ -2614,7 +2613,6 @@ busy flag still gets a chance to release it."
                                    :reads (nreverse reads)
                                    :changes (nreverse changes))))
                   (step (rest)
-                    (message "Scalpel-debug: step, %d action(s) left" (length rest))
                     (if (null rest)
                         (finish)
                       (let ((action (car rest)))
@@ -2643,7 +2641,6 @@ busy flag still gets a chance to release it."
                             (funcall on-error err))))))))
                (step actions)))))
        (lambda (err)
-         (message "Scalpel-agent: forwarding error: %s" (plist-get err :message))
          (in-session
           (funcall on-error err)))))))
 
