@@ -371,7 +371,7 @@ console had drawn described a session that no longer existed."
       (scalpel-utils-test-kill-buffer (buffer-name buf)))))
 
 (ert-deftest scalpel-console-test-context-diff-face-covers-name-only ()
-  "The removed face starts exactly at the file name; the tree graphics carry no face."
+  "The removed face starts exactly at the file name; the tree graphics are dimmed by --render-diff."
   (let ((buf (scalpel-console-test--new-console-buffer)))
     (unwind-protect
         (progn
@@ -390,7 +390,7 @@ console had drawn described a session that no longer existed."
               (should pos)
               (should (eq (get-text-property pos 'face)
                           'scalpel-console-context-removed-face))
-              (should (null (get-text-property (1- pos) 'face))))))
+              (should (eq (get-text-property (1- pos) 'face) 'shadow)))))
       (when (buffer-live-p buf) (kill-buffer buf)))))
 
 (ert-deftest scalpel-console-test-status-line-own-line-and-clean-stop ()

@@ -208,16 +208,17 @@ scanner are all unchanged."
   :group 'scalpel)
 
 (defface scalpel-console-planner-error-face
-  '((t (:inherit error :weight bold)))
+  '((t (:inherit error)))
   "Face for a non-sandbox error turn in the console.
-The turn is marked with error emphasis, not dimmed: unlike
-`scalpel-console-consumed-body-face' -- which marks a body the
-planner no longer reads -- an error turn still joins the
-conversation and is read by the planner on the next round, so
-the face must not read as \"not sent\".  It only needs to stand
-apart from consumed and output text.  A sandbox failure never
-gets this face: it stays out of the conversation entirely and
-must stay loud."
+The face inherits `error', so the turn's colour follows the
+active theme's definition of `error' instead of hard-coding a
+foreground.  Unlike `scalpel-console-consumed-body-face' --
+which marks a body the planner no longer reads -- an error turn
+still joins the conversation and is read by the planner on the
+next round, so the face must not read as \"not sent\".  It only
+needs to stand apart from consumed and output text.  A sandbox
+failure never gets this face: it stays out of the conversation
+entirely and must stay loud."
   :group 'scalpel)
 
 (defun scalpel-console--buffer-name (root)
@@ -922,7 +923,10 @@ ROLE, when non-nil, tags TEXT as part of the conversation
 \(`user' or `assistant'), so `scalpel-console--history' returns it
 back; output appended without a role is display-only, as context
 trees are, and is tagged so it can never be mistaken for an
-instruction the user still has to send; its tail is also marked
+instruction the user still has to send.  Such role-less output is
+dimmed in `shadow', because it is never sent to the LLM, while
+conversation turns and the context tree's own faces (declared in
+`scalpel-console--render-diff') are left intact.  Its tail is marked
 rear-nonsticky, so text the user types at the end inherits
 nothing from it.  Point
 moves to the new end, so the user always sees the latest output after a
@@ -978,6 +982,23 @@ previous report's output, so the previous body stops being sent."
         (unless role
           (put-text-property beg (point) 'scalpel-console-output t))
         (unless role
+          ;; Dim display-only output: walk the appended region in
+          ;; constant-face runs and put `shadow' on exactly the runs
+          ;; that carry no face.  Safe again because the context tree
+          ;; now declares its own faces in `--render-diff' (graphics
+          ;; get shadow there, file names get their per-status faces),
+          ;; so this walk only touches plain display-only lines such
+          ;; as the retry attempt notice and "Mission complete,
+          ;; over.".
+          (save-excursion
+            (let ((pos beg))
+              (while (< pos (point))
+                (let* ((face (get-text-property pos 'face))
+                       (run-end (next-single-property-change
+                                 pos 'face nil (point))))
+                  (unless face
+                    (put-text-property pos run-end 'face 'shadow))
+                  (setq pos run-end)))))
           ;; Cut the sticky bridge: the properties just laid down (`face',
           ;; `scalpel-console-role', `scalpel-console-output') are
           ;; sticky by default, so text typed at the end would inherit
@@ -1056,8 +1077,12 @@ buffer, so one call never leaves a half-expanded console."
   "Return LINES as text with per-name change highlighting.
 LINES is a list of display cells as returned by
 `scalpel-agent-context-update'.  Added names are bolded; removed
-names are dimmed and struck through.  The tree graphics are never
-highlighted."
+names are dimmed and struck through; unchanged names keep the
+unchanged face.  The tree graphics (the part before :name-start)
+are display-only -- they are never sent to the LLM -- and are
+dimmed here with the shadow face rather than by
+`scalpel-console--append'.  Lines without a status are returned
+as their cell text, unhighlighted."
   (mapconcat
    (lambda (cell)
      (let* ((text (plist-get cell :text))
@@ -1065,13 +1090,16 @@ highlighted."
             (graphics (substring text 0 start))
             (name (substring text start)))
        (pcase (plist-get cell :status)
-         ('added (concat graphics
+         ('added (concat (propertize graphics
+                                     'face 'shadow)
                          (propertize name
                                      'face 'scalpel-console-context-added-face)))
-         ('removed (concat graphics
+         ('removed (concat (propertize graphics
+                                       'face 'shadow)
                            (propertize name
                                        'face 'scalpel-console-context-removed-face)))
-         ('same (concat graphics
+         ('same (concat (propertize graphics
+                                    'face 'shadow)
                         (propertize name
                                     'face 'scalpel-console-context-unchanged-face)))
          (_ text))))
