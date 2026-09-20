@@ -92,6 +92,28 @@ Modern tokenizers (DeepSeek, GPT, Claude) spend roughly one token
 per CJK character, against roughly four ASCII characters per
 token, so a single characters-per-token ratio cannot serve both.")
 
+(defconst scalpel-llm--cjk-regexp
+  (concat "["
+          (mapconcat (lambda (range) (format "%c-%c" (car range) (cdr range)))
+                     scalpel-llm--cjk-ranges "")
+          "]")
+  "Precompiled single-pass scanner form of `scalpel-llm--cjk-ranges'.
+Built programmatically with `mapconcat' and (format \"%c-%c\" ...)
+rather than pasting literal multibyte characters, so it can never
+drift out of sync with `scalpel-llm--cjk-ranges' and no non-ASCII
+literal can be lost or altered by editors or encodings in transit.
+Encodes the exact same code-point ranges as one character
+alternative, so `scalpel-llm--count-tokens' can count CJK
+characters per chunk with a single C-level regexp scan on the
+streaming hot path instead of an Elisp loop over every character
+times every range.
+
+The string contains only a character-alternative expression: no
+grouping constructs and no literal parens, so no
+parenthesis-escaping concerns arise; it matches single characters
+only, so greedy/non-greedy semantics are irrelevant, and the dot
+metacharacter and newline handling play no role in its behavior.")
+
 (defun scalpel-llm--cjk-char-p (char)
   "Return non-nil when CHAR falls in a CJK code-point range."
   (cl-some (lambda (range)
@@ -105,13 +127,16 @@ heuristic; CJK characters are counted at one token per character,
 which is what modern tokenizers actually spend on them.  The
 previous single ratio priced Chinese text at a quarter of its real
 cost, so the status line and the token accounting under-reported
-every CJK-heavy prompt."
-  (let ((cjk 0))
-    (cl-loop for char across text
-             do (cl-loop for (lo . hi) in scalpel-llm--cjk-ranges
-                         when (and (>= char lo) (<= char hi))
-                         do (setq cjk (1+ cjk))
-                         and return t))
+every CJK-heavy prompt.  CJK detection uses `scalpel-llm--cjk-regexp', a
+regexp precompiled once, so per-chunk token counting stays cheap on
+the streaming hot path; token numbers are unchanged."
+  (let ((cjk 0)
+        (pos 0))
+    (while (and (<= pos (length text))
+                (string-match scalpel-llm--cjk-regexp text pos))
+      (setq cjk (1+ cjk)
+            pos (match-beginning 0))
+      (setq pos (1+ pos)))
     (+ cjk (ceiling (/ (- (length text) cjk) 4.0)))))
 
 (defun scalpel-llm--reset-reasoning-buffer (&optional buffer-name)
