@@ -1472,12 +1472,21 @@ holds the real paths the user typed."
 (defun scalpel-console--shell-description (shell)
   "Describe one entry of the :shells list for a confirmation prompt.
 SHELL is a plist carrying at least :command and :bytes."
-  (format "%s (%d bytes%s)"
-          (plist-get shell :command)
-          (or (plist-get shell :bytes) 0)
-          (cond ((plist-get shell :binary) ", binary")
-                ((plist-get shell :truncated) ", truncated")
-                (t ""))))
+  (cl-labels ((human-size (bytes)
+                (cond ((>= bytes 1073741824)
+                       (format "%.1f GB" (/ bytes 1073741824.0)))
+                      ((>= bytes 1048576)
+                       (format "%.1f MB" (/ bytes 1048576.0)))
+                      ((>= bytes 1024)
+                       (format "%.1f KB" (/ bytes 1024.0)))
+                      (t (format "%d bytes" bytes)))))
+    (format "%s (%d bytes, %s%s)"
+            (plist-get shell :command)
+            (or (plist-get shell :bytes) 0)
+            (human-size (or (plist-get shell :bytes) 0))
+            (cond ((plist-get shell :binary) ", binary")
+                  ((plist-get shell :truncated) ", truncated")
+                  (t "")))))
 
 (defun scalpel-console--noisy-round-p (result)
   "Return non-nil when RESULT's shell output is too large to continue.

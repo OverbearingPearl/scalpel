@@ -999,7 +999,9 @@ that dumped a large file could be approved unnoticed."
                                     :truncated t :binary nil))))))
     (ert-info ((format "Prompt:\n%S" prompt))
       (should (string-match-p "cat big.log" prompt))
-      (should (string-match-p "12345 bytes, truncated" prompt)))))
+      (should (string-match-p "12345 bytes" prompt))
+      (should (string-match-p "12345 bytes, 12\\.1 KB, truncated" prompt))
+      (should (string-match-p "12\\.1 KB" prompt)))))
 
 (ert-deftest scalpel-console-test-noisy-round-p ()
   "A round is noisy when output is huge, truncated, or binary."
