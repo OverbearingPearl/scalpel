@@ -632,13 +632,20 @@ occupied."
                (setq up (+ sys ctx hist instr)))
              (when (marker-buffer beg)
                (with-current-buffer (marker-buffer beg)
-                 (save-excursion
-                   (let ((inhibit-read-only t))
-                     (goto-char beg)
-                     (delete-region (point) (1+ (line-end-position)))
-                     (insert (funcall line
-                                      (- scalpel-llm--total-received down0)
-                                      (round (- (float-time) start)))))))))))
+                 ;; Remember whether the user is parked at point-max
+                 ;; (following the tail) before the rewrite; save-excursion
+                 ;; would otherwise restore an integer position that lands
+                 ;; inside the rewritten spinner line.
+                 (let ((follow-tail (= (point) (point-max))))
+                   (save-excursion
+                     (let ((inhibit-read-only t))
+                       (goto-char beg)
+                       (delete-region (point) (1+ (line-end-position)))
+                       (insert (funcall line
+                                        (- scalpel-llm--total-received down0)
+                                        (round (- (float-time) start))))))
+                   (when follow-tail
+                     (goto-char (point-max)))))))))
       (setq timer (run-with-timer 1 1 refresh))
       (let ((stop
              (lambda ()
