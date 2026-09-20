@@ -2047,8 +2047,9 @@ ROUNDS, from a prefix argument, overrides
 `scalpel-console-unattended-max-rounds' for this run.  This
 command arms the run at any point: when idle, it governs the
 rounds the user sends next; when an operation is already running,
-the in-flight loop picks the flags up at its next round boundary,
-so the user can leave mid-task.  A time budget also applies: when
+the in-flight loop picks the flags up at its next round boundary
+\(and the confirm flag is re-armed immediately here), so the user
+can leave mid-task.  A time budget also applies: when
 `scalpel-console-unattended-max-minutes' elapse, unattended ends and
 confirms ask again, but rounds keep running attended.  The run
 confirms nothing, continues through noisy output, and stops at the
@@ -2065,6 +2066,7 @@ request."
   (interactive "P")
   (let ((just-started (null scalpel-console--unattended-p)))
     (setq scalpel-console--unattended-p t
+          scalpel-agent-unattended-confirm t
           scalpel-console--unattended-limit
           (or (and (numberp rounds) rounds)
               scalpel-console-unattended-max-rounds))
