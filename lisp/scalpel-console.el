@@ -208,14 +208,16 @@ scanner are all unchanged."
   :group 'scalpel)
 
 (defface scalpel-console-planner-error-face
-  '((t :inherit shadow))
+  '((t (:inherit error :weight bold)))
   "Face for a non-sandbox error turn in the console.
-The turn is dimmed for reading, not for trimming: unlike
+The turn is marked with error emphasis, not dimmed: unlike
 `scalpel-console-consumed-body-face' -- which marks a body the
 planner no longer reads -- an error turn still joins the
-conversation and is read by the planner on the next round.  A
-sandbox failure never gets this face: it stays out of the
-conversation entirely and must stay loud."
+conversation and is read by the planner on the next round, so
+the face must not read as \"not sent\".  It only needs to stand
+apart from consumed and output text.  A sandbox failure never
+gets this face: it stays out of the conversation entirely and
+must stay loud."
   :group 'scalpel)
 
 (defun scalpel-console--buffer-name (root)
