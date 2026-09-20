@@ -754,7 +754,9 @@ dropped at all."
   (when scalpel-console-trim-consumed-output
     (cl-loop
      for region in (butlast (scalpel-console--assistant-report-regions))
-     unless (eq (get-text-property (car region) 'face) 'scalpel-console-planner-error-face)
+     unless (or (get-text-property (car region) 'scalpel-console-planner-error)
+                (eq (get-text-property (car region) 'face)
+                    'scalpel-console-planner-error-face))
      for text = (buffer-substring-no-properties (car region) (cdr region))
      for trimmed = (scalpel-console--trim-report text)
      unless (string= trimmed text)
@@ -847,16 +849,27 @@ status lines — are dropped.  The buffer is the only record: nothing
 is kept in a variable, so what the user sees is what the agent
 gets.
 
+Planner-error turns are conversation for the agent too: they join
+the history like any other turn, and only their role and text
+matter here.  This mirrors the collection rule (not the skip rule)
+in `scalpel-console--consumed-body-regions', which drops them from
+consumption accounting while the history keeps them.
+
 Only the newest assistant report keeps its output body.  A report
 is read back exactly once, by the round that follows it, so with
 `scalpel-console-trim-consumed-output' set the bodies of every
 older report are replaced by
 `scalpel-console--consumed-output-marker'; their headers remain, so
-the planner still knows what ran and how much it produced.  The
-trim is a projection over the buffer text, never an edit of it, so
-the console keeps the whole record.  Which reports are trimmed is
-shown on screen by `scalpel-console--refresh-consumed-body-markers',
-which derives it from the same regions and the same
+the planner still knows what ran and how much it produced.
+Planner-error turns are exempt from trimming: the property
+`scalpel-console-planner-error', read at the region's start
+position, marks them, and the face-based fallback is deliberately
+not used, since inspecting the `face' property with list predicates
+broke when it held a bare symbol.  The trim is a projection over
+the buffer text, never an edit of it, so the console keeps the
+whole record.  Which reports are trimmed is shown on screen by
+`scalpel-console--refresh-consumed-body-markers', which derives it
+from the same regions and the same
 `scalpel-console--trim-report'."
   (let ((pos (point-min))
         (turns nil))
@@ -865,24 +878,28 @@ which derives it from the same regions and the same
                    pos 'scalpel-console-role nil (point-max))))
         (let ((role (get-text-property pos 'scalpel-console-role)))
           (when role
-            (push (cons role (buffer-substring-no-properties pos next))
-                  turns)))
-        (setq pos next)))
+            (push (list role
+                        (get-text-property pos 'scalpel-console-planner-error)
+                        pos (buffer-substring-no-properties pos next))
+                  turns))
+          (setq pos next))))
     (let ((turns (nreverse turns))
           (newest-assistant nil))
       (cl-loop for turn in turns
                for i from 0
-               when (eq (car turn) 'assistant)
+               when (and (eq (nth 0 turn) 'assistant)
+                         (not (nth 1 turn)))
                do (setq newest-assistant i))
       (string-trim
        (string-join
         (cl-loop for turn in turns
                  for i from 0
                  collect (if (and scalpel-console-trim-consumed-output
-                                  (eq (car turn) 'assistant)
+                                  (eq (nth 0 turn) 'assistant)
+                                  (not (nth 1 turn))
                                   (not (eql i newest-assistant)))
-                             (scalpel-console--trim-report (cdr turn))
-                           (cdr turn)))
+                             (scalpel-console--trim-report (nth 3 turn))
+                           (nth 3 turn)))
         "")))))
 
 (defun scalpel-console--collapse-report-bodies (beg end)
@@ -1479,12 +1496,16 @@ holds the real paths the user typed."
                             'assistant)
                            ;; The failure is dimmed for reading only: the
                            ;; turn still joins the conversation, so this
-                           ;; must not read as a trimmed body.  Declaring
-                           ;; the face `rear-nonsticky' keeps keyboard
-                           ;; input typed after the turn from inheriting
-                           ;; it.
+                           ;; must not read as a trimmed body.  The explicit
+                           ;; `scalpel-console-planner-error' property is the
+                           ;; durable marker; the face remains only as the
+                           ;; legacy signal.  Both are declared
+                           ;; `rear-nonsticky' so keyboard input typed after
+                           ;; the turn inherits neither.
                            (put-text-property err-beg (point) 'face
                                               'scalpel-console-planner-error-face)
+                           (put-text-property err-beg (point)
+                                              'scalpel-console-planner-error t)
                            (scalpel-console--make-nonsticky
                             err-beg (point) '(face)))
                        ;; An error turn is a conversation turn too: it becomes the
