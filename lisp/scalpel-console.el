@@ -1700,8 +1700,8 @@ after %s: %s."
                            ((>= round round-limit)
                             (if (unattended-p)
                                 (progn
-                                  (finish-operation)
-                                  (stop-unattended "round limit reached"))
+                                  (stop-unattended "round limit reached")
+                                  (finish-operation))
                               (finish-operation)
                               (let ((notice
                                      (format
