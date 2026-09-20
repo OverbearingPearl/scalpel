@@ -1232,7 +1232,7 @@ body was dropped would describe the wrong thing."
       (goto-char (point-max))
       (let ((inhibit-read-only nil))
         (insert (propertize
-                 "\nScalpel: the conversation above was forgotten; it stays visible but is no longer part of what the agent reads.\n"
+                 "\nScalpel: the conversation above was forgotten; it stays visible but is no longer part of what the agent reads.\n\n"
                  'face 'shadow
                  'scalpel-console-output t
                  'rear-nonsticky t)))
