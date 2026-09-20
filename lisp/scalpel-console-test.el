@@ -411,8 +411,9 @@ so non-zero counters made STOP delete a character inside
                                 :instruction 0)))
                  (refresh (car status))
                  (stop (cdr status)))
-            (should (= (point) (point-max)))
-            (should (eq (char-before) ?\n))
+            ;; The status line inserts under `save-excursion', so point
+            ;; must stay where it was: after "User: hi\n", at 10.
+            (should (= (point) 10))
             (save-excursion
               (goto-char (point-min))
               (should (search-forward

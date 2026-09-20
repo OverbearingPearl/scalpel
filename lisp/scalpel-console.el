@@ -613,9 +613,10 @@ occupied."
                  (format "Scalpel: up %d = sys %d + ctx %d + hist %d + instr %d, down %d, %ds\n"
                          up sys ctx hist instr down seconds)))
          timer beg)
-    (goto-char (point-max))
-    (setq beg (point-marker))
-    (insert (funcall line (- scalpel-llm--total-received down0) 0))
+    (save-excursion
+      (goto-char (point-max))
+      (setq beg (point-marker))
+      (insert (funcall line (- scalpel-llm--total-received down0) 0)))
     (let ((refresh
            (lambda (&optional new-breakdown)
              ;; The line is installed with a placeholder breakdown so the
@@ -1986,7 +1987,9 @@ is dropped instead of writing a report or continuing a round.
 An unattended run is also disarmed here, with its own timestamped
 mark, so the transcript records why the run ended.  The cancel
 closure is per-console (buffer-local), read from this console's
-target buffer."
+target buffer.  The cursor is moved to the newest output so the
+user can confirm the cancellation took hold and send the next
+instruction."
   (interactive)
   (let ((target (scalpel-console--target-buffer)))
     (with-current-buffer target
@@ -2002,6 +2005,9 @@ target buffer."
                        (format-time-string "%H:%M"))))
             (scalpel-console--append
              "Scalpel: Mission aborted, breaking off, out.")
+            ;; Abort demands the user's attention, so jump to the
+            ;; newest text rather than following.
+            (goto-char (point-max))
             (when cancel
               (funcall cancel))
             (message "Scalpel: current operation aborted."))
