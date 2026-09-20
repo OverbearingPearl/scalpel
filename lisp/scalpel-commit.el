@@ -264,11 +264,24 @@ answer instead of repeating it."
 
 (defun scalpel-commit--ask-style ()
   "Ask which commit style to use, and remember the answer."
-  (let ((style
-         (intern
+  (let* ((descriptions
+          '((angular . "Conventional Commits: type(scope): subject, body explains changes")
+            (linux . "plain subject, blank line, body; no type prefix")))
+         (candidates
+          (mapcar
+           (lambda (style)
+             (cons (format "%s  %s"
+                           (capitalize (symbol-name style))
+                           (or (cdr (assq style descriptions))
+                               "no description"))
+                   style))
+           scalpel-commit--styles))
+         (choice
           (completing-read "Commit style: "
-                           (mapcar #'symbol-name scalpel-commit--styles)
-                           nil t))))
+                           (mapcar #'car candidates)
+                           nil t))
+         (style
+          (cdr (assoc choice candidates))))
     (setq scalpel-commit--style style)
     style))
 
