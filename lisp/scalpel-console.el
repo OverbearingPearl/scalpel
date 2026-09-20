@@ -916,11 +916,14 @@ ROLE, when non-nil, tags TEXT as part of the conversation
 \(`user' or `assistant'), so `scalpel-console--history' returns it
 back; output appended without a role is display-only, as context
 trees are, and is tagged so it can never be mistaken for an
-instruction the user still has to send.  Point moves to the new
-end, so the user always sees the latest output after a context
-refresh or reply.  Appending an assistant round also refreshes the
-consumed-body marks: that round is the cycle that processes the previous
-report's output, so the previous body stops being sent."
+instruction the user still has to send, and is dimmed with face
+`shadow' here—but only on runs of text that do not already carry a
+face, so context tree file names keep their own coloring—so callers
+need not set the face themselves.  Point
+moves to the new end, so the user always sees the latest output after a
+context refresh or reply.  Appending an assistant round also refreshes
+the consumed-body marks: that round is the cycle that processes the
+previous report's output, so the previous body stops being sent."
   (let ((buf (scalpel-console--target-buffer)))
     (with-current-buffer buf
       ;; Drop any pending acknowledgement line: any reply or error that
@@ -969,6 +972,20 @@ report's output, so the previous body stops being sent."
         (scalpel-console--insert-tagged (format "%s\n\n" text) role)
         (unless role
           (put-text-property beg (point) 'scalpel-console-output t))
+        (unless role
+          ;; Dim only text that has no face of its own: a blanket write
+          ;; here overwrote the per-file faces the context tree already
+          ;; carries.  Walk constant-face runs via
+          ;; `next-single-property-change' and apply `shadow' only to
+          ;; runs whose face is nil.
+          (let ((pos beg))
+            (while (< pos (point))
+              (let* ((run-beg pos)
+                     (run-end (next-single-property-change
+                               pos 'face nil (point))))
+                (unless (get-text-property run-beg 'face)
+                  (put-text-property run-beg run-end 'face 'shadow))
+                (setq pos run-end)))))
         ;; Fold every fenced report body in what was just appended, so a
         ;; large shell dump does not bury the conversation.  Display
         ;; only: the record above and the projection `--history' builds
@@ -1586,14 +1603,12 @@ round."
                      scalpel-console--unattended-start nil
                      scalpel-agent-unattended-confirm nil)
                (scalpel-console--append
-                (propertize
-                 (if elapsed
-                     (format "Scalpel: Unattended stopped at %s \
+                (if elapsed
+                    (format "Scalpel: Unattended stopped at %s \
 after %s: %s."
-                             (format-time-string "%H:%M") elapsed reason)
-                   (format "Scalpel: Unattended stopped at %s: %s."
-                           (format-time-string "%H:%M") reason))
-                 'face 'shadow))))
+                            (format-time-string "%H:%M") elapsed reason)
+                  (format "Scalpel: Unattended stopped at %s: %s."
+                          (format-time-string "%H:%M") reason)))))
            (finish-operation (&optional complete)
              (when (and (buffer-live-p target)
                         (= operation
@@ -1610,21 +1625,18 @@ after %s: %s."
                            scalpel-console--unattended-start nil
                            scalpel-agent-unattended-confirm nil)
                      (scalpel-console--append
-                      (propertize
-                       (if elapsed
-                           (format
-                            (concat "Scalpel: Mission complete, over. "
-                                    "(unattended, %s, ran %s)")
-                            (format-time-string "%H:%M") elapsed)
-                         (format
-                          (concat "Scalpel: Mission complete, over. "
-                                  "(unattended, %s)")
-                          (format-time-string "%H:%M")))
-                       'face 'shadow))))
+                      (if elapsed
+                          (format
+                           (concat "Scalpel: Mission complete, over. "
+                                   "(unattended, %s, ran %s)")
+                           (format-time-string "%H:%M") elapsed)
+                        (format
+                         (concat "Scalpel: Mission complete, over. "
+                                 "(unattended, %s)")
+                         (format-time-string "%H:%M"))))))
                   (complete
                    (scalpel-console--append
-                    (propertize "Scalpel: Mission complete, over."
-                                'face 'shadow)))
+                    "Scalpel: Mission complete, over."))
                   ((unattended-p)
                    (stop-unattended "error ended the run")))
                  (goto-char (point-max)))))
@@ -1643,18 +1655,16 @@ after %s: %s."
                        scalpel-console--unattended-start nil
                        scalpel-agent-unattended-confirm nil)
                  (scalpel-console--append
-                  (propertize
-                   (if elapsed
-                       (format
-                        (concat "Scalpel: Unattended stopped at %s after "
-                                "%s: time limit reached; continuing "
-                                "attended.")
-                        (format-time-string "%H:%M") elapsed)
-                     (format
-                      (concat "Scalpel: Unattended stopped at %s: time "
-                              "limit reached; continuing attended.")
-                      (format-time-string "%H:%M")))
-                   'face 'shadow))))
+                  (if elapsed
+                      (format
+                       (concat "Scalpel: Unattended stopped at %s after "
+                               "%s: time limit reached; continuing "
+                               "attended.")
+                       (format-time-string "%H:%M") elapsed)
+                    (format
+                     (concat "Scalpel: Unattended stopped at %s: time "
+                             "limit reached; continuing attended.")
+                     (format-time-string "%H:%M"))))))
              (setq round (1+ round))
              (scalpel-console--run-round
               next-instruction conversation
@@ -1928,13 +1938,10 @@ target buffer."
               (setq scalpel-console--unattended-p nil
                     scalpel-agent-unattended-confirm nil)
               (scalpel-console--append
-               (propertize
-                (format "Scalpel: Unattended aborted at %s."
-                        (format-time-string "%H:%M"))
-                'face 'shadow)))
+               (format "Scalpel: Unattended aborted at %s."
+                       (format-time-string "%H:%M"))))
             (scalpel-console--append
-             (propertize "Scalpel: Mission aborted, breaking off, out."
-                         'face 'shadow))
+             "Scalpel: Mission aborted, breaking off, out.")
             (when cancel
               (funcall cancel))
             (message "Scalpel: current operation aborted."))
@@ -1974,16 +1981,14 @@ request."
     (when just-started
       (setq scalpel-console--unattended-start (current-time))))
   (scalpel-console--append
-   (propertize
-    (if (scalpel-console--busy-p)
-        (format "Scalpel: Unattended armed at %s. Takes over after the current round; auto-stop after %d rounds or %d minutes."
-                (format-time-string "%H:%M")
-                scalpel-console--unattended-limit
-                scalpel-console-unattended-max-minutes)
-      (format "Scalpel: Unattended begin at %s. Auto-stop after %d rounds."
-              (format-time-string "%H:%M")
-              scalpel-console--unattended-limit))
-    'face 'shadow)))
+   (if (scalpel-console--busy-p)
+       (format "Scalpel: Unattended armed at %s. Takes over after the current round; auto-stop after %d rounds or %d minutes."
+               (format-time-string "%H:%M")
+               scalpel-console--unattended-limit
+               scalpel-console-unattended-max-minutes)
+     (format "Scalpel: Unattended begin at %s. Auto-stop after %d rounds."
+             (format-time-string "%H:%M")
+             scalpel-console--unattended-limit))))
 
 (defun scalpel-console-unload-function ()
   "Suppress `unload-feature's default cleanup for this module.
