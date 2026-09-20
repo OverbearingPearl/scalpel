@@ -1136,10 +1136,25 @@ body was dropped would describe the wrong thing."
         ;; A forgotten turn is history on screen, not an instruction
         ;; still to send: tag it so it never reads back as input.
         (put-text-property (car range) (cdr range)
-                           'scalpel-console-output t))
+                           'scalpel-console-output t)
+        ;; Dim the text: the shadow face says at a glance that what
+        ;; the user sees is history, not the live conversation.
+        (put-text-property (car range) (cdr range)
+                           'face 'shadow))
       ;; Re-deriving the marks clears them: with the roles gone, no turn
       ;; is an assistant turn any more.
       (scalpel-console--refresh-consumed-body-markers)
+      ;; Leave a display-only note at the end of the buffer.  It carries
+      ;; `scalpel-console-output' and no role, so it never reads back as
+      ;; conversation or input; it only tells the user where the old
+      ;; conversation ends.
+      (goto-char (point-max))
+      (let ((inhibit-read-only nil))
+        (insert (propertize
+                 "\nScalpel: the conversation above was forgotten; it stays visible but is no longer part of what the agent reads.\n"
+                 'face 'shadow
+                 'scalpel-console-output t
+                 'rear-nonsticky t)))
       (goto-char (point-max))
       (message "Scalpel: conversation forgotten; the text stays on screen."))))
 
