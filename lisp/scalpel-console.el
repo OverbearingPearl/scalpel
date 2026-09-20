@@ -1602,12 +1602,7 @@ after %s: %s."
                     (propertize "Scalpel: Mission complete, over."
                                 'face 'shadow)))
                   ((unattended-p)
-                   ;; The branch that ended the run has already
-                   ;; printed its own timestamped stop mark.
-                   (setq scalpel-console--unattended-p nil
-                         scalpel-console--unattended-deadline nil
-                         scalpel-console--unattended-start nil
-                         scalpel-agent-unattended-confirm nil)))
+                   (stop-unattended "error ended the run")))
                  (goto-char (point-max)))))
            (run-next ()
              (when (unattended-p)
