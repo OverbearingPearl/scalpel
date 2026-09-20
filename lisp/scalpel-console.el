@@ -798,9 +798,11 @@ header is what stays readable.  The caller binds
 
 (defun scalpel-console--clear-consumed-body-markers ()
   "Remove every consumed-body mark from the current buffer.
-The stickiness guard `scalpel-console--mark-consumed-body' adds is
-left in place: it only suppresses property inheritance, and the
-range carries no marker properties afterwards."
+The consumed-body face is removed together with the mark: it
+describes spent output and must go when the mark goes.  Callers
+that want their own dimming apply it after clearing.  The
+stickiness guard `scalpel-console--mark-consumed-body' adds is
+left in place: it only suppresses property inheritance."
   (let ((inhibit-read-only t)
         (pos (point-min)))
     (while (< pos (point-max))
@@ -808,7 +810,8 @@ range carries no marker properties afterwards."
                    pos 'scalpel-console-consumed-body nil (point-max))))
         (when (get-text-property pos 'scalpel-console-consumed-body)
           (remove-text-properties
-           pos next '(scalpel-console-consumed-body nil face nil
+           pos next '(scalpel-console-consumed-body nil
+                       face nil
                        help-echo nil)))
         (setq pos next)))))
 
@@ -1136,14 +1139,18 @@ body was dropped would describe the wrong thing."
         ;; A forgotten turn is history on screen, not an instruction
         ;; still to send: tag it so it never reads back as input.
         (put-text-property (car range) (cdr range)
-                           'scalpel-console-output t)
-        ;; Dim the text: the shadow face says at a glance that what
-        ;; the user sees is history, not the live conversation.
+                           'scalpel-console-output t))
+      ;; Clear the consumed-body marks before coloring: with the roles
+      ;; cleared above, no turn is an assistant turn any more, so
+      ;; re-deriving the marks clears them without re-applying any.
+      (scalpel-console--refresh-consumed-body-markers)
+      ;; Dim the text last: the shadow face says at a glance that what
+      ;; the user sees is history, not the live conversation.  Applying
+      ;; it after the refresh above means every forgotten turn,
+      ;; including the old report headers, ends up shadowed.
+      (dolist (range ranges)
         (put-text-property (car range) (cdr range)
                            'face 'shadow))
-      ;; Re-deriving the marks clears them: with the roles gone, no turn
-      ;; is an assistant turn any more.
-      (scalpel-console--refresh-consumed-body-markers)
       ;; Leave a display-only note at the end of the buffer.  It carries
       ;; `scalpel-console-output' and no role, so it never reads back as
       ;; conversation or input; it only tells the user where the old

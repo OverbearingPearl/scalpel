@@ -1601,8 +1601,9 @@ claiming a body was dropped when it is now sent whole."
               ;; The text stays on screen...
               (goto-char (point-min))
               (should (search-forward "Shell: ls" nil t))
-              ;; ...but no turn is a conversation turn any more.
-              (should-not (get-text-property spent 'face))
+              ;; ...but no turn is a conversation turn any more, and
+              ;; the header is dimmed as history, not marked as spent.
+              (should (eq (get-text-property spent 'face) 'shadow))
               (should-not (get-text-property
                            spent 'scalpel-console-consumed-body))
               (should (null (scalpel-console--pending-input-regions)))
