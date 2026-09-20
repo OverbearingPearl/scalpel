@@ -617,11 +617,24 @@ occupied."
          (line (lambda (down seconds)
                  (format "Scalpel: up %d = sys %d + ctx %d + hist %d + instr %d, down %d, %ds\n"
                          up sys ctx hist instr down seconds)))
+         ;; The status line is display-only output: tag it like other
+         ;; output, so a line that outlives its round (an abort, a
+         ;; settle that failed to stop the timer, an Unattended run
+         ;; leaving one behind) is never read back as typed input by
+         ;; `scalpel-console--pending-input-regions' and never joins
+         ;; the conversation.  The final character is rear-nonsticky,
+         ;; so text typed after the line inherits nothing from it.
+         (paint (lambda (beg end)
+                  (put-text-property beg end 'scalpel-console-output t)
+                  (put-text-property (1- end) end 'rear-nonsticky
+                                     '(scalpel-console-output face))))
          timer beg)
     (save-excursion
       (goto-char (point-max))
       (setq beg (point-marker))
-      (insert (funcall line (- scalpel-llm--total-received down0) 0)))
+      (let ((line-beg (point)))
+        (insert (funcall line (- scalpel-llm--total-received down0) 0))
+        (funcall paint line-beg (point))))
     (let ((refresh
            (lambda (&optional new-breakdown)
              ;; The line is installed with a placeholder breakdown so the
@@ -646,9 +659,11 @@ occupied."
                      (let ((inhibit-read-only t))
                        (goto-char beg)
                        (delete-region (point) (1+ (line-end-position)))
-                       (insert (funcall line
-                                        (- scalpel-llm--total-received down0)
-                                        (round (- (float-time) start))))))
+                       (let ((line-beg (point)))
+                         (insert (funcall line
+                                          (- scalpel-llm--total-received down0)
+                                          (round (- (float-time) start))))
+                         (funcall paint line-beg (point)))))
                    (when follow-tail
                      (goto-char (point-max)))))))))
       (setq timer (run-with-timer 1 1 refresh))
