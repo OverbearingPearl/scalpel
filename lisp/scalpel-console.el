@@ -922,12 +922,9 @@ ROLE, when non-nil, tags TEXT as part of the conversation
 \(`user' or `assistant'), so `scalpel-console--history' returns it
 back; output appended without a role is display-only, as context
 trees are, and is tagged so it can never be mistaken for an
-instruction the user still has to send, and is dimmed with face
-`shadow' here—but only on runs of text that do not already carry a
-face, so context tree file names keep their own coloring—and the
-sticky face bridge at the end is cut, so text the user types at
-the end starts un-dimmed instead of inheriting `shadow'—so callers
-need not set the face themselves.  Point
+instruction the user still has to send; its tail is also marked
+rear-nonsticky, so text the user types at the end inherits
+nothing from it.  Point
 moves to the new end, so the user always sees the latest output after a
 context refresh or reply.  Appending an assistant round also refreshes
 the consumed-body marks: that round is the cycle that processes the
@@ -981,30 +978,16 @@ previous report's output, so the previous body stops being sent."
         (unless role
           (put-text-property beg (point) 'scalpel-console-output t))
         (unless role
-          ;; Dim only text that has no face of its own: a blanket write
-          ;; here overwrote the per-file faces the context tree already
-          ;; carries.  Walk constant-face runs via
-          ;; `next-single-property-change' and apply `shadow' only to
-          ;; runs whose face is nil.
-          (let ((pos beg))
-            (while (< pos (point))
-              (let* ((run-beg pos)
-                     (run-end (next-single-property-change
-                               pos 'face nil (point))))
-                (unless (get-text-property run-beg 'face)
-                  (put-text-property run-beg run-end 'face 'shadow))
-                (setq pos run-end))))
-          ;; Cut the sticky bridge: the `shadow' face just laid down is
-          ;; sticky at the rear, so text typed at the end inherits it
-          ;; and stays dimmed until RET re-tags the region.  Mark the
-          ;; final character rear-nonsticky for the properties this
-          ;; append may have set, so freshly typed text starts with no
-          ;; face and no output tagging of its own.
-          (when (eq (get-text-property (1- (point)) 'face) 'shadow)
-            (put-text-property (1- (point)) (point)
-                               'rear-nonsticky
-                               '(face scalpel-console-role
-                                 scalpel-console-output))))
+          ;; Cut the sticky bridge: the properties just laid down (`face',
+          ;; `scalpel-console-role', `scalpel-console-output') are
+          ;; sticky by default, so text typed at the end would inherit
+          ;; them.  Mark the final character rear-nonsticky, so
+          ;; freshly typed text starts with no face and no output
+          ;; tagging of its own.
+          (put-text-property (1- (point)) (point)
+                             'rear-nonsticky
+                             '(face scalpel-console-role
+                               scalpel-console-output)))
         ;; Fold every fenced report body in what was just appended, so a
         ;; large shell dump does not bury the conversation.  Display
         ;; only: the record above and the projection `--history' builds
