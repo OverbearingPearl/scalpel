@@ -32,7 +32,7 @@
 ;;; Code:
 
 (require 'cl-lib)
-(require 'scalpel-llm)
+(require 'scalpel-prompt-commit)
 
 (defun scalpel-commit-run ()
   "Prepare a commit for the current console's project with an LLM message.
@@ -220,47 +220,17 @@ limit travels whole as its own piece."
 
 (defun scalpel-commit--style-prompt (style)
   "Return the style rules for STYLE, one of `scalpel-commit--styles'."
-  (pcase style
-    ('angular
-     (concat "Style: conventional (angular) commits.  Subject line is "
-             "type(scope): imperative summary -- types include feat, "
-             "fix, docs, refactor, test, chore.  No trailing period.  "
-             "Body paragraphs, each wrapped to 72 columns, separated "
-             "by blank lines.  Footer lines only when a breaking change "
-             "or an issue needs naming."))
-    ('linux
-     (concat "Style: Linux kernel commits.  Subject line is a plain "
-             "imperative summary, no type prefix, no trailing period.  "
-             "Blank line, then prose paragraphs wrapped to 72 columns "
-             "explaining WHY the change is right, not just what it "
-             "does.  No type tags, no scope, no bullet lists unless the "
-             "change itself enumerates things."))
-    (_ "")))
+  (scalpel-prompt-commit-style-prompt style))
 
 (defun scalpel-commit--build-prompt (diff style language extra)
   "Build the commit message request from DIFF, STYLE, LANGUAGE and EXTRA.
 EXTRA carries the regeneration instruction, such as a request for
 more detail or a style or language switch, so the model changes its
 answer instead of repeating it."
-  (concat
-   "Write a git commit message for the diff below.\n\n"
-   "House rules, always in force:\n"
-   "- The subject is an imperative sentence: it must complete \"this "
-   "commit will\".\n"
-   "- No more than " (number-to-string scalpel-commit-subject-max)
-   " characters, no period, capitalized where the language does so.\n"
-   "- Body wrapped to " (number-to-string scalpel-commit-body-width)
-   " columns, blank line between paragraphs.\n"
-   "- Describe what and why; name real functions and files from the "
-   "diff.  Never invent a name the diff does not show.\n"
-   "- Reply with ONLY the commit message: subject, blank line, body. "
-   "No fences, no commentary.\n\n"
-   (scalpel-commit--style-prompt style)
-   "\nWrite the message in " language ".\n"
-   (when extra
-     (concat "The previous attempt was rejected because: " extra
-             ".  Produce a different message.\n"))
-   "\nDIFF:\n" diff))
+  (scalpel-prompt-commit-build-prompt
+   diff style language extra
+   scalpel-commit-subject-max
+   scalpel-commit-body-width))
 
 (defun scalpel-commit--ask-style ()
   "Ask which commit style to use, and remember the answer."
