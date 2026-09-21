@@ -99,12 +99,13 @@ dimension simply contributes no candidate."
   "Return the contents of the prompt file NAME under the prompt dir.
 Return nil when it does not exist."
   (let ((file (expand-file-name name scalpel-user-prompt-dir)))
-    (message "Scalpel: Reading prompt file: %s" file)
     (and (file-regular-p file)
          (file-readable-p file)
-         (with-temp-buffer
-           (insert-file-contents file)
-           (buffer-string)))))
+         (progn
+           (message "Scalpel: Reading prompt file: %s" file)
+           (with-temp-buffer
+             (insert-file-contents file)
+             (buffer-string))))))
 
 (defun scalpel-user-prompt--names-for-dir (dir)
   "Return the git-derived prompt file names matching DIR.
