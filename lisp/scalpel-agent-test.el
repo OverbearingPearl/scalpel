@@ -1877,7 +1877,7 @@ the report, and the one confirmation is not waivable."
                      (lambda (&rest _) (setq asked (1+ asked)) t)))
             (scalpel-agent-execute-action
              (list :tool "file-substitute" :files files
-                   :pattern "old-" :replacement "new-"
+                   :pattern '(literal "old-") :replacement "new-"
                    :reason "bulk rename")
              (lambda (r) (setq report r))
              (lambda (e) (ert-fail (plist-get e :message)))))
@@ -1919,7 +1919,7 @@ next."
           (let* ((file (car probe))
                  (err (condition-case e
                           (progn (scalpel-agent-file-substitute
-                                  (list file) "foo" "bar")
+                                  (list file) (list 'literal "foo") "bar")
                                  nil)
                         (user-error e))))
             (ert-info ((format "File %S; error: %S" file err))
@@ -2000,7 +2000,9 @@ explaining where it had gone."
     (unwind-protect
         (let ((scalpel-agent--context-files (list (file-truename f1))))
           (let ((report (scalpel-agent-file-substitute
-                         (list (file-truename f1)) "old-a" "new-a")))
+                         (list (file-truename f1))
+                         '(literal "old-a")
+                         "new-a")))
             (ert-info ((format "Report:\n%S" report))
               (should (string-match-p "Rewrote 1 occurrence" report))
               (should (string-match-p "no longer defined: old-a" report))
@@ -2014,18 +2016,17 @@ explaining where it had gone."
 The note is a signal, not boilerplate: one printed on every rewrite
 would be read as noise and stop carrying the renames it exists for.
 
-The pattern is a bare word on purpose.  A \"pattern\" is an Emacs
-regular expression, and one holding brackets does not match its own
-spelling: \"(+ 1 1)\" reads as one-or-more literal open parens
-followed by \" 1 1)\", which the text \"(+ 1 1)\" never contains.
-The refusal that follows is the tool working -- zero matches is
-refused -- so a test written that way proves nothing about the note."
+The pattern is passed as an rx data form, (literal \"nil\"), whose
+ sole element is a bare string literal.  A bare string at the top
+level -- just \"nil\" -- is refused as malformed rx, so the refusal
+that would follow from writing it that way proves nothing about the
+note; the form is what the rx gate accepts."
   (scalpel-utils-test-with-temp-file ".el"
     (with-temp-file this-file (insert "(defun foo ()\n  nil)\n"))
     (let* ((resolved (file-truename (expand-file-name this-file)))
            (scalpel-agent--context-files (list resolved))
            (report (scalpel-agent-file-substitute
-                    (list resolved) "nil" "t")))
+                    (list resolved) '(literal "nil") "t")))
       (ert-info ((format "Report:\n%S" report))
         (should (string-match-p "Rewrote 1 occurrence" report))
         (should-not (string-match-p "definitions changed" report))))))
@@ -2043,7 +2044,7 @@ planner trusts it to decide whether the rewrite is complete."
     (let* ((resolved (file-truename (expand-file-name this-file)))
            (scalpel-agent--context-files (list resolved))
            (report (scalpel-agent-file-substitute
-                    (list resolved) "old" "new")))
+                    (list resolved) '(literal "old") "new")))
       (ert-info ((format "Report: %S On disk: %S"
                          report
                          (with-temp-buffer
@@ -2060,19 +2061,26 @@ Regression: the refusal named the pattern and the files and nothing
 else, so a planner whose pattern missed a header by one entry had no
 way to correct it except by spending another round reading the file
 it had already misremembered; the observed next move was to send the
-same pattern again."
+same pattern again.  The pattern here is passed as an rx form
+\(a JSON-shaped list data structure) that `scalpel-agent-file-substitute'
+compiles with `rx-to-string'."
   (scalpel-utils-test-with-temp-file ".el"
     (with-temp-file this-file
       (insert ";; Package-Requires: ((emacs \"28.1\") (transient \"0.3.0\") "
               "(s \"1.13.0\"))\n"))
     (let* ((resolved (file-truename (expand-file-name this-file)))
            (scalpel-agent--context-files (list resolved))
+           ;; An rx form: a `seq' of two literal strings, with the
+           ;; `seq' head as a symbol. It matches nothing (the file
+           ;; holds 0.3.0, not 0.99.0) but shares a long prefix with
+           ;; the file's line, so the closest-lines note fires.
+           (pattern (list 'seq ";; Package-Requires: ((emacs \"28.1\") (transient "
+                          "0.99.0\"))"))
            (err (condition-case e
                     (progn
                       (scalpel-agent-file-substitute
                        (list resolved)
-                       (concat ";; Package-Requires: ((emacs \"28\\.1\") "
-                               "(transient \"0\\.3\\.0\"))")
+                       pattern
                        ";; Package-Requires: ((emacs \"28.1\"))")
                       nil)
                   (user-error e))))
@@ -2093,9 +2101,9 @@ same pattern again."
 
 (ert-deftest scalpel-agent-test-rewrite-zero-match-without-near-miss-is-bare ()
   "A pattern sharing nothing with the file adds no lines to the refusal.
-The note is evidence, not boilerplate: an unrelated stub must not put
-arbitrary lines under \"closest\", or the planner would read
-coincidences as the text it was aiming at."
+The note is evidence, not boilerplate: an unrelated pattern must not put
+arbitrary lines under \"closest\", or the planner would read coincidences
+as the text the rx form was aiming at."
   (scalpel-utils-test-with-temp-file ".el"
     (with-temp-file this-file (insert "(defun foo ())\n"))
     (let* ((resolved (file-truename (expand-file-name this-file)))
@@ -2103,35 +2111,13 @@ coincidences as the text it was aiming at."
            (err (condition-case e
                     (progn
                       (scalpel-agent-file-substitute
-                       (list resolved) "zzz-absent-identifier" "x")
+                       (list resolved) ["zzz-absent-identifier"] "x")
                       nil)
                   (user-error e))))
       (ert-info ((format "Error: %S" err))
         (should err)
         (should-not (string-match-p "closest lines"
                                     (error-message-string err)))))))
-
-(ert-deftest scalpel-agent-test-rewrite-hint-prefers-the-longest-run ()
-  "The hint quotes the line sharing the longest matching run.
-A shorter prefix is reached only when every longer one found
-nothing, so a line matching the pattern's opening characters by
-coincidence cannot displace the near miss."
-  (scalpel-utils-test-with-temp-file ".el"
-    (with-temp-file this-file
-      (insert "alpha: one\nalpha: one two three four\n"))
-    (let* ((resolved (file-truename (expand-file-name this-file)))
-           (text (with-temp-buffer
-                   (insert-file-contents resolved)
-                   (buffer-string)))
-           (hint (scalpel-agent--substitute-hint-lines
-                  text "alpha: one two three four five")))
-      (ert-info ((format "Hint: %S" hint))
-        ;; The line holding only the shorter run is not offered: the
-        ;; longer prefix already placed the text.
-        (should (equal (car hint) '("alpha: one two three four")))
-        ;; The pattern is searched as written, escapes and all, so no
-        ;; bracket sentence is due.
-        (should-not (cdr hint))))))
 
 (ert-deftest scalpel-agent-test-rewrite-anchored-pattern-still-shows-the-closest-lines ()
   "A refused anchored pattern still quotes the file's own line.
@@ -2152,8 +2138,8 @@ planner to compare against."
                     (progn
                       (scalpel-agent-file-substitute
                        (list resolved)
-                       (concat "^\\(llm-pick-source-register "
-                               "'artificial-analysis.*\\)")
+                       '(seq "llm-pick-source-register 'artificial-analysis"
+                             " :kind 'other)")
                        "x")
                       nil)
                   (user-error e))))
@@ -2168,174 +2154,12 @@ planner to compare against."
                       "(llm-pick-source-register 'artificial-analysis")
                      message))))))))
 
-(ert-deftest scalpel-agent-test-rewrite-hint-sees-through-bracket-escapes ()
-  "A bracket-group pattern's refusal quotes the line it was aimed at.
-Regression: a planner wrote \" \\(transient \"0\\.3\\.0\"\\)\" for a
-requirement line holding \" (transient \"0.3.0\")\", which in Emacs
-regexp syntax is a group and so matches no brackets, and the refusal
-quoted nothing: the pattern as written searches for a backslash the
-file never holds, and the walk to shorter prefixes halved 23
-characters straight past the lengths that would have landed.  The
-sentence naming the reading is added only when that reading is what
-placed the lines; the refusal itself is unchanged and nothing is
-rewritten."
-  (scalpel-utils-test-with-temp-file ".el"
-    (with-temp-file this-file
-      (insert ";; Package-Requires: ((emacs \"28.1\") (transient \"0.3.0\"))\n"))
-    (let* ((resolved (file-truename (expand-file-name this-file)))
-           (scalpel-agent--context-files (list resolved))
-           (err (condition-case e
-                    (progn
-                      (scalpel-agent-file-substitute
-                       (list resolved)
-                       " \\(transient \"0\\.3\\.0\"\\)"
-                       " ")
-                      nil)
-                  (user-error e))))
-      (ert-info ((format "Error: %S" err))
-        (should err)
-        (let ((message (error-message-string err)))
-          (ert-info ((format "Message:\n%S" message))
-            (should (string-match-p "matched nothing" message))
-            ;; The file's own line, quoted: the brackets the pattern
-            ;; lost are on it.
-            (should (string-match-p
-                     (regexp-quote "(transient \"0.3.0\"))") message))
-            ;; And the reading those lines came from is named, so the
-            ;; next attempt can be written differently.
-            (should (string-match-p
-                     (regexp-quote
-                      scalpel-agent--substitute-bracket-reading-note)
-                     message))
-            ;; Nothing was written: the refusal still refuses.
-            (should (string-match-p
-                     "transient \"0.3.0\""
-                     (with-temp-buffer
-                       (insert-file-contents resolved)
-                       (buffer-string))))))))))
-
-(ert-deftest scalpel-agent-test-rewrite-bracket-pattern-without-near-miss-is-bare ()
-  "A bracket-group pattern the file holds nowhere adds no sentence.
-The sentence about the bracket reading is evidence, not a reflex: a
-pattern whose brackets are groups on purpose, and which the file
-holds under neither reading, must still refuse with just the pattern
-and the files -- a sentence naming a reading that placed nothing
-would tell the planner less than nothing."
-  (scalpel-utils-test-with-temp-file ".el"
-    (with-temp-file this-file (insert "(defun foo ())\n"))
-    (let* ((resolved (file-truename (expand-file-name this-file)))
-           (scalpel-agent--context-files (list resolved))
-           (err (condition-case e
-                    (progn
-                      (scalpel-agent-file-substitute
-                       (list resolved) " \\(zzz-absent-identifier\\)" " ")
-                      nil)
-                  (user-error e))))
-      (ert-info ((format "Error: %S" err))
-        (should err)
-        (let ((message (error-message-string err)))
-          (should (string-match-p "matched nothing" message))
-          (should-not (string-match-p "closest lines" message))
-          (should-not (string-match-p
-                       (regexp-quote
-                        scalpel-agent--substitute-bracket-reading-note)
-                       message)))))))
-
-(ert-deftest scalpel-agent-test-rewrite-hint-names-bracket-escapes ()
-  "A pattern escaping a bracket gets the bracket sentence.
-Regression, twice over.  The sentence was first appended only when
-the pattern as written placed nothing at all, but its opening
-characters land whenever the file shares them -- here the dependency
-header matches up to the digits -- so the lines came back with no
-reason attached.  It was then made to depend on the bracket-literal
-reading placing more of the pattern, which is not decidable either:
-the \"\\.\" earlier in this very pattern is searched for as a
-backslash the file does not hold, so both readings stop at the same
-33 characters and the extra length never appears.
-
-What is decidable is that the bracket-literal reading places a run,
-and that is what the sentence now reports.  The pattern itself is
-never rewritten: only the refusal's account of the file changes."
-  (scalpel-utils-test-with-temp-file ".el"
-    (with-temp-file this-file
-      (insert ";; Package-Requires: ((emacs \"28.1\") "
-              "(transient \"0.3.0\"))\n"))
-    (let* ((resolved (file-truename (expand-file-name this-file)))
-           (scalpel-agent--context-files (list resolved))
-           (err (condition-case e
-                    (progn
-                      (scalpel-agent-file-substitute
-                       (list resolved)
-                       (concat ";; Package-Requires: ((emacs \"28\\.1\") "
-                               "\\(transient \"0\\.3\\.0\"\\))")
-                       ";; Package-Requires: ((emacs \"28.1\"))")
-                      nil)
-                  (user-error e))))
-      (ert-info ((format "Error: %S" err))
-        (should err)
-        (let ((message (error-message-string err)))
-          (ert-info ((format "Message:\n%S" message))
-            (should (string-match-p "matched nothing" message))
-            ;; The file's own line, quoted, so the entry the pattern
-            ;; insists on matching can be compared with what is there.
-            (should (string-match-p
-                     (regexp-quote
-                      (concat ";; Package-Requires: ((emacs \"28.1\") "
-                              "(transient \"0.3.0\"))"))
-                     message))
-            ;; And the reading those lines came from is named, so the
-            ;; next attempt can drop the escapes that hid them.
-            (should (string-match-p
-                     (regexp-quote
-                      scalpel-agent--substitute-bracket-reading-note)
-                     message))
-            ;; The corrected spelling is handed over verbatim, so the
-            ;; next attempt can be copied instead of translated.  Its
-            ;; dots stay escaped -- a dot is special to Emacs regexp
-            ;; syntax -- while its brackets do not.
-            (should (string-match-p
-                     (regexp-quote
-                      (concat "((emacs \"28\\.1\") "
-                              "(transient \"0\\.3\\.0\"))"))
-                     message))
-            (should-not (string-match-p "invalid JSON" message))))))))
-
-(ert-deftest scalpel-agent-test-rewrite-names-an-escaped-literal-no-file-holds ()
-  "A zero-match refusal names an escaped literal the files never hold.
-Regression: the pattern wrote an ampersand meaning \"whatever text is
-already there\" -- the whole-match placeholder of a replacement --
-and the refusal quoted the file's lines without saying that no file
-holds an ampersand at all, so a pattern that cannot match looked like
-a near miss, and the next attempt was spent on it."
-  (scalpel-utils-test-with-temp-file ".txt"
-    (with-temp-file this-file
-      (insert "| `some-report-marginal-threshold-ofmarginal-threshold`"
-              " | `2.0` |\n"))
-    (let* ((resolved (file-truename (expand-file-name this-file)))
-           (scalpel-agent--context-files (list resolved))
-           (err (condition-case e
-                    (progn
-                      (scalpel-agent-file-substitute
-                       (list resolved)
-                       "some-report-\\(&-of\\&-of\\&\\)"
-                       "x")
-                      nil)
-                  (user-error e))))
-      (ert-info ((format "Error: %S" err))
-        (should err)
-        (let ((message (error-message-string err)))
-          (ert-info ((format "Message:\n%S" message))
-            (should (string-match-p "matched nothing" message))
-            (should (string-match-p "literal character \"&\"" message))
-            (should (string-match-p "no file in the list holds \"&\""
-                                    message))))))))
-
 (ert-deftest scalpel-agent-test-rewrite-keeps-quiet-about-a-literal-the-file-holds ()
-  "No escape note when the files really hold the escaped character.
+  "No escape note when the files really hold the literal ampersand.
 The note is evidence, not a reflex: a file that holds an ampersand
-must not be reported as lacking one merely because the pattern
-escaped it, or the refusal would send the planner after a difference
-that is not there."
+must not be reported as lacking one merely because the pattern wrote
+it as (literal \"&\"), or the refusal would send the planner after a
+difference that is not there."
   (scalpel-utils-test-with-temp-file ".txt"
     (with-temp-file this-file (insert "keep & safe\n"))
     (let* ((resolved (file-truename (expand-file-name this-file)))
@@ -2343,7 +2167,7 @@ that is not there."
            (err (condition-case e
                     (progn
                       (scalpel-agent-file-substitute
-                       (list resolved) "zzz\\&zzz" "x")
+                       (list resolved) '(seq "zzz" (literal "&") "zzz") "x")
                       nil)
                   (user-error e))))
       (ert-info ((format "Error: %S" err))
@@ -2370,7 +2194,10 @@ refusal now carries for that."
     (with-temp-file this-file (insert "(defun foo ())\n"))
     (let* ((resolved (file-truename (expand-file-name this-file)))
            (scalpel-agent--context-files (list resolved))
-           (pattern "(defun foo")
+           ;; An rx data form; file-substitute compiles it with
+           ;; `rx-to-string'.  The literal parens are matched literally,
+           ;; and it matches the file's (defun foo ()) line.
+           (pattern (list 'literal "(defun foo"))
            ;; A trailing backslash is not a valid replacement text; the
            ;; pattern matches, so the replacement is really read.
            (replacement "\\")
@@ -2391,56 +2218,6 @@ refusal now carries for that."
                       (scalpel-agent--substitute-invocation
                        pattern replacement))
                      message))))))))
-
-(ert-deftest scalpel-agent-test-rewrite-bracket-correction-is-verified ()
-  "A corrected spelling is offered only when it really matches the file.
-Regression risk: the sentence that hands over the bracket-literal
-reading was derived from the pattern alone, so a refusal could offer a
-\"corrected\" pattern that fails for the same reason the original did,
-and the next attempt would copy it.  Here the brackets are not the
-whole difference -- the version asked for is absent as well -- so the
-refusal must say the correction matches nothing instead of presenting
-it as the pattern to use."
-  (scalpel-utils-test-with-temp-file ".el"
-    (with-temp-file this-file
-      (insert ";; Package-Requires: ((emacs \"28.1\") "
-              "(transient \"0.3.0\"))\n"))
-    (let* ((resolved (file-truename (expand-file-name this-file)))
-           (scalpel-agent--context-files (list resolved))
-           (pattern (concat ";; Package-Requires: ((emacs \"28\\.1\") "
-                            "\\(transient \"9\\.9\\.9\"\\))"))
-           (err (condition-case e
-                    (progn
-                      (scalpel-agent-file-substitute
-                       (list resolved) pattern "x")
-                      nil)
-                  (user-error e))))
-      (ert-info ((format "Error: %S" err))
-        (should err)
-        (let ((message (error-message-string err)))
-          (ert-info ((format "Message:\n%S" message))
-            (should (string-match-p "matched nothing" message))
-            ;; The syntax rule and the file's own line are still the
-            ;; evidence, and both are true whether or not the reading
-            ;; lands.
-            (should (string-match-p
-                     (regexp-quote
-                      scalpel-agent--substitute-bracket-reading-note)
-                     message))
-            (should (string-match-p
-                     (regexp-quote "(transient \"0.3.0\"))") message))
-            ;; The spelling that matches nothing is not handed over as
-            ;; the pattern to use next; the refusal says so instead.
-            (should (string-match-p
-                     (regexp-quote
-                      scalpel-agent--substitute-bracket-correction-fails)
-                     message))
-            (should-not
-             (string-match-p
-              (regexp-quote
-               (format scalpel-agent--substitute-bracket-correction-matches
-                       (scalpel-agent--substitute-literal-brackets pattern)))
-              message))))))))
 
 (ert-deftest scalpel-agent-test-rewrite-summary-shows-pattern-and-count ()
   "The confirmation prompt names the pattern and the file count.
@@ -2472,7 +2249,7 @@ never read its own occurrence counts."
                         (funcall on-success
                                  (concat "[{\"tool\":\"file-substitute\","
                                          "\"files\":[\"" f1 "\"],"
-                                         "\"pattern\":\"old-\","
+                                         "\"pattern\":[\"literal\",\"old-\"],"
                                          "\"replacement\":\"new-\"}]"))))
                 (scalpel-agent-run "bulk rename" nil
                                    (lambda (r) (setq result r))

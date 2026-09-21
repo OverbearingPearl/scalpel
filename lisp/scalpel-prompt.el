@@ -240,43 +240,49 @@ structural contract shared with `scalpel-agent--no-change-sentinel',
 which the reply is compared against.")
 
 (defconst scalpel-prompt--substitute-pattern-rule
-  "The regular-expression dialect a file-substitute pattern is read in.
-A file-substitute \"pattern\" is an Emacs regular expression, not a
-sed or grep one, and the dialects disagree about escaped brackets:
-in Emacs syntax \"(\" and \")\" match a literal bracket, while
-\"\\(\" and \"\\)\" only open and close a group, so a pattern written
-as \"\\(Name\\)\" matches the text \"Name\" and never the brackets it
-was aimed at -- it usually matches nothing at all.  Escape only what
-Emacs regexp syntax treats as special -- \".\", \"*\", \"+\", \"?\",
-\"[\", \"]\", \"^\", \"$\" -- and the backslash itself.
-Worked example, because the rule alone did not stop the escaped
-spelling: to match the brackets in
-  ;; Package-Requires: ((emacs \"28.1\") (transient \"0.3.0\"))
-the pattern is written
-  ;; Package-Requires: ((emacs \"28\\.1\") (transient \"0\\.3\\.0\"))
--- brackets unescaped, the dot of each version escaped.
-\"&\" is a replacement convention rather than a pattern construct:
-in a \"replacement\", \"\\&\" stands for the whole match and \"\\1\"
-for a group, while in a \"pattern\" an ampersand is the literal
-ampersand, so a pattern written with one matches only text that
-really holds one.  To match the same run of text twice inside one
-pattern, name it once inside \"\\(\" and \"\\)\" and write \"\\1\"
-for the second occurrence."
-  "Statement of the regular-expression dialect a pattern is read in.
+  "The form a file-substitute pattern is read in.
+A file-substitute \"pattern\" is an rx form carried as JSON data --
+nested arrays of strings and symbols such as
+  [\"symbol\", [\"or\", \"foo\", \"bar\"]]
+with one string for each literal -- which is compiled locally by
+`rx-to-string' and never evaluated.  The symbols name rx
+constructs; the strings are data, not Lisp and not regexp source.
+
+Write every literal as the exact characters to match, with no
+regexp escapes of any kind: not for dots, not for brackets, not
+for backslashes.  A version is written \"28.1\", not \"28\\\\.1\",
+and a literal backslash character itself is the form
+  [\"literal\", \"\\\\\"]
+-- the string holds the one character, and the array says what it
+means, so no escape is ever needed inside a literal.
+
+The common forms are
+  literal, any, one-or-more, zero-or-more, opt, or, group, bos,
+  eos, line-start, line-end, digit, whitespace, symbol.
+There is deliberately no second string-regexp path: a pattern is
+always an rx form, so a string written where a form is expected is
+read as a literal, and a string that looks like a regexp source
+matches the text it spells.  \"\\\\1\" and \"\\\\&\" in a
+\"replacement\" are unaffected by this rule; they keep their
+whole-match and group meanings there, and only there."
+  "Statement of the form a file-substitute pattern is read in.
 Structural contract shared by `scalpel-prompt-system-prompt', which
 embeds it, and the test that guards it.  The trap it closes is not
-hypothetical: a planner wrote \"\\(emacs ...\\)\" for a literal
-bracket, which in Emacs syntax is a group, so the brackets it aimed
-at were absent from the pattern and the rewrite refused with zero
-matches in a file that held the text it meant.  Nothing in the code
-can read that intent back out of a pattern without guessing at it,
-so the dialect has to be stated to the model.
+hypothetical: a planner wrote regexp escapes into the literals of
+the rx form -- \"\\\\.1\" for a version dot, \"\\\\(\" for a literal
+bracket -- so the compiled pattern asked for backslash-and-dot and
+backslash-and-bracket, text the file never held, and the rewrite
+refused with zero matches in a file that held what was meant.
+Nothing in the code can read that intent back out of a pattern
+without guessing at it, so the writing rule has to be stated to
+the model.
 
-The second trap is the other borrowing.  \"\\&\" is the whole-match
-placeholder of a *replacement*, and a pattern that writes it asks
-for a literal ampersand: nothing in the code can read the wanted
-backreference back out of it, so the writing rule has to be stated
-to the model as well.")
+The second trap is the other borrowing.  \"\\\\&\" is the whole-match
+placeholder of a *replacement*, and only there: a pattern never
+writes backreferences into literals, and the rx form states the
+whole-match by construction rather than by notation, so the
+boundary between pattern data and replacement convention has to be
+stated to the model as well.")
 
 (defconst scalpel-prompt--block-insert-prompt
   (concat "Anchor signature: %s\n\n"
@@ -366,8 +372,12 @@ A file-substitute applies one mechanical textual transformation
 across several files at once -- the bulk change no sequence of
 edits should be spelled out for.  Its \"files\" must all be
 context files named by their exact absolute paths, \"pattern\" is
-a regular expression and \"replacement\" the text it is replaced
-with, where \\1 and \\& refer to the match.  The substitution
+an rx expression carried as JSON data -- nested arrays of rx
+constructs, never a regexp string -- compiled locally by
+rx-to-string and never evaluated, and a literal backslash
+character is expressed as [\"literal\", \"\\\\\"];
+\"replacement\" is the text the match is replaced with, where \\1
+and \\& refer to the match.  The substitution
 runs only after the user confirms it, and it refuses entirely
 when it matches nothing or would leave an Emacs Lisp file
 unbalanced: prefer file-substitute only for mechanical batch

@@ -1759,42 +1759,6 @@ further, because the walk runs only on a zero-match refusal and only
 over text already in memory, and a hundred lengths cover far more of
 a line than any pattern a rewrite is built from.")
 
-(defconst scalpel-agent--substitute-bracket-reading-note
-  (concat "Note: in Emacs regexp syntax \"\\(\" and \"\\)\" open and close "
-          "a group and match no brackets, while a literal bracket is written "
-          "\"(\" and \")\"; the lines above are the file's own text.")
-  "Sentence naming the reading the refusal's quoted lines came from.
-Structural contract shared by
-`scalpel-agent--substitute-near-miss-note', which appends it, and the
-test that pins it.  It is appended when the lines quoted above it were
-placed by reading the pattern's bracket escapes as literal brackets,
-which is the fact the planner needs for its next attempt: it wrote the
-escaped form of a bracket it wanted to match.
-
-The sentence states the syntax rule and where the quoted lines come
-from -- both true whenever it is printed -- instead of claiming that no
-other reading could reach them.  That stronger claim is not decidable
-here: an escape both readings share is searched for as a backslash the
-file does not hold, so it truncates both walks at the same point, and
-the earlier wording was withheld on exactly that account while the
-quoted line held no reason the planner could act on.
-
-The worked example in `scalpel-prompt--substitute-pattern-rule' is the
-prevention this sentence is the fallback for: the prose rule alone did
-not stop the escaped spelling, which came back three rounds running,
-each time refusing for matching nothing.")
-
-(defun scalpel-agent--substitute-literal-brackets (pattern)
-  "Return PATTERN read with its bracket escapes as literal brackets.
-Emacs regexp syntax spells a group \"\\(\" and \"\\)\" and a literal
-bracket \"(\" and \")\", so a pattern that writes the escaped form
-where a bracket was meant matches the text between them and never
-the brackets themselves -- which usually matches nothing at all.
-Return nil when PATTERN escapes no bracket: then both readings are
-the same text, and there is nothing to tell apart."
-  (when (string-match-p "\\\\[()]" pattern)
-    (replace-regexp-in-string "\\\\\\([()]\\)" "\\1" pattern)))
-
 (defun scalpel-agent--lines-holding (text literal)
   "Return the lines of TEXT that hold LITERAL, up to a cap.
 LITERAL is searched for as text, never as a regular expression, so
@@ -1875,170 +1839,15 @@ characters steps further, so the number of searches stays bounded."
           (setq length (- length step)))))
     found))
 
-(defun scalpel-agent--substitute-hint-lines (text pattern)
-  "Return (LINES . BRACKET-READING) for TEXT against PATTERN.
-LINES are the lines of TEXT holding the longest run PATTERN shares
-with the file, or nil.  BRACKET-READING is non-nil when LINES were
-placed by reading PATTERN's bracket escapes as literal brackets.
-
-The reading that takes the brackets as characters is preferred and
-is asked first, because it is the one that reaches furthest into the
-line the planner was aiming at.  How much of PATTERN each reading
-places is deliberately not what decides the sentence: an escape both
-readings share -- a \"\\.\" earlier in the same line, say -- is
-searched for as a backslash the file does not hold, so it truncates
-the walk at the same point either way, and a refusal that compared
-lengths stayed silent on that account.  The observed failure quoted
-the file's line with no reason attached, leaving the planner with
-nothing to change.  What is decidable is whether the bracket-literal
-reading places a run at all, and a pattern that matches no brackets
-while the file's text holds them is the shape the sentence exists
-for.
-
-The second reading is reported, never applied: what runs is the
-pattern the planner wrote, so a pattern whose brackets really are
-groups still refuses, and this only says which reading would have
-landed.  Both answers are nil when neither reading places a run of
-`scalpel-agent--substitute-hint-min-prefix' characters."
-  (let* ((literal (scalpel-agent--substitute-literal-brackets pattern))
-         (by-brackets (and literal
-                           (scalpel-agent--substitute-prefix-lines
-                            text literal))))
-    (if by-brackets
-        (cons by-brackets t)
-      (cons (scalpel-agent--substitute-prefix-lines text pattern) nil))))
-
-(defconst scalpel-agent--substitute-bracket-correction-matches
-  "\nThe same pattern, with its brackets written as literal brackets, is: %s"
-  "Sentence handing over the bracket-literal spelling of a pattern.
-Structural contract shared by `scalpel-agent--substitute-near-miss-note',
-which prints it, and the test that pins it.  The `%s' is the corrected
-pattern.  It is printed only after that spelling was matched against
-the file's text, so the pattern it names is one the next attempt can
-really use; when the spelling matches nothing either, the refusal
-prints `scalpel-agent--substitute-bracket-correction-fails' instead.")
-
-(defconst scalpel-agent--substitute-bracket-correction-fails
-  (concat "\nThe same pattern read with its brackets as literal brackets "
-          "matches nothing in the file either, so the brackets are not "
-          "the only difference between it and the text; compare the "
-          "pattern with the lines above.")
-  "Sentence printed when the bracket-literal spelling matches nothing.
-Structural contract shared by the same two places as
-`scalpel-agent--substitute-bracket-correction-matches'.  Offering a
-corrected pattern here would send the next attempt after one that
-fails for the same reason the original did, so the refusal says the
-correction does not land and leaves the file's own lines above as the
-text to compare against.")
-
-(defconst scalpel-agent--substitute-regexp-construct-escapes
-  '(?| ?\( ?\) ?< ?> ?b ?B ?w ?W ?s ?S ?_ ?\` ?\' ?= ?\{ ?\} ?? ?+ ?* ?c ?C
-    ?0 ?1 ?2 ?3 ?4 ?5 ?6 ?7 ?8 ?9)
-  "Characters a backslash turns into a regexp construct, not a literal.
-`\\|' alternates, `\\(' opens a group, `\\s' names a syntax class,
-`\\1' is a backreference: after each character here the backslash
-carries meaning of its own.  After any other character -- a \"\\&\" or
-a \"\\.\", say -- the backslash only makes that character literal,
-which is what lets
-`scalpel-agent--substitute-escaped-literal-note' name the character a
-pattern demands.
-
-The list errs toward including a character, because the two mistakes
-do not cost the same: a literal left on the list only silences the
-note, while a construct left off it would make the note report a
-reading of the pattern that is not true.  A refusal may stay silent
-about why a pattern matched nothing; it must never state a reason
-that is wrong.  Digits are included because \"\\1\" is a
-backreference rather than a literal \"1\".
-
-A member is written with a backslash before the character wherever that
-character carries syntax of its own, so that a tool reading this buffer
-by syntax finds no structure in the list: an unescaped open-bracket
-member, or a member for the character a comment starts with, would make
-a checker such as `check-parens' report the defconst as unbalanced even
-though the reader reads every member as the character it names.")
-
-(defun scalpel-agent--substitute-escaped-literals (pattern)
-  "Return the characters PATTERN demands through a backslash escape.
-A backslash before a character that is no regexp construct means that
-character literally, so \"\\&\" in a pattern matches only text holding
-a real ampersand.  Characters whose escape is a construct are left
-out -- see `scalpel-agent--substitute-regexp-construct-escapes' -- and
-each character comes back once, in the order first written."
-  (let ((pos 0)
-        (chars nil))
-    (while (string-match "\\\\\\(.\\)" pattern pos)
-      (let ((char (aref pattern (1+ (match-beginning 0)))))
-        (unless (memq char scalpel-agent--substitute-regexp-construct-escapes)
-          (cl-pushnew char chars)))
-      (setq pos (match-end 0)))
-    (nreverse chars)))
-
-(defun scalpel-agent--substitute-escaped-literal-note (staged pattern)
-  "Return a note naming escaped literals absent from every STAGED file.
-STAGED is the list of (RESOLVED OLD NEW) the rewrite was built from,
-so OLD is each file's text as it was read before anything was
-written.  The note names every character PATTERN demands through a
-backslash escape and that appears in none of those texts.  Return the
-empty string when every such character is present somewhere.
-
-The quoted near-miss lines cannot carry this: they show the file's
-nearest text, so a character absent from the whole file -- the
-placeholder a planner borrowed from a replacement, say -- looks
-present to a reader comparing line against pattern.  A zero match
-then has a cause the refusal can state as a fact about the files
-rather than as a guess about what was meant."
-  (let ((missing
-         (cl-remove-if
-          (lambda (char)
-            (cl-some (lambda (entry)
-                       (cl-position char (nth 1 entry)))
-                     staged))
-          (scalpel-agent--substitute-escaped-literals pattern))))
-    (when missing
-      (let* ((escaped (string-join
-                       (mapcar (lambda (char) (format "\"\\%c\"" char))
-                               missing)
-                       ", "))
-             (plain (string-join
-                     (mapcar (lambda (char) (format "\"%c\"" char))
-                             missing)
-                     ", ")))
-        (format (concat "\nNote: the pattern writes %s, which Emacs regexp "
-                        "syntax reads as the literal character%s %s; no file "
-                        "in the list holds %s.")
-                escaped (if (cdr missing) "s" "") plain plain)))))
-
-(defun scalpel-agent--substitute-correction-matches-p (staged corrected)
-  "Return non-nil when CORRECTED matches some text in STAGED.
-STAGED is the list of (RESOLVED OLD NEW) the rewrite was built from,
-so OLD is the file's text as it was read before anything was written.
-CORRECTED is the pattern read with its bracket escapes as literal
-brackets, and the caller offers it to the planner as the pattern to
-use next; it is therefore matched against the bytes on disk first.  A
-rewrite refused for matching nothing would otherwise hand over a
-spelling that fails for the same reason its predecessor did, and the
-next attempt would spend itself on that pattern.
-
-The match runs with case folding off, the way the rewrite itself ran,
-so the answer describes the same matching.  A CORRECTED the matcher
-refuses -- dropping an escape can leave a regexp that no longer parses
--- reads as \"does not match\": the sentence it replaces exists to say
-the correction does not land, which is true of one that cannot be
-tried."
-  (let ((case-fold-search nil))
-    (cl-some (lambda (entry)
-               (condition-case nil
-                   (and (string-match corrected (nth 1 entry)) t)
-                 (error nil)))
-             staged)))
-
 (defun scalpel-agent--substitute-near-miss-note (staged pattern)
   "Return a note naming the near-miss lines of STAGED for PATTERN.
 STAGED is the list of (RESOLVED OLD NEW) the rewrite was built from,
 so OLD is the file's text as it was read before anything was
-written, and the note needs no second read.  Return the empty string
-when no such line is found in any of them.
+written, and the note needs no second read.  PATTERN is the compiled
+regexp the rewrite was built from, passed to
+`scalpel-agent--substitute-prefix-lines' to place the closest lines
+in each file.  Return the empty string when no such line is found in
+any of them.
 
 The note belongs to the refusal for a pattern that matched nothing.
 That refusal is correct and stays -- a rewrite that matched nothing
@@ -2049,65 +1858,25 @@ refusal lacks: it is what separates a pattern aimed at a line the
 file does not hold from one written as the text the rewrite was
 meant to produce.  The lines are quoted, never inferred.
 
-When those lines were placed by reading the pattern's bracket escapes
-as literal brackets, the note says so, because that reading is the
-fact the planner needs for its next attempt: it wrote the escaped
-form of a bracket it wanted to match.  The sentence is evidence like
-the lines are -- it appears only when the file really holds them
-under that reading -- and the pattern itself is never rewritten.
-The corrected spelling is handed over with it, so the next attempt
-can be copied rather than translated: turning \"\\(\" back into \"(\"
-one escape at a time is the step that was observed to fail, and a
-refusal that leaves it to the reader is a refusal that repeats.
-
-That spelling is checked against the file's text before it is
-offered, because a correction derived from the pattern alone can
-still fail: the brackets may not be the only difference, and a
-refusal that presents the next pattern to use would then send the
-planner after one that fails the way the last one did.  When the
-bracket-literal reading matches nothing either, the refusal says
-that instead, and the file's lines quoted above are what the planner
-compares against."
-  (let (blocks
-        bracket-reading)
+Because PATTERN is compiled from rx, there is no bracket-escape
+misreading to correct: the pattern means exactly what rx compiled it
+to mean, and the quoted lines are the whole of the evidence the
+refusal carries.  A pattern that still matches nothing after the
+planner has read them is rewritten as a different rx form, not as a
+re-spelling of the same one."
+  (let (blocks)
     (dolist (entry staged)
-      (let* ((resolved (nth 0 entry))
-             (hint (scalpel-agent--substitute-hint-lines
-                    (nth 1 entry) pattern))
-             (lines (car hint)))
+      (let ((lines (scalpel-agent--substitute-prefix-lines
+                    (nth 1 entry) pattern)))
         (when lines
-          (setq bracket-reading (or bracket-reading (cdr hint)))
           (push (format "\nThe closest lines in %s are:\n%s"
-                        resolved
+                        (nth 0 entry)
                         (string-join
                          (mapcar (lambda (line) (format "  %s" line))
                                  lines)
                          "\n"))
                 blocks))))
-    (concat (string-join (nreverse blocks) "")
-            (when bracket-reading
-              (concat "\n"
-                      scalpel-agent--substitute-bracket-reading-note
-                      ;; The corrected spelling, spelled for the
-                      ;; reading that placed the lines: dots stay
-                      ;; escaped, because a dot is special to Emacs
-                      ;; regexp syntax, and the brackets do not,
-                      ;; because they are not.  Nothing is applied
-                      ;; under it -- the user confirmed the pattern
-                      ;; they were shown, and running another one
-                      ;; would be running something they never saw --
-                      ;; and it is offered only after being matched
-                      ;; against the file's text, so the pattern the
-                      ;; planner copies is one that really lands.
-                      (let ((corrected
-                             (scalpel-agent--substitute-literal-brackets
-                              pattern)))
-                        (if (scalpel-agent--substitute-correction-matches-p
-                             staged corrected)
-                            (format
-                             scalpel-agent--substitute-bracket-correction-matches
-                             corrected)
-                          scalpel-agent--substitute-bracket-correction-fails)))))))
+    (string-join (nreverse blocks) "")))
 
 (defun scalpel-agent--substitute-invocation (pattern replacement)
   "Return the pattern and the replacement of a file-substitute, on one line.
@@ -2122,6 +1891,21 @@ PATTERN and REPLACEMENT are printed with %S, so either may be anything
 the action carried, including nil: a malformed action describes itself
 instead of raising a second error inside the message builder."
   (format "pattern %S -> replacement %S" pattern replacement))
+
+(defun scalpel-agent--normalize-json-rx (form)
+  "Convert a JSON-derived RX FORM into proper rx notation.
+Every element of FORM arrives as a string because JSON has no symbols.
+A string heading a list is interned as an rx operator (applied
+recursively to the rest of the list); a bare string is a literal."
+  (cond
+   ((stringp form) form)
+   ((listp form)
+    (let ((head (car form)))
+      (cons (cond ((stringp head) (intern head))
+                  ((symbolp head) head)
+                  (t (error "Invalid rx operator: %S" head)))
+            (mapcar #'scalpel-agent--normalize-json-rx (cdr form)))))
+   (t form)))
 
 (define-error 'scalpel-no-validation
   "A rewrite refused because the file's language cannot validate it:
@@ -2158,8 +1942,10 @@ This is the planner's channel for one mechanical batch
 transformation -- the job a whole-file shell one-liner would
 otherwise be asked to do -- executed by Scalpel itself, so its
 effect is enumerable: every file touched and every occurrence
-replaced is named in the report.  PATTERN is an Emacs Lisp regexp;
-REPLACEMENT is replacement text, where \\N and \\& refer to the
+replaced is named in the report.  PATTERN is an rx form carried as
+JSON data, compiled once by `rx-to-string' and never evaluated; a
+literal backslash is written as (literal \"\\\").  REPLACEMENT
+is replacement text, where \\\\N and \\\\& refer to the
 match as `replace-regexp-in-string' reads them.  All FILES must be
 in the session context; a path outside it is refused, the same
 boundary a read obeys.
@@ -2199,8 +1985,8 @@ file outside the context, a bad replacement, no matches, or an
 unbalanced result.  Signal `scalpel-no-validation' for a structured
 language whose provider declares no :balanced-p, so the diagnose
 side can offer block-edit as the retry."
-  (unless (and files pattern (stringp replacement))
-    (user-error "Scalpel: malformed file-substitute action: %s, files %S"
+  (unless (and files pattern (listp pattern) (stringp replacement))
+    (user-error "Scalpel: malformed file-substitute action: the pattern must be an rx form; %s, files %S"
                 (scalpel-agent--substitute-invocation pattern replacement)
                 files))
   (dolist (file files)
@@ -2215,156 +2001,158 @@ side can offer block-edit as the retry."
            "The file exists on disk"
          "No such file exists on disk")
        (scalpel-agent--substitute-invocation pattern replacement))))
-  ;; The balance check is the only structural validation a rewrite
-  ;; gets, so a language that cannot answer it has no safety net,
-  ;; and prose damage like emptied backtick pairs passes silently;
-  ;; steering those files to block-edit is the fix, not a special
-  ;; case for markdown.  Files whose provider is not registered are
-  ;; not structured languages and are not under this gate; their
-  ;; guard is the zero-match refusal below.
-  (dolist (file files)
-    (let* ((resolved (file-truename (expand-file-name file)))
-           (provider (scalpel-locate-provider-for-file resolved)))
-      (when (and provider (not (plist-get provider :balanced-p)))
-        (signal 'scalpel-no-validation
-                (list
-                 (format
-                  (concat "Scalpel: file-substitute is a structured-language tool "
-                          "and %s's provider declares no bracket check "
-                          "(:balanced-p), so a rewrite there cannot be validated; "
-                          "refused.  Retry next round with block-edit instead, "
-                          "one named definition at a time\n%s")
-                  resolved
-                  (scalpel-agent--substitute-invocation pattern replacement)))))))
-  ;; First pass: compute every new content in memory, so a failure in
-  ;; the last file cannot leave the first ones half-rewritten.
-  (let (staged)
-    (dolist (file files)
-      (let* ((resolved (file-truename (expand-file-name file)))
-             (old (with-current-buffer (find-file-noselect resolved)
-                    (buffer-substring-no-properties
-                     (point-min) (point-max))))
-             (new (condition-case err
-                      (let ((case-fold-search nil))
-                        (replace-regexp-in-string pattern replacement old))
-                   (error
-                    (user-error
-                     (concat "Scalpel: file-substitute replacement is "
-                             "malformed (in %s): %s\n%s")
-                     resolved
-                     (error-message-string err)
-                     (scalpel-agent--substitute-invocation
-                      pattern replacement))))))
-        ;; The bracket question is the language provider's, asked of the
-        ;; rewritten text: one answer for both this check and a refused
-        ;; reply, so a language that says nothing about bracket shape is
-        ;; never reported as having one.  It used to be an Emacs Lisp walk
-        ;; written here, beside the one in the refusal path.
-        (when (not (scalpel-locate-balanced-p resolved new))
-          (let ((offset (scalpel-agent--first-unbalance-offset new)))
+  ;; Compile the rx form once, before any gate reads it: every scan
+  ;; below works from the same compiled regexp, so the rewrite, the
+  ;; counts, the excerpt pairing, and the zero-match notes all
+  ;; interpret the pattern identically.  JSON parsing carries every
+  ;; rx operator as a string, so the form goes through the JSON
+  ;; normalizer first and raw compilation never sees it.
+  (let ((regexp
+         (condition-case err
+             (rx-to-string (scalpel-agent--normalize-json-rx pattern) 'no-group)
+           (error
             (user-error
-             (concat "Scalpel: file-substitute of %s would leave unbalanced "
-                     "brackets; refused whole\n%s%s")
-             resolved
-             (scalpel-agent--substitute-invocation pattern replacement)
-             (if (< offset (length new))
-                 (format "\nThe rewritten text first goes wrong at character %d: %S"
-                         offset
-                         (replace-regexp-in-string
-                          "\n" "\\\\n"
-                          (substring new
-                                     (max 0 (- offset 30))
-                                     (min (length new) (+ offset 30)))))
-               "\nThe rewritten text left an unclosed bracket."))))
-        (push (list resolved old new) staged)))
-    (setq staged (nreverse staged))
-    ;; Zero matches overall is a planner mistake: refuse instead of
-    ;; reporting a successful no-op.  A file whose content changed is
-    ;; one that matched at least once.
-    (unless (cl-some (lambda (entry)
-                       (not (string= (nth 1 entry) (nth 2 entry))))
-                     staged)
-      (user-error
-       (concat "Scalpel: file-substitute matched nothing in any of the "
-               "%d file(s) (%s); refusing\n%s%s")
-       (length staged)
-       (string-join (mapcar (lambda (entry) (nth 0 entry)) staged) ", ")
-       (scalpel-agent--substitute-invocation pattern replacement)
-       (concat (scalpel-agent--substitute-near-miss-note staged pattern)
-               ;; The lines quoted above are the file's nearest text, so a
-               ;; character the pattern demands and the file never holds
-               ;; cannot be read off them; the note states it.
-               (scalpel-agent--substitute-escaped-literal-note
-                staged pattern))))
-    ;; Second pass: apply through the visiting buffers and save, the
-    ;; way `scalpel-execute' writes.
-    (let ((lines nil))
-      (pcase-dolist (`(,resolved ,old ,new) staged)
-        (let ((count 0)
-              (pos 0)
-              (excerpts nil)
-              ;; The count has to read the pattern exactly as the
-              ;; replacement did.  The replacement above runs with case
-              ;; folding off, so counting with the buffer's default would
-              ;; report occurrences the rewrite never made -- and the
-              ;; planner reads that number to decide whether the batch is
-              ;; complete.
-              (case-fold-search nil))
-          (while (string-match pattern old pos)
-            (setq count (1+ count)
-                  pos (match-end 0)))
-          ;; Pair the match lines by index: the Nth match in OLD and the
-          ;; Nth match in NEW both come from the same scan order, so the
-          ;; Nth line of each names the same occurrence before and after
-          ;; the rewrite.
-          (let ((new-lines
-                 (let ((ls nil)
-                       (npos 0))
-                   (while (string-match pattern new npos)
-                     (push (scalpel-agent--line-at new (match-beginning 0))
-                           ls)
-                     (setq npos (match-end 0)))
-                   (nreverse ls)))
-                (old-lines
-                 (let ((ls nil)
-                       (opos 0))
-                   (while (string-match pattern old opos)
-                     (push (scalpel-agent--line-at old (match-beginning 0))
-                           ls)
-                     (setq opos (match-end 0)))
-                   (nreverse ls))))
-            (setq excerpts
-                  (seq-take
-                   (cl-pairlis old-lines new-lines)
-                   5)))
-          ;; The definition listing is taken from the two texts before
-          ;; anything is written: it is the only record of what the
-          ;; rewrite did to the definitions, and the next round has no
-          ;; other way to learn that a name it is about to use is gone.
-          ;; It is read from the texts rather than from the buffer, so
-          ;; the answer does not depend on which file was written first.
-          (let ((before (scalpel-agent--definitions-in-text resolved old))
-                (after (scalpel-agent--definitions-in-text resolved new)))
-            (with-current-buffer (find-file-noselect resolved)
-              (let ((inhibit-read-only t))
-                (erase-buffer)
-                (insert new))
-              (save-buffer))
-            (push (format "Rewrote %d occurrence(s) in %s" count resolved)
-                  lines)
-            (dolist (pair excerpts)
-              (push
-               (format "  %s -> %s"
-                       (scalpel-agent--excerpt-line (car pair))
-                       (scalpel-agent--excerpt-line (cdr pair)))
-               lines))
-            (when (and excerpts (> count (length excerpts)))
-              (push (format "  ... and %d more" (- count (length excerpts)))
-                    lines))
-            (let ((note (scalpel-agent--rewrite-definition-note
-                         resolved before after)))
-              (when note (push note lines))))))
-      (string-join (nreverse lines) "\n"))))
+             (concat "Scalpel: file-substitute rx form is malformed: %s\n%s")
+             (error-message-string err)
+             (scalpel-agent--substitute-invocation pattern replacement))))))
+    (dolist (file files)
+      (let ((resolved (file-truename (expand-file-name file))))
+        (when-let ((provider (scalpel-locate-provider-for-file resolved)))
+          (when (not (plist-get provider :balanced-p))
+            (signal 'scalpel-no-validation
+                    (list
+                     (format
+                      (concat "Scalpel: file-substitute is a structured-language tool "
+                              "and %s's provider declares no bracket check "
+                              "(:balanced-p), so a rewrite there cannot be validated; "
+                              "refused.  Retry next round with block-edit instead, "
+                              "one named definition at a time\n%s")
+                      resolved
+                      (scalpel-agent--substitute-invocation pattern replacement))))))))
+    ;; First pass: compute every new content in memory, so a failure in
+    ;; the last file cannot leave the first ones half-rewritten.
+    (let (staged)
+      (dolist (file files)
+        (let* ((resolved (file-truename (expand-file-name file)))
+               (old (with-current-buffer (find-file-noselect resolved)
+                      (buffer-substring-no-properties
+                       (point-min) (point-max))))
+               (new (condition-case err
+                        (let ((case-fold-search nil))
+                          (replace-regexp-in-string regexp replacement old))
+                      (error
+                       (user-error
+                        (concat "Scalpel: file-substitute replacement is "
+                                "malformed (in %s): %s\n%s")
+                        resolved
+                        (error-message-string err)
+                        (scalpel-agent--substitute-invocation
+                         pattern replacement))))))
+          ;; The bracket question is the language provider's, asked of the
+          ;; rewritten text: one answer for both this check and a refused
+          ;; reply, so a language that says nothing about bracket shape is
+          ;; never reported as having one.  It used to be an Emacs Lisp walk
+          ;; written here, beside the one in the refusal path.
+          (when (not (scalpel-locate-balanced-p resolved new))
+            (let ((offset (scalpel-agent--first-unbalance-offset new)))
+              (user-error
+               (concat "Scalpel: file-substitute of %s would leave unbalanced "
+                       "brackets; refused whole\n%s%s")
+               resolved
+               (scalpel-agent--substitute-invocation pattern replacement)
+               (if (< offset (length new))
+                   (format "\nThe rewritten text first goes wrong at character %d: %S"
+                           offset
+                           (replace-regexp-in-string
+                            "\n" "\\\\n"
+                            (substring new
+                                       (max 0 (- offset 30))
+                                       (min (length new) (+ offset 30)))))
+                 "\nThe rewritten text left an unclosed bracket."))))
+          (push (list resolved old new) staged)))
+      (setq staged (nreverse staged))
+      ;; Zero matches overall is a planner mistake: refuse instead of
+      ;; reporting a successful no-op.  A file whose content changed is
+      ;; one that matched at least once.
+      (unless (cl-some (lambda (entry)
+                         (not (string= (nth 1 entry) (nth 2 entry))))
+                       staged)
+        (user-error
+         (concat "Scalpel: file-substitute matched nothing in any of the "
+                 "%d file(s) (%s); refusing\n%s%s")
+         (length staged)
+         (string-join (mapcar (lambda (entry) (nth 0 entry)) staged) ", ")
+         (scalpel-agent--substitute-invocation pattern replacement)
+         (scalpel-agent--substitute-near-miss-note staged regexp)))
+      ;; Second pass: apply through the visiting buffers and save, the
+      ;; way `scalpel-execute' writes.
+      (let ((lines nil))
+        (pcase-dolist (`(,resolved ,old ,new) staged)
+          (let ((count 0)
+                (pos 0)
+                (excerpts nil)
+                ;; The count has to read the pattern exactly as the
+                ;; replacement did.  The replacement above runs with case
+                ;; folding off, so counting with the buffer's default would
+                ;; report occurrences the rewrite never made -- and the
+                ;; planner reads that number to decide whether the batch is
+                ;; complete.
+                (case-fold-search nil))
+            (while (string-match regexp old pos)
+              (setq count (1+ count)
+                    pos (match-end 0)))
+            ;; Pair the match lines by index: the Nth match in OLD and the
+            ;; Nth match in NEW both come from the same scan order, so the
+            ;; Nth line of each names the same occurrence before and after
+            ;; the rewrite.
+            (let ((new-lines
+                   (let ((ls nil)
+                         (npos 0))
+                     (while (string-match regexp new npos)
+                       (push (scalpel-agent--line-at new (match-beginning 0))
+                             ls)
+                       (setq npos (match-end 0)))
+                     (nreverse ls)))
+                  (old-lines
+                   (let ((ls nil)
+                         (opos 0))
+                     (while (string-match regexp old opos)
+                       (push (scalpel-agent--line-at old (match-beginning 0))
+                             ls)
+                       (setq opos (match-end 0)))
+                     (nreverse ls))))
+              (setq excerpts
+                    (seq-take
+                     (cl-pairlis old-lines new-lines)
+                     5)))
+            ;; The definition listing is taken from the two texts before
+            ;; anything is written: it is the only record of what the
+            ;; rewrite did to the definitions, and the next round has no
+            ;; other way to learn that a name it is about to use is gone.
+            ;; It is read from the texts rather than from the buffer, so
+            ;; the answer does not depend on which file was written first.
+            (let ((before (scalpel-agent--definitions-in-text resolved old))
+                  (after (scalpel-agent--definitions-in-text resolved new)))
+              (with-current-buffer (find-file-noselect resolved)
+                (let ((inhibit-read-only t))
+                  (erase-buffer)
+                  (insert new))
+                (save-buffer))
+              (push (format "Rewrote %d occurrence(s) in %s" count resolved)
+                    lines)
+              (dolist (pair excerpts)
+                (push
+                 (format "  %s -> %s"
+                         (scalpel-agent--excerpt-line (car pair))
+                         (scalpel-agent--excerpt-line (cdr pair)))
+                 lines))
+              (when (and excerpts (> count (length excerpts)))
+                (push (format "  ... and %d more" (- count (length excerpts)))
+                      lines))
+              (let ((note (scalpel-agent--rewrite-definition-note
+                           resolved before after)))
+                (when note (push note lines))))))
+        (string-join (nreverse lines) "\n")))))
 
 (defun scalpel-agent-confirm (text)
   "Return TEXT as a confirmation request to the user.
