@@ -40,6 +40,7 @@
 (require 'scalpel-redact)
 
 (require 'cl-lib)
+(require 'scalpel-commit)
 (require 'scalpel-agent)
 (require 'scalpel-diagnose)
 (require 'scalpel-token)
@@ -307,9 +308,8 @@ and the reload is refused while busy is set, so restoring them would
 only risk resurrecting a dead round.
 `scalpel-agent--shell-output' is reset before and read within a
 single action, so its value belongs to no session.
-The commit defaults `scalpel-commit--style' and
-`scalpel-commit--language' are carried here so they survive a
-module reload.")
+The commit style and language defaults chosen from a console are
+carried here so they survive a module reload.")
 
 (defconst scalpel-console--session-globals
   '(scalpel-token--console-totals
@@ -486,7 +486,6 @@ caller can delete them without invalidating earlier ones."
     (define-key map (kbd "RET") #'scalpel-console-send-line)
     ;; S-RET inserts a literal newline; RET sends the whole composed block.
     (define-key map (kbd "S-<return>") #'newline)
-    (define-key map (kbd "C-c C-c") #'scalpel-console-send-line)
     ;; Aborts the in-flight round.
     (define-key map (kbd "C-c C-k") #'scalpel-console-abort)
     (define-key map (kbd "C-c C-b") #'scalpel-llm-select-backend)
@@ -503,6 +502,8 @@ caller can delete them without invalidating earlier ones."
     (define-key map (kbd "C-c C-s") #'scalpel-console-send-summarize)
     ;; Analyze deeply and try again.
     (define-key map (kbd "C-c C-t") #'scalpel-console-send-retry)
+    ;; Prepares an LLM commit for the current console's project.
+    (define-key map (kbd "C-c C-c") #'scalpel-commit-run)
     map)
   "Keymap used in Scalpel console buffers.")
 
