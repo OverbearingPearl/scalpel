@@ -1938,6 +1938,15 @@ is killed releases its hold with no separate lock cleanup."
     (let ((buf (scalpel-console--target-buffer)))
       (unless (eq (current-buffer) buf)
         (switch-to-buffer buf))
+      ;; Prune context files that no longer exist on disk, so the agent
+      ;; never trips over a stale 'File no longer exists' reference and
+      ;; the send is never blocked by it.  This runs in the console
+      ;; buffer, so the buffer-local context list is the one pruned.
+      (let ((dropped (scalpel-agent-context-prune-missing)))
+        (when dropped
+          (scalpel-console--show-context)
+          (message "Scalpel: pruned missing context file(s): %s"
+                   (mapconcat #'identity dropped ", "))))
       (let ((sibling
              (cl-find-if
               (lambda (b)

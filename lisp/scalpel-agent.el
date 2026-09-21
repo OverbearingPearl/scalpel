@@ -311,6 +311,29 @@ it.  No-op with a message when nothing matched."
             (cl-remove-if match-p scalpel-agent--context-files))
       (message "Scalpel: removed %d file(s)" (length removed)))))
 
+(defun scalpel-agent-context-prune-missing ()
+  "Drop context files that no longer exist on disk.
+Operates in the current console buffer.  A file deleted outside Emacs
+\(a git checkout, a build clean) would otherwise make every send fail
+with \"File no longer exists\", so pruning stale entries before a send
+lets work continue without manual cleanup.  Iterates over the variable
+`scalpel-agent--context-files', keeping entries for which
+`file-exists-p' is non-nil.  When any were dropped, update
+`scalpel-agent--context-files' with the kept list and return the
+removed file names \(a list).  When nothing was dropped, return nil
+and leave the list alone.  Does not signal or message -- the caller
+decides how to report the result."
+  (let ((kept nil)
+        (removed nil))
+    (dolist (file scalpel-agent--context-files)
+      (if (file-exists-p file)
+          (push file kept)
+        (push file removed)))
+    (setq kept (nreverse kept))
+    (when removed
+      (setq scalpel-agent--context-files kept)
+      (nreverse removed))))
+
 (defun scalpel-agent--context-track (file)
   "Add FILE to the session context, as a file-level tool's own change.
 Return nil when FILE was added or the context already held it, and a
