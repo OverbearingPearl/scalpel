@@ -2333,7 +2333,7 @@ side can offer block-edit as the retry."
                        (scalpel-agent--excerpt-line (car pair))
                        (scalpel-agent--excerpt-line (cdr pair)))
                lines))
-            (when (> count (length excerpts))
+            (when (and excerpts (> count (length excerpts)))
               (push (format "  ... and %d more" (- count (length excerpts)))
                     lines))
             (let ((note (scalpel-agent--rewrite-definition-note
