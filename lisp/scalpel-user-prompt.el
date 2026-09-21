@@ -99,6 +99,7 @@ dimension simply contributes no candidate."
   "Return the contents of the prompt file NAME under the prompt dir.
 Return nil when it does not exist."
   (let ((file (expand-file-name name scalpel-user-prompt-dir)))
+    (message "Scalpel: Reading prompt file: %s" file)
     (and (file-regular-p file)
          (file-readable-p file)
          (with-temp-buffer
