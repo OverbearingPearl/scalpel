@@ -1437,7 +1437,7 @@ never sent."
                    "--- output ---\n/tmp\n--- end output ---")
            'assistant)
           (goto-char (point-min))
-          (should (search-forward "Shell: ls" nil t))
+          (should (search-forward "--- output ---" nil t))
           (let ((spent (match-beginning 0)))
             (ert-info ((format "Buffer:\n%S" (buffer-string)))
               (should (eq (get-text-property spent 'face)
@@ -1449,6 +1449,7 @@ never sent."
                        (get-text-property spent 'help-echo)))))
           (goto-char (point-min))
           (should (search-forward "Shell: pwd" nil t))
+          (should (search-forward "--- output ---" nil t))
           (ert-info ((format "Buffer:\n%S" (buffer-string)))
             (should-not (get-text-property (match-beginning 0) 'face))
             (should-not (get-text-property (match-beginning 0)
@@ -1477,7 +1478,7 @@ the header."
                    "--- output ---\n/tmp\n--- end output ---")
            'assistant)
           (goto-char (point-min))
-          (should (search-forward "Shell: ls" nil t))
+          (should (search-forward "--- output ---" nil t))
           (ert-info ("the premise: the older report really is marked")
             (should (eq (get-text-property (match-beginning 0) 'face)
                         'scalpel-console-consumed-body-face)))
@@ -1502,7 +1503,7 @@ the header."
       (scalpel-utils-test-kill-buffer (buffer-name buf)))))
 
 (ert-deftest scalpel-console-test-consumed-mark-does-not-leak-onto-input ()
-  "Typing inside a marked header does not inherit the mark's face.
+  "Typing inside a consumed output fence line does not inherit the consumed face.
 Regression: keyboard input arrives through `insert-and-inherit', which
 copies the preceding character's properties unless they are declared
 `rear-nonsticky', so a face left out of that list would make the
@@ -1520,13 +1521,14 @@ user's own text look like spent output."
            'assistant)
           (scalpel-console--insert-tagged "User: second\n" 'user)
           (scalpel-console--append
-           (concat "Scalpel: Shell: pwd\nExit: 0\nOutput: 5 bytes\n"
-                   "--- output ---\n/tmp\n--- end output ---")
+           (concat "Scalpel: Shell: pwd\nExit: 0\nOutput:5 bytes\n"
+                   "--- output ---\ntmp\n--- end output ---")
            'assistant)
           (goto-char (point-min))
-          (should (search-forward "Output: 3 bytes" nil t))
-          ;; Insert at the end of the marked header, so only the
-          ;; preceding character can hand properties over.
+          (should (search-forward "--- output ---" nil t))
+          ;; Insert at the end of the fence line, so the preceding
+          ;; character (the last character of the fence) carries the
+          ;; consumed face.
           (let ((pos (line-end-position)))
             (goto-char pos)
             (should (get-text-property (1- pos) 'face))
@@ -1561,7 +1563,7 @@ claiming a body was dropped when it is now sent whole."
                    "--- output ---\n/tmp\n--- end output ---")
            'assistant)
           (goto-char (point-min))
-          (should (search-forward "Shell: ls" nil t))
+          (should (search-forward "--- output ---" nil t))
           (let ((spent (match-beginning 0)))
             (should (eq (get-text-property spent 'face)
                         'scalpel-console-consumed-body-face))
@@ -1593,15 +1595,15 @@ claiming a body was dropped when it is now sent whole."
              "Shell: echo done\n--- output ---\ndone\n--- end output ---\n"
              'assistant))
           (goto-char (point-min))
-          (let ((found (search-forward "Shell: ls" nil t)))
-            (should found)
+          (let ((fence (search-forward "--- output ---" nil t)))
+            (should fence)
             (should (get-text-property (match-beginning 0)
                                        'scalpel-console-consumed-body))
             (should (eq (get-text-property (match-beginning 0) 'face)
                         'scalpel-console-consumed-body-face)))
           (goto-char (point-min))
-          (let ((found (search-forward "Shell: pwd" nil t)))
-            (should found)
+          (let ((fence (search-forward "--- output ---" nil t)))
+            (should fence)
             (should (get-text-property (match-beginning 0)
                                        'scalpel-console-consumed-body))
             (should (eq (get-text-property (match-beginning 0) 'face)
@@ -1632,7 +1634,7 @@ claiming a body was dropped when it is now sent whole."
                    "--- output ---\n/tmp\n--- end output ---")
            'assistant)
           (goto-char (point-min))
-          (should (search-forward "Shell: ls" nil t))
+          (should (search-forward "--- output ---" nil t))
           (let ((spent (match-beginning 0)))
             (should (eq (get-text-property spent 'face)
                         'scalpel-console-consumed-body-face))
@@ -1688,7 +1690,7 @@ while the planner already saw the error as the newest turn."
             (ert-info ((format "Buffer:\n%S" (buffer-string)))
               (should (= requests 2))
               (goto-char (point-min))
-              (should (search-forward "Shell: ls" nil t))
+              (should (search-forward "--- output ---" nil t))
               (should (eq (get-text-property (match-beginning 0) 'face)
                           'scalpel-console-consumed-body-face))
               (goto-char (point-min))

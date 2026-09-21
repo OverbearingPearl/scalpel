@@ -760,10 +760,23 @@ separated by a user round come back as one region here too."
   (let ((pos (point-min))
         regions)
     (while (< pos (point-max))
-      (let ((next (next-single-property-change
-                   pos 'scalpel-console-role nil (point-max))))
-        (when (eq (get-text-property pos 'scalpel-console-role) 'assistant)
-          (push (cons pos next) regions))
+      (let* ((next (next-single-property-change
+                    pos 'scalpel-console-role nil (point-max)))
+             (role (get-text-property pos 'scalpel-console-role)))
+        (when (eq role 'assistant)
+          ;; Scan the region from POS to NEXT for role-less separators.
+          (let ((scan pos)
+                (region-start pos))
+            (while (< scan next)
+              (let ((sep-end (next-single-property-change
+                              scan 'scalpel-console-output nil next)))
+                (when (and (get-text-property scan 'scalpel-console-output)
+                           (eq (get-text-property scan 'scalpel-console-role) nil))
+                  ;; Found a role-less newline that separates two assistant turns.
+                  (push (cons region-start scan) regions)
+                  (setq region-start (1+ scan)))
+                (setq scan sep-end)))
+            (push (cons region-start next) regions)))
         (setq pos next)))
     (nreverse regions)))
 
@@ -800,33 +813,31 @@ input inherit them and stop reading as pending input."
 REGION is (BEG . END) of an assistant round whose output body the
 planner no longer processes.  Nothing is inserted and no text is
 replaced: only properties are set, so the record and the
-conversation keep every byte.  The report's header lines carry the
-mark, not its body: the body may be folded out of sight, and the
-header is what stays readable.  The caller binds
-`inhibit-read-only'."
+conversation keep every byte.  Only the output fence and its
+following body are marked; the header is left alone.  The mark
+starts at the fence line \"--- output ---\" itself, so the newline
+that terminates the last header line keeps its plain appearance.
+Everything from the fence line up to END gets the consumed
+appearance, so it is visible even when the body is folded.  The
+caller binds `inhibit-read-only'."
   (let* ((beg (car region))
-         (end (min (cdr region)
-                   (save-excursion
-                     (goto-char beg)
-                     ;; The header runs to the body fence, so every
-                     ;; header line carries the mark; a report whose
-                     ;; fence is missing falls back to its first line.
-                     (if (re-search-forward "\n--- output ---\n"
-                                            (cdr region) t)
-                         (match-beginning 0)
-                       (line-end-position))))))
-    (when (< beg end)
-      (put-text-property beg end 'scalpel-console-consumed-body t)
-      (put-text-property beg end 'face
+         (end (cdr region))
+         (fence-start
+          (save-excursion
+            (goto-char beg)
+            (when (re-search-forward "\n--- output ---\n" end t)
+              ;; The match begins at the newline that terminates the
+              ;; last header line; start the mark on the fence line
+              ;; itself, one character later.
+              (1+ (match-beginning 0))))))
+    (when fence-start
+      (put-text-property fence-start end 'scalpel-console-consumed-body t)
+      (put-text-property fence-start end 'face
                          'scalpel-console-consumed-body-face)
-      (put-text-property beg end 'help-echo
+      (put-text-property fence-start end 'help-echo
                          scalpel-console--consumed-body-note)
-      ;; Keyboard input arrives through `insert-and-inherit', which
-      ;; copies the preceding character's properties unless they are
-      ;; declared `rear-nonsticky'.  A face left out of that list would
-      ;; make the user's own typing inside a header look spent.
       (scalpel-console--make-nonsticky
-       beg end '(face help-echo scalpel-console-consumed-body)))))
+       fence-start end '(face help-echo scalpel-console-consumed-body)))))
 
 (defun scalpel-console--clear-consumed-body-markers ()
   "Remove every consumed-body mark from the current buffer.
