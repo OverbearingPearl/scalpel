@@ -1907,6 +1907,9 @@ recursively to the rest of the list); a bare string is a literal."
             (mapcar #'scalpel-agent--normalize-json-rx (cdr form)))))
    (t form)))
 
+(define-error 'scalpel-planner-error
+  "Scalpel planner reply was unusable (plist :type :message)")
+
 (define-error 'scalpel-no-validation
   "A rewrite refused because the file's language cannot validate it:
 a registered locate provider declares no :balanced-p, so a rewrite
@@ -2011,10 +2014,12 @@ side can offer block-edit as the retry."
          (condition-case err
              (rx-to-string (scalpel-agent--normalize-json-rx pattern) 'no-group)
            (error
-            (user-error
-             (concat "Scalpel: file-substitute rx form is malformed: %s\n%s")
-             (error-message-string err)
-             (scalpel-agent--substitute-invocation pattern replacement))))))
+            (signal 'scalpel-planner-error
+                    (list :type 'malformed
+                          :message
+                          (format "Scalpel: file-substitute rx form is malformed: %s\n%s"
+                                  (error-message-string err)
+                                  (scalpel-agent--substitute-invocation pattern replacement))))))))
     (dolist (file files)
       (let ((resolved (file-truename (expand-file-name file))))
         (when-let ((provider (scalpel-locate-provider-for-file resolved)))
@@ -2231,9 +2236,13 @@ loop continues; ON-ERROR is not used for user declines.  Actions
 that issue no LLM request (`reply', `confirm', `file-create',
 `block-delete', `file-rename', `file-delete', `file-peek',
 `shell') settle synchronously; `block-edit' and `block-insert'
-settle from their LLM's callback.  ON-SUCCESS and ON-ERROR run
-outside the internal error guard, so an error they raise escapes
-instead of being re-framed as an action failure."
+settle from their LLM's callback.  For `file-substitute', a
+malformed pattern signals `scalpel-planner-error', which surfaces
+as a planner error plist (the condition's data, carrying the
+:type set by the signal) rather than a plain user-error re-wrapped
+with :type `action'.  ON-SUCCESS and ON-ERROR run outside the
+internal error guard, so an error they raise escapes instead of
+being re-framed as an action failure."
   (cl-block scalpel-agent-execute-action
     (let ((tool (plist-get action :tool)))
       (unless (member tool scalpel-agent--tool-vocabulary)
@@ -2328,6 +2337,8 @@ instead of being re-framed as an action failure."
                                   (list :type 'no-validation
                                         :message (error-message-string err)))
                          nil)
+                        (scalpel-planner-error
+                         (funcall on-error (cdr err)) nil)
                         (error
                          (funcall on-error
                                   (list :type 'action
