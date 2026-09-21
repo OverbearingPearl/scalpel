@@ -475,6 +475,7 @@ tests) counts as success and the user is never asked to commit
 manually on its account."
   (interactive)
   (let ((workdir (scalpel-commit--workdir)))
+    (message "Scalpel: committing...")
     (when (scalpel-commit--tree-changed-p workdir)
       (user-error
        (concat "Scalpel: the working tree changed since this message "
