@@ -974,7 +974,9 @@ dimmed in `shadow', because it is never sent to the LLM, while
 conversation turns and the context tree's own faces (declared in
 `scalpel-console--render-diff') are left intact.  Its tail is marked
 rear-nonsticky, so text the user types at the end inherits
-nothing from it.  Point
+nothing from it.  Consecutive same-role turns are separated by a
+role-less newline, so each round forms its own region instead of
+merging into one block.  Point
 moves to the new end, so the user always sees the latest output after a
 context refresh or reply.  Appending an assistant round also refreshes
 the consumed-body marks: that round is the cycle that processes the
@@ -1024,61 +1026,77 @@ previous report's output, so the previous body stops being sent."
         (goto-char (point-max))
         (let ((inhibit-read-only t)
               (beg (point)))
-        (scalpel-console--insert-tagged (format "%s\n\n" text) role)
-        (unless role
-          (put-text-property beg (point) 'scalpel-console-output t))
-        (unless role
-          ;; Dim display-only output: walk the appended region in
-          ;; constant-face runs and put `shadow' on exactly the runs
-          ;; that carry no face.  Safe again because the context tree
-          ;; now declares its own faces in `--render-diff' (graphics
-          ;; get shadow there, file names get their per-status faces),
-          ;; so this walk only touches plain display-only lines such
-          ;; as the retry attempt notice and "Mission complete,
-          ;; over.".
-          (save-excursion
-            (let ((pos beg))
-              (while (< pos (point))
-                (let* ((face (get-text-property pos 'face))
-                       (run-end (next-single-property-change
-                                 pos 'face nil (point))))
-                  (unless face
-                    (put-text-property pos run-end 'face 'shadow))
-                  (setq pos run-end)))))
-          ;; Cut the sticky bridge: the properties just laid down (`face',
-          ;; `scalpel-console-role', `scalpel-console-output') are
-          ;; sticky by default, so text typed at the end would inherit
-          ;; them.  Mark the final character rear-nonsticky, so
-          ;; freshly typed text starts with no face and no output
-          ;; tagging of its own.
-          (put-text-property (1- (point)) (point)
-                             'rear-nonsticky
-                             '(face scalpel-console-role
-                               scalpel-console-output)))
-        ;; Fold every fenced report body in what was just appended, so a
-        ;; large shell dump does not bury the conversation.  Display
-        ;; only: the record above and the projection `--history' builds
-        ;; are both unchanged.
-        (scalpel-console--collapse-report-bodies beg (point))
-        ;; An assistant turn is the round that reads the previous
-        ;; report's output, so that earlier body stops being sent.  Only
-        ;; this role can change which report is newest, so only this
-        ;; role pays for the rescan.
-        (when (eq role 'assistant)
-          (scalpel-console--refresh-consumed-body-markers))
-        ;; Follow the new output only when the user was already reading
-        ;; the end.  An unconditional move dragged point to point-max, so
-        ;; redisplay scrolled the window back to the bottom while the user
-        ;; was reading earlier turns.  The next instruction does not need
-        ;; point at the end: `scalpel-console-send-line' reads pending
-        ;; input wherever it sits and re-anchors the record itself.
-        (if follow
-            (goto-char (point-max))
-          ;; The insert above left point at the new end: the insertion
-          ;; happened at point-max, and point rides it.  Restore the
-          ;; reader's place explicitly.
-          (goto-char user-point))
-        (set-marker user-point nil))))))
+          ;; Separate consecutive same-role rounds: without this, the
+          ;; role runs would merge and only the first output fence of
+          ;; the merged block would ever be trimmed or marked.
+          (when (and role
+                     (> (point) (point-min))
+                     (eq (get-text-property (1- (point))
+                                            'scalpel-console-role)
+                         role))
+            (let ((sep-beg (point)))
+              (insert "\n")
+              (put-text-property sep-beg (point)
+                                 'scalpel-console-output t)
+              (put-text-property (1- (point)) (point)
+                                 'rear-nonsticky
+                                 '(scalpel-console-role
+                                   scalpel-console-output display))))
+          (scalpel-console--insert-tagged (format "%s\n\n" text) role)
+          (unless role
+            (put-text-property beg (point) 'scalpel-console-output t))
+          (unless role
+            ;; Dim display-only output: walk the appended region in
+            ;; constant-face runs and put `shadow' on exactly the runs
+            ;; that carry no face.  Safe again because the context tree
+            ;; now declares its own faces in `--render-diff' (graphics
+            ;; get shadow there, file names get their per-status faces),
+            ;; so this walk only touches plain display-only lines such
+            ;; as the retry attempt notice and "Mission complete,
+            ;; over.".
+            (save-excursion
+              (let ((pos beg))
+                (while (< pos (point))
+                  (let* ((face (get-text-property pos 'face))
+                         (run-end (next-single-property-change
+                                   pos 'face nil (point))))
+                    (unless face
+                      (put-text-property pos run-end 'face 'shadow))
+                    (setq pos run-end)))))
+            ;; Cut the sticky bridge: the properties just laid down (`face',
+            ;; `scalpel-console-role', `scalpel-console-output') are
+            ;; sticky by default, so text typed at the end would inherit
+            ;; them.  Mark the final character rear-nonsticky, so
+            ;; freshly typed text starts with no face and no output
+            ;; tagging of its own.
+            (put-text-property (1- (point)) (point)
+                               'rear-nonsticky
+                               '(face scalpel-console-role
+                                 scalpel-console-output)))
+          ;; Fold every fenced report body in what was just appended, so a
+          ;; large shell dump does not bury the conversation.  Display
+          ;; only: the record above and the projection `--history' builds
+          ;; are both unchanged.
+          (scalpel-console--collapse-report-bodies beg (point))
+          ;; An assistant turn is the round that reads the previous
+          ;; report's output, so that earlier body stops being sent.  Only
+          ;; this role can change which report is newest, so only this
+          ;; role pays for the rescan.
+          (when (eq role 'assistant)
+            (scalpel-console--refresh-consumed-body-markers))
+          ;; Follow the new output only when the user was already reading
+          ;; the end.  An unconditional move dragged point to point-max, so
+          ;; redisplay scrolled the window back to the bottom while the user
+          ;; was reading earlier turns.  The next instruction does not need
+          ;; point at the end: `scalpel-console-send-line' reads pending
+          ;; input wherever it sits and re-anchors the record itself.
+          (if follow
+              (goto-char (point-max))
+            ;; The insert above left point at the new end: the insertion
+            ;; happened at point-max, and point rides it.  Restore the
+            ;; reader's place explicitly.
+            (goto-char user-point))
+          (set-marker user-point nil))))))
 
 (defun scalpel-console-toggle-output ()
   "Show or hide every fenced report body in the console.

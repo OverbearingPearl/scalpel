@@ -1576,6 +1576,43 @@ claiming a body was dropped when it is now sent whole."
                            spent 'scalpel-console-consumed-body)))))
       (scalpel-utils-test-kill-buffer (buffer-name buf)))))
 
+(ert-deftest scalpel-console-test-consecutive-assistant-rounds-are-separate-regions ()
+  "Two assistant rounds back to back are marked per round, not just the first.  Regression: consecutive assistant rounds shared one role run, so only the first round's output fence was ever trimmed or given the consumed face."
+  (let ((buffer (scalpel-console-test--new-console-buffer)))
+    (unwind-protect
+        (with-current-buffer buffer
+          (erase-buffer)
+          (let ((scalpel-console-trim-consumed-output t))
+            (scalpel-console--append
+             "Shell: ls\n--- output ---\nfile-a\nfile-b\n--- end output ---\n"
+             'assistant)
+            (scalpel-console--append
+             "Shell: pwd\n--- output ---\n/tmp/proj\n--- end output ---\n"
+             'assistant)
+            (scalpel-console--append
+             "Shell: echo done\n--- output ---\ndone\n--- end output ---\n"
+             'assistant))
+          (goto-char (point-min))
+          (let ((found (search-forward "Shell: ls" nil t)))
+            (should found)
+            (should (get-text-property (match-beginning 0)
+                                       'scalpel-console-consumed-body))
+            (should (eq (get-text-property (match-beginning 0) 'face)
+                        'scalpel-console-consumed-body-face)))
+          (goto-char (point-min))
+          (let ((found (search-forward "Shell: pwd" nil t)))
+            (should found)
+            (should (get-text-property (match-beginning 0)
+                                       'scalpel-console-consumed-body))
+            (should (eq (get-text-property (match-beginning 0) 'face)
+                        'scalpel-console-consumed-body-face)))
+          (let ((regions (scalpel-console--assistant-report-regions)))
+            (should (= (length regions) 3))
+            (should (cl-every
+                     (lambda (r) (and (consp r) (< (car r) (cdr r))))
+                     regions))))
+      (scalpel-utils-test-kill-buffer buffer))))
+
 (ert-deftest scalpel-console-test-forget-history-clears-consumed-marks ()
   "A forgotten report is not read at all, so its mark goes with it."
   (let ((scalpel-console-trim-consumed-output t)
@@ -2162,15 +2199,7 @@ alone."
       (scalpel-utils-test-kill-buffer (buffer-name buf)))))
 
 (ert-deftest scalpel-console-test-restore-refuses-another-format ()
-  "A snapshot in another format is refused, never read.
-Regression: the snapshot is written by the code loaded at that moment
-and read back by the code taken from disk a moment later, so a file
-edited between the two is restored by a newer reader than its writer.
-The shapes differ -- a captured value is wrapped in a list -- and the
-reader met a bare string where it expected a pair: the console's own
-root, the first variable in `scalpel-console--session-variables',
-reached `car' as text and signalled `wrong-type-argument', which
-killed the reload before it had put a single variable back."
+  "A snapshot in another format is refused and never read.  Regression: the snapshot is written by the code loaded at that moment and read back by the code taken from disk a moment later, so a file edited between the two is restored by a newer reader than its writer.  The shapes differ -- a captured value is wrapped in a list -- and the reader met a bare string where it expected a pair: the console's own root, the first variable in `scalpel-console--session-variables', reached `car' as text and signalled `wrong-type-argument', which killed the reload before it had put a single variable back."
   (let ((buf (scalpel-console-test--new-console-buffer))
         (notices nil))
     (unwind-protect
