@@ -41,6 +41,8 @@
 Structural contract, not user configuration: dispatch in
 `scalpel-agent-execute-action' must stay in sync with it.")
 
+(require 'scalpel-user-prompt)
+
 (require 'scalpel-prompt-elisp)
 
 (require 'scalpel-prompt)
@@ -1252,7 +1254,7 @@ the edit."
                              beg (line-end-position))))
                (prompt scalpel-prompt--block-edit-prompt)
                (language-rule
-                (scalpel-prompt-language-rule-for-file file)))
+                (scalpel-user-prompt-with-language-rule file)))
           (scalpel-llm-request-async
            (concat (format prompt signature body instruction)
                    (when language-rule
@@ -1317,7 +1319,7 @@ ON-ERROR receives a plist (:type SYMBOL :message STRING)."
                (anchor-body (buffer-substring-no-properties
                              (car anchor-range) anchor-end))
                (prompt scalpel-prompt--block-insert-prompt)
-               (language-rule (scalpel-prompt-language-rule-for-file file)))
+               (extra (scalpel-user-prompt-with-language-rule file)))
           (scalpel-llm-request-async
            (concat
             (format prompt
@@ -1327,8 +1329,8 @@ ON-ERROR receives a plist (:type SYMBOL :message STRING)."
                        (car anchor-range)
                        (line-end-position)))
                     instruction)
-            (when language-rule
-              (concat "\n\n" language-rule)))
+            (when extra
+              (concat "\n\n" extra)))
            (lambda (new-text)
              (let ((new-text (scalpel-agent--usable-replacement file new-text)))
                (cond

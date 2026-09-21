@@ -787,11 +787,17 @@ older rounds, only those whose body `scalpel-console--trim-report'
 would replace are returned: that is the condition
 `scalpel-console--history' trims under, and the only one there is to
 report.  Return nil when `scalpel-console-trim-consumed-output' is
-nil, because then no body is dropped at all."
+nil, because then no body is dropped at all.  Error turns, identified
+by the `scalpel-console-planner-error' text property, are never
+returned: an error turn quotes raw replies that may contain the
+literal \"--- output ---\" report delimiters, so its text is not a
+real output body and it has no body to consume."
   (when scalpel-console-trim-consumed-output
     (cl-loop
      for region in (butlast (scalpel-console--assistant-report-regions))
      for text = (buffer-substring-no-properties (car region) (cdr region))
+     unless (text-property-any 0 (length text)
+                               'scalpel-console-planner-error t text)
      for trimmed = (scalpel-console--trim-report text)
      unless (string= trimmed text)
      collect region)))
@@ -809,35 +815,57 @@ input inherit them and stop reading as pending input."
        (cl-union (and (listp existing) existing) props)))))
 
 (defun scalpel-console--mark-consumed-body (region)
-  "Mark one consumed report REGION on the display.
-REGION is (BEG . END) of an assistant round whose output body the
-planner no longer processes.  Nothing is inserted and no text is
-replaced: only properties are set, so the record and the
-conversation keep every byte.  Only the output fence and its
-following body are marked; the header is left alone.  The mark
-starts at the fence line \"--- output ---\" itself, so the newline
-that terminates the last header line keeps its plain appearance.
-Everything from the fence line up to END gets the consumed
-appearance, so it is visible even when the body is folded.  The
-caller binds `inhibit-read-only'."
-  (let* ((beg (car region))
-         (end (cdr region))
-         (fence-start
-          (save-excursion
-            (goto-char beg)
-            (when (re-search-forward "\n--- output ---\n" end t)
-              ;; The match begins at the newline that terminates the
-              ;; last header line; start the mark on the fence line
-              ;; itself, one character later.
-              (1+ (match-beginning 0))))))
-    (when fence-start
-      (put-text-property fence-start end 'scalpel-console-consumed-body t)
-      (put-text-property fence-start end 'face
-                         'scalpel-console-consumed-body-face)
-      (put-text-property fence-start end 'help-echo
-                         scalpel-console--consumed-body-note)
-      (scalpel-console--make-nonsticky
-       fence-start end '(face help-echo scalpel-console-consumed-body)))))
+  "Mark every consumed report body inside REGION on the display.
+REGION is (BEG . END) covering one or more assistant rounds whose
+output bodies the planner no longer processes.  Nothing is inserted
+and no text is replaced: only properties are set, so the record and
+the conversation keep every byte.  The region may hold several
+rounds; each \"--- output ---\"/\"--- end output ---\" pair is
+marked individually, from the opening fence line through the end of
+its closing fence line, so headers and inter-turn text keep their
+plain appearance even within a single region.  The mark starts at
+the opening fence line itself, so the newline that terminates the
+last header line keeps its plain appearance.  A body is marked only
+when its fences pair up; unpaired or absent fences leave the text
+untouched.  The caller binds `inhibit-read-only'."
+  (let ((pos (car region))
+        (end (cdr region)))
+    (while (and pos (< pos end))
+      (let* ((fence-start
+              (save-excursion
+                (goto-char pos)
+                (when (re-search-forward
+                       "\\(\\`\\|\n\\)--- output ---\n" end t)
+                  ;; Group 1 matched either the empty string (POS
+                  ;; already sits on the fence line) or a newline
+                  ;; that terminates the last header line.  In the
+                  ;; latter case, step one character forward onto
+                  ;; the fence line itself so the mark does not
+                  ;; cover the plain header-terminating newline.
+                  (let ((group-beg (match-beginning 1)))
+                    (if (= group-beg pos)
+                        pos
+                      (1+ group-beg))))))
+             (fence-end
+              (when fence-start
+                (save-excursion
+                  (goto-char fence-start)
+                  (and (re-search-forward "--- end output ---" end t)
+                       (line-end-position))))))
+        (if fence-end
+            (progn
+              (put-text-property fence-start fence-end
+                                 'scalpel-console-consumed-body t)
+              (put-text-property fence-start fence-end 'face
+                                 'scalpel-console-consumed-body-face)
+              (put-text-property fence-start fence-end 'help-echo
+                                 scalpel-console--consumed-body-note)
+              (scalpel-console--make-nonsticky
+               fence-start fence-end
+               '(face help-echo scalpel-console-consumed-body))
+              (setq pos (1+ fence-end)))
+          ;; No paired closing fence before END: stop scanning.
+          (setq pos nil))))))
 
 (defun scalpel-console--clear-consumed-body-markers ()
   "Remove every consumed-body mark from the current buffer.
@@ -1041,6 +1069,18 @@ previous report's output, so the previous body stops being sent."
               (insert "\n")
               (put-text-property sep-beg (point)
                                  'scalpel-console-output t)
+              ;; Clear role and face on the separator: the newline
+              ;; would otherwise inherit the preceding assistant role,
+              ;; the split scan in `scalpel-console--assistant-report-regions'
+              ;; (which requires role nil at the separator) would never
+              ;; fire, consecutive assistant rounds would collapse into
+              ;; one region, and the consumed-body mark would span from
+              ;; the first round's fence through all later rounds'
+              ;; headers, greying every header after the first.
+              (put-text-property sep-beg (point)
+                                 'scalpel-console-role nil)
+              (put-text-property sep-beg (point)
+                                 'face nil)
               (put-text-property (1- (point)) (point)
                                  'rear-nonsticky
                                  '(scalpel-console-role

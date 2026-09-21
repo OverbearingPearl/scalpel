@@ -204,8 +204,8 @@ The registry contains (FILENAME-REGEXP . RULE) pairs.  A rule
 matches when FILE, the full absolute name, matches the entry's
 regexp."
   (assoc-default file scalpel-prompt-language-rules
-                 (lambda (regexp name)
-                   (string-match-p regexp name))))
+                 (lambda (regexp key)
+                   (string-match-p regexp key))))
 
 (defconst scalpel-prompt--code-format-rule
   "The code you emit must be readable, not merely balanced.  Keep
