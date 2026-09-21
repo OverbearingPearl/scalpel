@@ -218,7 +218,9 @@ results buffer is recreated with the invoking directory as its
     (scalpel-test--kill-temp-file-buffers)
     (let ((default-directory dir))
       (if noninteractive
-          (ert-run-tests-batch-and-exit "scalpel-")
+          (progn
+            (message "Scalpel: running tests in batch mode...")
+            (ert-run-tests-batch-and-exit "scalpel-"))
         ;; ERT's results buffer name is hard-coded as "*ert*".
         (when (get-buffer "*ert*")
           (kill-buffer "*ert*"))
@@ -231,6 +233,7 @@ Interactively (`M-x'), run the modules and the suite in this Emacs,
 so results appear in the *ert* buffer.  A console with a round in
 flight makes the reload signal a `user-error'."
   (interactive)
+  (message "Scalpel: running the test suite...")
   (scalpel-test-run-internal))
 
 (ert-deftest scalpel-test-run-runs-in-this-emacs ()

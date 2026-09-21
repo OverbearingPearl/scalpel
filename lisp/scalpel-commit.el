@@ -50,8 +50,10 @@ confirmation."
     (scalpel-commit--language)
     (with-current-buffer console
       (when scalpel-commit--busy
+        (message "Scalpel: request rejected; another commit message generation is already in progress in this console")
         (user-error "Scalpel: a commit is already running in this console"))
       (setq scalpel-commit--busy t))
+    (message "Scalpel: preparing commit message...")
     (scalpel-commit--generate console workdir nil)))
 
 (defcustom scalpel-commit-subject-max 72
@@ -403,6 +405,7 @@ or nil."
                  (with-current-buffer console scalpel-commit--tree-state)))
          (rename-buffer (scalpel-commit--buffer-name) t)
          (scalpel-commit--render message))
+       (message "Scalpel: commit message generation finished.")
        (when (buffer-live-p console)
          (with-current-buffer console
            (setq scalpel-commit--busy nil))))
@@ -439,10 +442,17 @@ buffer has since been killed.  Fall back to the console buffer's
 (defun scalpel-commit--regenerate (extra)
   "Regenerate the message with EXTRA as the new instruction.
 Use EXTRA as the new instruction."
+  (when (or scalpel-commit--busy
+            (and (buffer-live-p scalpel-commit--console)
+                 (buffer-local-value 'scalpel-commit--busy
+                                     scalpel-commit--console)))
+    (message "Scalpel: commit message generation rejected: another generation is already in progress")
+    (user-error "A commit message generation is already in progress"))
   (setq scalpel-commit--request-extra extra)
   (let ((workdir scalpel-commit--workdir-cache))
     (unless workdir
       (user-error "No commit message has been generated yet"))
+    (message "Scalpel: starting commit message generation...")
     (scalpel-commit--generate scalpel-commit--console workdir extra)))
 
 (defun scalpel-commit--console-buffer ()
