@@ -67,11 +67,29 @@ message is generated per batch, so no function name is cut away."
   :type 'natnum
   :group 'scalpel-commit)
 
-(defconst scalpel-commit--buffer-name "*scalpel commit*"
-  "Name of the buffer that shows the generated commit message.
-The buffer is per-commit and per-console: its local variables name
-the console that started it, so the style and language choices
-land in that console's session.")
+(progn
+  (defvar scalpel-commit--workdir-cache nil
+    "Alist mapping commit-ish to cached workdir info for scalpel-commit buffers.")
+  (defvar scalpel-commit--console nil
+    "Console buffer for scalpel-commit operations."))
+
+(defun scalpel-commit--buffer-name (&optional root)
+  "Return the name of the buffer holding the generated commit message.
+The buffer name is per-repository: it embeds the base name of the
+repository root, so two repos never share a commit buffer.  With
+non-nil ROOT use it directly; otherwise fall back to the root from
+`scalpel-commit--workdir-cache', or from `scalpel-console--root'
+in the live `scalpel-commit--console' buffer.  When no root is
+available the generic fallback name \"*scalpel commit*\" is used."
+  (let ((root (or root
+                  scalpel-commit--workdir-cache
+                  (when (buffer-live-p scalpel-commit--console)
+                    (buffer-local-value 'scalpel-console--root
+                                        scalpel-commit--console)))))
+    (if root
+        (format "*scalpel commit: %s*"
+                (file-name-nondirectory (directory-file-name root)))
+      "*scalpel commit*")))
 
 (defconst scalpel-commit--styles '(angular linux)
   "Supported commit message styles, in preference order.
@@ -276,43 +294,66 @@ them without asking."
 
 (defun scalpel-commit--insert-message (message)
   "Replace the buffer's message body with MESSAGE.
-The header lines above the message stay; only the message text is
-rewritten, so regenerations never pile up."
+The body is delimited by the \"--- BEGIN COMMIT MESSAGE ---\" and
+\"--- END COMMIT MESSAGE ---\" marker lines.  Everything between
+them is replaced, so regenerations never pile up; the header lines
+above the BEGIN marker stay untouched.  If the BEGIN marker is
+missing, it is inserted at point-max so subsequent regenerations
+can find it."
   (let ((inhibit-read-only t))
     (goto-char (point-min))
-    (when (re-search-forward "^-- text below --\n" nil t)
-      (delete-region (point) (point-max)))
-    (insert message "\n")
-    (goto-char (point-max))))
+    (if (re-search-forward "^--- BEGIN COMMIT MESSAGE ---\n" nil t)
+        (let ((beg (point)))
+          (if (re-search-forward "^--- END COMMIT MESSAGE ---\n" nil t)
+              (delete-region beg (match-beginning 0))
+            (goto-char (point-max))
+            (delete-region beg (point-max)))
+          (insert message "\n")
+          (insert (propertize "--- END COMMIT MESSAGE ---\n" 'face 'shadow))
+          (goto-char (point-max)))
+      (goto-char (point-max))
+      (insert (propertize "--- BEGIN COMMIT MESSAGE ---\n" 'face 'shadow))
+      (insert message "\n")
+      (insert (propertize "--- END COMMIT MESSAGE ---\n" 'face 'shadow))
+      (goto-char (point-max)))))
 
 (defun scalpel-commit--render (message)
-  "Render MESSAGE in the commit buffer, creating it when needed."
-  (let ((buffer (get-buffer-create scalpel-commit--buffer-name)))
+  "Render MESSAGE in the commit buffer, creating it when needed.
+Erases the buffer and lays it out as: a shadow-propertized header
+containing the title line and the key hints, one blank line, then the
+message body delimited by the shadow-faced \"--- BEGIN COMMIT MESSAGE
+---\" and \"--- END COMMIT MESSAGE ---\" markers (both laid down by
+`scalpel-commit--insert-message').  Only when
+`scalpel-commit--untracked-files' is non-nil, a blank line followed by a
+shadow-propertized untracked-files section is appended after the
+message.  Everything outside the message body is shadow-faced."
+  (let ((buffer (get-buffer-create (scalpel-commit--buffer-name))))
     (with-current-buffer buffer
       (unless (derived-mode-p 'scalpel-commit-mode)
         (scalpel-commit-mode))
       (let ((inhibit-read-only t)
             (inhibit-modification-hooks t))
-        (save-excursion
-          (goto-char (point-min))
-          (when (re-search-forward "^-- text below --\n" nil t)
-            (delete-region (point-min) (point)))
-          (goto-char (point-min))
-          (insert (propertize "Commit message\n" 'face 'shadow))
-          (insert (propertize "C-c C-c commit   C-c C-w more detail   "
-                              'face 'shadow))
-          (insert (propertize "C-c C-s shorter   C-c C-n regenerate\n"
-                              'face 'shadow))
-          (insert (propertize "C-c C-e switch style   C-c C-t switch language   "
-                              'face 'shadow))
-          (insert (propertize "C-c C-k abort\n" 'face 'shadow))
-          (if scalpel-commit--untracked-files
-              (dolist (file scalpel-commit--untracked-files)
-                (insert (propertize (format "Untracked (not in commit): %s\n" file)
-                                    'face 'shadow)))
-            (insert (propertize "No untracked files\n" 'face 'shadow)))
-          (insert (propertize "\n-- text below --\n" 'face 'shadow))))
-      (scalpel-commit--insert-message message))
+        (erase-buffer)
+        (insert (propertize "Commit message\n" 'face 'shadow))
+        (insert (propertize "C-c C-c commit   C-c C-w more detail   "
+                            'face 'shadow))
+        (insert (propertize "C-c C-s shorter   C-c C-n regenerate\n"
+                            'face 'shadow))
+        (insert (propertize "C-c C-e switch style   C-c C-t switch language   "
+                            'face 'shadow))
+        (insert (propertize "C-c C-k abort\n" 'face 'shadow))
+        (insert "\n"))
+      (scalpel-commit--insert-message message)
+      (when scalpel-commit--untracked-files
+        (let ((inhibit-read-only t)
+              (inhibit-modification-hooks t))
+          (save-excursion
+            (goto-char (point-max))
+            (insert (propertize "\nUntracked (not in commit):\n"
+                                'face 'shadow))
+            (dolist (file scalpel-commit--untracked-files)
+              (insert (propertize (format "%s\n" file)
+                                  'face 'shadow)))))))
     (pop-to-buffer buffer)
     buffer))
 
@@ -340,7 +381,7 @@ or nil."
     (scalpel-llm-request-async
      (scalpel-commit--build-prompt diff style language extra)
      (lambda (message)
-       (with-current-buffer (get-buffer-create scalpel-commit--buffer-name)
+       (with-current-buffer (get-buffer-create (scalpel-commit--buffer-name workdir))
          (unless (derived-mode-p 'scalpel-commit-mode)
            (scalpel-commit-mode))
          (setq scalpel-commit--console console)
@@ -352,6 +393,7 @@ or nil."
          (setq scalpel-commit--tree-state
                (when (buffer-live-p console)
                  (with-current-buffer console scalpel-commit--tree-state)))
+         (rename-buffer (scalpel-commit--buffer-name) t)
          (scalpel-commit--render message)))
      (lambda (payload)
        (message "Scalpel: commit message generation failed: %s"
@@ -391,12 +433,12 @@ Use EXTRA as the new instruction."
 
 (defun scalpel-commit--console-buffer ()
   "Return the commit buffer, creating an empty one if needed."
-  (get-buffer-create scalpel-commit--buffer-name))
+  (get-buffer-create (scalpel-commit--buffer-name)))
 
 (defun scalpel-commit--abort ()
   "Abandon this commit and close its buffer."
   (interactive)
-  (when-let ((buffer (get-buffer scalpel-commit--buffer-name)))
+  (when-let ((buffer (get-buffer (scalpel-commit--buffer-name))))
     (kill-buffer buffer)))
 
 (defun scalpel-commit--commit ()
@@ -433,11 +475,13 @@ manually on its account."
       (scalpel-commit--abort))))
 
 (defun scalpel-commit--message-text ()
-  "Return the message body currently below the text marker."
+  "Return the message body between the begin/end commit message markers, or nil."
   (save-excursion
     (goto-char (point-min))
-    (when (re-search-forward "^-- text below --\n" nil t)
-      (string-trim (buffer-substring (point) (point-max))))))
+    (when (re-search-forward "^--- BEGIN COMMIT MESSAGE ---\n" nil t)
+      (let ((beg (point)))
+        (when (re-search-forward "^--- END COMMIT MESSAGE ---\n?" nil t)
+          (string-trim (buffer-substring beg (match-beginning 0))))))))
 
 (defun scalpel-commit--more-detail ()
   "Ask for a more detailed version of the message."

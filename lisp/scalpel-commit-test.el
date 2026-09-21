@@ -87,18 +87,18 @@
 
 (ert-deftest scalpel-commit-test-render-creates-header-and-body ()
   "Rendering builds the buffer with the header and the message."
-  (let ((buffer (get-buffer-create scalpel-commit--buffer-name)))
+  (let ((buffer (get-buffer-create (scalpel-commit--buffer-name))))
     (with-current-buffer buffer
       (setq buffer-read-only nil)
       (erase-buffer))
     (unwind-protect
         (with-temp-buffer
           (scalpel-commit--render "subject\n\nbody")
-          (with-current-buffer (get-buffer scalpel-commit--buffer-name)
+          (with-current-buffer (get-buffer (scalpel-commit--buffer-name))
             (should (derived-mode-p 'scalpel-commit-mode))
             (should (string-match-p "C-c C-c commit"
                                     (buffer-string)))
-            (should (string-match-p "^-- text below --"
+            (should (string-match-p "^--- BEGIN COMMIT MESSAGE ---"
                                     (buffer-string)))
             (should (string-match-p "subject\n\nbody"
                                     (buffer-string)))))
@@ -106,11 +106,11 @@
 
 (ert-deftest scalpel-commit-test-insert-message-replaces-not-appends ()
   "A second render replaces the old message instead of piling up."
-  (let ((buffer (get-buffer-create scalpel-commit--buffer-name)))
+  (let ((buffer (get-buffer-create (scalpel-commit--buffer-name))))
     (with-current-buffer buffer
       (setq buffer-read-only nil)
       (erase-buffer)
-      (insert "Commit message\n-- text below --\nfirst\n"))
+      (insert "--- BEGIN COMMIT MESSAGE ---\nfirst\n--- END COMMIT MESSAGE ---\n"))
     (unwind-protect
         (with-current-buffer buffer
           (scalpel-commit--insert-message "second")
@@ -121,7 +121,7 @@
 (ert-deftest scalpel-commit-test-message-text-reads-below-marker ()
   "The committed message is exactly what sits below the marker."
   (with-temp-buffer
-    (insert "header\n-- text below --\n  msg \n")
+    (insert "header\n--- BEGIN COMMIT MESSAGE ---\n  msg \n--- END COMMIT MESSAGE ---\n")
     (should (equal "msg" (scalpel-commit--message-text)))))
 
 (ert-deftest scalpel-commit-test-commit-refuses-stale-tree ()
@@ -129,7 +129,7 @@
   (with-temp-buffer
     (setq scalpel-commit--console (current-buffer))
     (setq scalpel-commit--tree-state "M  a.el")
-    (insert "-- text below --\nmsg\n")
+    (insert "--- BEGIN COMMIT MESSAGE ---\nmsg\n--- END COMMIT MESSAGE ---\n")
     (cl-letf (((symbol-function 'scalpel-commit--status)
                (lambda (_workdir) "M  b.el")))
       (should-error (scalpel-commit--commit)))))
@@ -137,12 +137,12 @@
 (ert-deftest scalpel-commit-test-commit-runs-git-and-closes-buffer ()
   "A confirmed commit runs `git commit' with the shown message."
   (let* ((args nil)
-         (buffer (get-buffer-create scalpel-commit--buffer-name))
+         (buffer (get-buffer-create (scalpel-commit--buffer-name)))
          (console (get-buffer-create " *scalpel-commit-test console*")))
     (with-current-buffer buffer
       (setq buffer-read-only nil)
       (erase-buffer)
-      (insert "-- text below --\nmsg\n")
+      (insert "--- BEGIN COMMIT MESSAGE ---\nmsg\n--- END COMMIT MESSAGE ---\n")
       (setq scalpel-commit--console console)
       (with-current-buffer console
         (setq scalpel-console--root "/tmp/scalpel-commit-test-root"))
@@ -157,7 +157,7 @@
             (scalpel-commit--commit)
             (should (equal (list "commit" "-m" "msg")
                            args))
-            (should-not (get-buffer scalpel-commit--buffer-name))))
+            (should-not (get-buffer (scalpel-commit--buffer-name)))))
       (condition-case nil (kill-buffer buffer) (error nil))
       (condition-case nil (kill-buffer console) (error nil)))))
 
