@@ -773,19 +773,11 @@ The newest round keeps its body, for the round that consumes it.  Of the
 older rounds, only those whose body `scalpel-console--trim-report'
 would replace are returned: that is the condition
 `scalpel-console--history' trims under, and the only one there is to
-report.  Regions beginning with the planner-error face are skipped:
-an error turn joins the conversation and is read by the planner next
-round, so its body must never be marked consumed, even when the quoted
-prose reply it holds contains literal output fences that make
-`scalpel-console--trim-report' see a trimmable body.  Return nil when
-`scalpel-console-trim-consumed-output' is nil, because then no body is
-dropped at all."
+report.  Return nil when `scalpel-console-trim-consumed-output' is
+nil, because then no body is dropped at all."
   (when scalpel-console-trim-consumed-output
     (cl-loop
      for region in (butlast (scalpel-console--assistant-report-regions))
-     unless (or (get-text-property (car region) 'scalpel-console-planner-error)
-                (eq (get-text-property (car region) 'face)
-                    'scalpel-console-planner-error-face))
      for text = (buffer-substring-no-properties (car region) (cdr region))
      for trimmed = (scalpel-console--trim-report text)
      unless (string= trimmed text)
