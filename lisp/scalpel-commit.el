@@ -48,6 +48,10 @@ confirmation."
         (workdir scalpel-console--root))
     (scalpel-commit--style)
     (scalpel-commit--language)
+    (with-current-buffer console
+      (when scalpel-commit--busy
+        (user-error "Scalpel: a commit is already running in this console"))
+      (setq scalpel-commit--busy t))
     (scalpel-commit--generate console workdir nil)))
 
 (defcustom scalpel-commit-subject-max 72
@@ -122,6 +126,10 @@ language switch; nil on the first generation.")
   "Console buffer this commit was started from.
 Answers read and written through here land in the right console
 when two consoles commit at once.")
+
+(defvar-local scalpel-commit--busy nil
+  "Non-nil while a commit generation is in flight for this console.
+Prevents a second `scalpel-commit-run' from the same console.")
 
 (progn
   (defvar scalpel-commit--style)
@@ -394,8 +402,14 @@ or nil."
                (when (buffer-live-p console)
                  (with-current-buffer console scalpel-commit--tree-state)))
          (rename-buffer (scalpel-commit--buffer-name) t)
-         (scalpel-commit--render message)))
+         (scalpel-commit--render message))
+       (when (buffer-live-p console)
+         (with-current-buffer console
+           (setq scalpel-commit--busy nil))))
      (lambda (payload)
+       (when (buffer-live-p console)
+         (with-current-buffer console
+           (setq scalpel-commit--busy nil)))
        (message "Scalpel: commit message generation failed: %s"
                 (plist-get payload :message)))
      (concat "You write git commit messages and nothing else. "
