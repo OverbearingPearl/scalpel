@@ -30,34 +30,6 @@ Fences are the only markdown structure with a real begin/end, so
 any block walk must track fence state with this regexp to avoid
 treating blank lines inside a code fence as block boundaries.")
 
-(defun scalpel-locate-markdown--next-block (pos)
-  "Return the end position of the block starting at or after POS.
-A block is either one fenced code region (from its opening fence
-through its closing fence, inclusive) or one run of non-blank
-lines terminated by a blank line or the buffer end.  Fence state
-is tracked through `scalpel-locate-markdown--fence-regexp' so
-blank lines inside a fenced region are never taken as block
-boundaries."
-  (save-excursion
-    (goto-char pos)
-    (if (looking-at scalpel-locate-markdown--fence-regexp)
-        ;; Fenced region: skip to the matching closing fence.
-        (progn
-          (forward-line 1)
-          (while (and (not (eobp))
-                      (not (looking-at scalpel-locate-markdown--fence-regexp)))
-            (forward-line 1))
-          ;; Consume the closing fence if present.
-          (unless (eobp)
-            (forward-line 1))
-          (point))
-      ;; Plain block: advance over non-blank lines only.
-      (progn
-        (while (and (not (eobp))
-                    (not (looking-at-p "^[ \t]*$")))
-          (forward-line 1))
-        (point)))))
-
 (defun scalpel-locate-markdown--heading-level (line)
   "Return the heading level of LINE, or nil when LINE is no heading."
   (and (string-match scalpel-locate-markdown--heading-regexp line)

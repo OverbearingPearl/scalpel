@@ -116,23 +116,6 @@ careful attempt.  Like `scalpel-prompt--why' and
 `scalpel-prompt--summarize', the response must not include any
 unrelated modification beyond the new attempt.")
 
-(defconst scalpel-prompt--summarize-continued
-  "Continue from where the previous round stopped. Do not restate or
-repeat work already committed; pick up the task in progress and drive
-it to completion. When finished, emit the structured summary required
-below.
-
-Structural contract: scalpel-console--run-rounds parses this
-instruction's round output for the final summary block and uses it to
-decide whether another round is needed. Do not alter the delimiters or
-field names of that block."
-  "Fixed continuation instruction sent on every continued round.
-
-This text is the continuation-side half of the structural contract
-with `scalpel-console--run-rounds': the console drives rounds and
-inspects the summary block that this instruction requires the model
-to emit.  Moved verbatim from scalpel-console.el.")
-
 (defconst scalpel-prompt--continuation-instruction
   "The action from the previous round already ran; its output is in the
 conversation above.  Read that output and decide now: if it already
@@ -206,24 +189,6 @@ regexp."
   (assoc-default file scalpel-prompt-language-rules
                  (lambda (regexp key)
                    (string-match-p regexp key))))
-
-(defconst scalpel-prompt--code-format-rule
-  "The code you emit must be readable, not merely balanced.  Keep
-lines at most 80 characters, counting from column 0, when doing so
-is safe.  When prose in a string, docstring, or comment would run
-past 80 columns, wrap it at a safe word boundary and continue at
-the indentation appropriate to the language.  Never wrap content
-whose layout is meaningful, including regular expressions, JSON,
-code examples, URLs, tables, and heredoc-style text.  Leave such
-content unchanged even when it is long.  Apply language-specific
-formatting rules separately."
-  "Language-agnostic rule for readable code and safe prose wrapping.
-
-This structural contract is embedded by `scalpel-prompt-system-prompt'
-and guarded by its tests.  It covers only formatting shared across
-languages.  Emacs Lisp-specific string, docstring, and sentence-spacing
-conventions belong in `scalpel-prompt-elisp--format-rule'.  The locate
-and execute layers guarantee balanced forms, not readability.")
 
 (defconst scalpel-prompt--block-edit-prompt
   (concat "Signature: %s\n\nCurrent block:\n%s\n\n"

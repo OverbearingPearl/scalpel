@@ -455,10 +455,6 @@ Use EXTRA as the new instruction."
     (message "Scalpel: starting commit message generation...")
     (scalpel-commit--generate scalpel-commit--console workdir extra)))
 
-(defun scalpel-commit--console-buffer ()
-  "Return the commit buffer, creating an empty one if needed."
-  (get-buffer-create (scalpel-commit--buffer-name)))
-
 (defun scalpel-commit--abort ()
   "Abandon this commit and close its buffer."
   (interactive)

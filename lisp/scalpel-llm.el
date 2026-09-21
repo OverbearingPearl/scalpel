@@ -114,12 +114,6 @@ parenthesis-escaping concerns arise; it matches single characters
 only, so greedy/non-greedy semantics are irrelevant, and the dot
 metacharacter and newline handling play no role in its behavior.")
 
-(defun scalpel-llm--cjk-char-p (char)
-  "Return non-nil when CHAR falls in a CJK code-point range."
-  (cl-some (lambda (range)
-             (and (>= char (car range)) (<= char (cdr range))))
-           scalpel-llm--cjk-ranges))
-
 (defun scalpel-llm--count-tokens (text)
   "Return an approximate token count for TEXT.
 ASCII and other non-CJK text uses the 4-characters-per-token

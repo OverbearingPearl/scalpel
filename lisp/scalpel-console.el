@@ -507,18 +507,6 @@ caller can delete them without invalidating earlier ones."
     map)
   "Keymap used in Scalpel console buffers.")
 
-(defconst scalpel-console--planner-error-types
-  '(parse tool-call prose malformed unknown-tool no-replacement)
-  "Error types caused by the planner's reply, not by Scalpel or the user.
-A round that fails with one of these did not run anything: the
-model's output broke the action contract, so the console marks them
-with a distinct header.  Which advice sits under that header
-depends on the type: `tool-call' means the model answered in
-another calling convention and `prose' that it followed no
-parseable convention at all -- neither is fixed by sending the same
-request to the same backend again -- while `parse' may come back
-whole on a second try.")
-
 (defconst scalpel-console--retry-advice
   (concat "(the model's reply was not usable; nothing was executed.  "
           "Press C-c C-e or M-x scalpel-console-repeat to retry)")
@@ -526,36 +514,6 @@ whole on a second try.")
 Structural contract shared by `scalpel-console--run-round', which
 prints it, and the test that pins it, so the key it names stays the
 key `scalpel-console-mode-map' actually binds.")
-
-(defconst scalpel-console--tool-call-advice
-  (concat "(the model answered in a tool-calling convention Scalpel does "
-          "not parse, so nothing was executed.  A backend that answers "
-          "this way tends to answer this way again, so retrying the same "
-          "request rarely helps: switch the backend with C-c C-b, or "
-          "rephrase.  To try again anyway: C-c C-e)")
-  "Advice shown under the header when the planner used tool-call syntax.
-Separate from `scalpel-console--retry-advice' because the two
-failures differ in what the user can do.  This one names the
-backend switch, and says \"tends to\" rather than \"will\" on
-purpose: the repetition is an observation from one backend on one
-task shape, not a property of every model that leaks this syntax.")
-
-(defconst scalpel-console--prose-advice
-  (concat "(the model answered in prose and sent no action array, so "
-          "nothing was executed.  A reply is only ever executed as an "
-          "action array, and asking for a long answer a second time tends "
-          "to get the same shape back: rephrase the request so the answer "
-          "fits one reply -- a conclusion, not an analysis -- switch the "
-          "backend with C-c C-b, or ask the question in a plain gptel "
-          "buffer, where nothing has to be parseable.  To try again "
-          "anyway: C-c C-e)")
-  "Advice shown under the header when the planner replied in prose.
-Separate from `scalpel-console--retry-advice' for the same reason
-the tool-call advice is: resending an identical instruction to the
-same backend is not what fixes it.  The failure is the shape of the
-answer rather than a malformed array, so the advice leads with
-rephrasing the request and names the retry binding last, as the
-escape hatch it is.")
 
 (defvar-local scalpel-console--last-instruction nil
   "The instruction this console last sent, for `scalpel-console-repeat'.
@@ -1890,14 +1848,6 @@ after %s: %s."
                      (finish-operation)
                      (signal (car err) (cdr err)))))))))
         (run-next)))))
-
-(defun scalpel-console--planner-error-p (err)
-  "Return non-nil when ERR names a planner-output failure.
-Such a round executed nothing and failed because the model's reply
-did not follow the action contract, so retrying the same
-instruction is the natural next step.  Delegates to
-`scalpel-diagnose-planner-error-p', which owns the type list."
-  (scalpel-diagnose-planner-error-p err))
 
 (defun scalpel-console-repeat ()
   "Re-send the previous instruction without retyping it.
