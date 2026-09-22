@@ -99,7 +99,10 @@ dimension simply contributes no candidate."
   "Return the contents of the prompt file NAME under the prompt dir.
 Try NAME first, then NAME.md, then NAME.markdown, returning the
 first file that exists and is readable.
-Return nil when none of them does."
+Return nil when none of them does.
+The returned text is prefixed with a header line naming the file,
+so the LLM can tell which prompt file each rule came from even
+when several are joined into one request."
   (let ((candidates (list name
                           (concat name ".md")
                           (concat name ".markdown")))
@@ -115,6 +118,11 @@ Return nil when none of them does."
       (message "Scalpel: Reading prompt file: %s" file)
       (with-temp-buffer
         (insert-file-contents file)
+        ;; Attribute the rules to their file so that rules from
+        ;; several prompt files stay distinguishable in one request.
+        (goto-char (point-min))
+        (insert (format "<!-- Scalpel user prompt: %s -->\n\n"
+                        (file-name-nondirectory file)))
         (buffer-string)))))
 
 (defun scalpel-user-prompt--names-for-dir (dir)

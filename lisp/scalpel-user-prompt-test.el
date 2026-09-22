@@ -33,7 +33,7 @@
     (with-temp-file (expand-file-name "prompt.elisp" dir)
       (insert "keep forms balanced"))
     (should (equal (scalpel-user-prompt-for-file file)
-                   "keep forms balanced"))))
+                   "<!-- Scalpel user prompt: prompt.elisp -->\n\nkeep forms balanced"))))
 
 (ert-deftest scalpel-user-prompt-test-for-file-is-nil-without-a-match ()
   "No prompt is attached when no prompt file matches."
@@ -52,7 +52,7 @@
     (should (equal (scalpel-user-prompt-for-files
                     (list (expand-file-name "a.el" dir)
                           (expand-file-name "b.el" dir)))
-                   "one"))))
+                   "<!-- Scalpel user prompt: prompt.elisp -->\n\none"))))
 
 (ert-deftest scalpel-user-prompt-test-for-files-unions-distinct-matches ()
   "A mixed round attaches every matching prompt, each once."
@@ -65,7 +65,7 @@
     (should (equal (scalpel-user-prompt-for-files
                     (list (expand-file-name "a.el" dir)
                           (expand-file-name "README.md" dir)))
-                   "one\n\ntwo"))))
+                   "<!-- Scalpel user prompt: prompt.elisp -->\n\none\n\n<!-- Scalpel user prompt: prompt.markdown -->\n\ntwo"))))
 
 (ert-deftest scalpel-user-prompt-test-with-language-rule-concatenates-both
   ()
@@ -78,10 +78,10 @@
     (let ((scalpel-prompt-language-rules
            '(("\\.el\\'" . "builtin rule"))))
       (should (equal (scalpel-user-prompt-with-language-rule file)
-                     "builtin rule\n\nuser rule"))
+                     "builtin rule\n\n<!-- Scalpel user prompt: prompt.elisp -->\n\nuser rule"))
       (let ((scalpel-prompt-language-rules nil))
         (should (equal (scalpel-user-prompt-with-language-rule file)
-                       "user rule"))))))
+                       "<!-- Scalpel user prompt: prompt.elisp -->\n\nuser rule"))))))
 
 (provide 'scalpel-user-prompt-test)
 
