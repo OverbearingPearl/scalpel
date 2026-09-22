@@ -97,15 +97,25 @@ dimension simply contributes no candidate."
 
 (defun scalpel-user-prompt--read (name)
   "Return the contents of the prompt file NAME under the prompt dir.
-Return nil when it does not exist."
-  (let ((file (expand-file-name name scalpel-user-prompt-dir)))
-    (and (file-regular-p file)
-         (file-readable-p file)
-         (progn
-           (message "Scalpel: Reading prompt file: %s" file)
-           (with-temp-buffer
-             (insert-file-contents file)
-             (buffer-string))))))
+Try NAME first, then NAME.md, then NAME.markdown, returning the
+first file that exists and is readable.
+Return nil when none of them does."
+  (let ((candidates (list name
+                          (concat name ".md")
+                          (concat name ".markdown")))
+        file)
+    (catch 'found
+      (dolist (candidate candidates)
+        (setq file (expand-file-name candidate scalpel-user-prompt-dir))
+        (when (and (file-regular-p file)
+                   (file-readable-p file))
+          (throw 'found file)))
+      (setq file nil))
+    (when file
+      (message "Scalpel: Reading prompt file: %s" file)
+      (with-temp-buffer
+        (insert-file-contents file)
+        (buffer-string)))))
 
 (defun scalpel-user-prompt--names-for-dir (dir)
   "Return the git-derived prompt file names matching DIR.
