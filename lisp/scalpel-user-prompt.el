@@ -103,27 +103,28 @@ Return nil when none of them does.
 The returned text is prefixed with a header line naming the file,
 so the LLM can tell which prompt file each rule came from even
 when several are joined into one request."
-  (let ((candidates (list name
-                          (concat name ".md")
-                          (concat name ".markdown")))
-        file)
-    (catch 'found
-      (dolist (candidate candidates)
-        (setq file (expand-file-name candidate scalpel-user-prompt-dir))
-        (when (and (file-regular-p file)
-                   (file-readable-p file))
-          (throw 'found file)))
-      (setq file nil))
-    (when file
-      (message "Scalpel: Reading prompt file: %s" file)
-      (with-temp-buffer
-        (insert-file-contents file)
-        ;; Attribute the rules to their file so that rules from
-        ;; several prompt files stay distinguishable in one request.
-        (goto-char (point-min))
-        (insert (format "<!-- Scalpel user prompt: %s -->\n\n"
-                        (file-name-nondirectory file)))
-        (buffer-string)))))
+  (when name
+    (let ((candidates (list name
+                            (concat name ".md")
+                            (concat name ".markdown")))
+          file)
+      (catch 'found
+        (dolist (candidate candidates)
+          (setq file (expand-file-name candidate scalpel-user-prompt-dir))
+          (when (and (file-regular-p file)
+                     (file-readable-p file))
+            (throw 'found file)))
+        (setq file nil))
+      (when file
+        (message "Scalpel: Reading prompt file: %s" file)
+        (with-temp-buffer
+          (insert-file-contents file)
+          ;; Attribute the rules to their file so that rules from
+          ;; several prompt files stay distinguishable in one request.
+          (goto-char (point-min))
+          (insert (format "<!-- Scalpel user prompt: %s -->\n\n"
+                          (file-name-nondirectory file)))
+          (buffer-string))))))
 
 (defun scalpel-user-prompt--names-for-dir (dir)
   "Return the git-derived prompt file names matching DIR.
@@ -159,22 +160,26 @@ Git identity is resolved once per directory, so a round touching
 several files of one repo runs git once.  A round spanning several
 languages or several repos attaches every matching prompt, each
 deduplicated to once -- that is the answer to a mixed edit: all
-matching fragments apply together."
+matching fragments apply together.
+Nil candidates are dropped before reading: a file whose extension
+has no language mapping contributes (list nil) here, and reading
+nil as a prompt name would crash `expand-file-name'."
   (when files
     (let ((names
            (delete-dups
-            (append
-             (apply #'append
-                    (delq nil
-                          (mapcar #'scalpel-user-prompt--names-for-dir
-                                  (delete-dups
-                                   (delq nil (mapcar #'file-name-directory files))))))
-             (apply #'append
-                    (delq nil
-                          (mapcar (lambda (file)
-                                    (list (scalpel-user-prompt--file-name
-                                           (scalpel-user-prompt--language file))))
-                                  files)))))))
+            (delq nil
+                  (append
+                   (apply #'append
+                          (delq nil
+                                (mapcar #'scalpel-user-prompt--names-for-dir
+                                        (delete-dups
+                                         (delq nil (mapcar #'file-name-directory files))))))
+                   (apply #'append
+                          (delq nil
+                                (mapcar (lambda (file)
+                                          (list (scalpel-user-prompt--file-name
+                                                 (scalpel-user-prompt--language file))))
+                                        files))))))))
       (let ((joined (string-join
                      (delq nil (mapcar #'scalpel-user-prompt--read names))
                      "\n\n")))

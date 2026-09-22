@@ -693,16 +693,23 @@ is missing."
   "Return the LLM prompt for INSTRUCTION given HISTORY.
 HISTORY is the conversation text recorded before INSTRUCTION, or
 nil on the first turn.  History goes before the instruction so the
-instruction stays the last thing the LLM reads.  The agent holds no
-state of its own: everything the LLM may rely on arrives here."
-  ;; Outbound redaction: the assembled prompt (context, history and
-  ;; instruction) is passed through scalpel-redact-apply so secrets are
-  ;; scrubbed before anything leaves the agent.
+instruction stays the last thing the LLM reads.  The project user
+prompt rules are appended every turn, between the conversation
+history and the user instruction.  The agent holds no state of its
+own: everything the LLM may rely on arrives here."
+  ;; Outbound redaction: the assembled prompt (context, history, project
+  ;; user prompt rules and instruction) is passed through
+  ;; scalpel-redact-apply so secrets are scrubbed before anything leaves
+  ;; the agent.
   (scalpel-redact-apply
    (concat (scalpel-agent-context)
            "\n\n"
            (when (and history (not (string-empty-p history)))
              (format "Conversation so far:\n%s\n\n" history))
+           (let ((rules (scalpel-user-prompt-for-files
+                         scalpel-agent--context-files)))
+             (when (and rules (not (string-empty-p rules)))
+               (format "Project user prompt rules:\n%s\n\n" rules)))
            "User instruction:\n"
            instruction)))
 
