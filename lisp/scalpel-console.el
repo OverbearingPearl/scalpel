@@ -1404,15 +1404,26 @@ holds the real paths the user typed."
          ;; is in flight and no terminal callback ever runs.
          (_ (with-current-buffer target
               (setq-local scalpel-console--status-stop stop)))
+         ;; The counts mirror the exact strings `scalpel-agent--prompt'
+         ;; assembles -- the cod system suffix and the user prompt rules
+         ;; folded into :instruction -- so the breakdown always matches
+         ;; the real request.
          (breakdown
           (with-current-buffer target
             (list :system (scalpel-llm--count-tokens
-                           scalpel-prompt-system-prompt)
+                           (if scalpel-agent-cod-enabled
+                               (concat scalpel-prompt-system-prompt
+                                       "\n\n"
+                                       scalpel-prompt-cod-prompt)
+                             scalpel-prompt-system-prompt))
                   :context (scalpel-llm--count-tokens
                             (scalpel-agent-context))
                   :history (scalpel-llm--count-tokens (or history ""))
                   :instruction (scalpel-llm--count-tokens
-                                (or instruction "")))))
+                                (concat (or (scalpel-user-prompt-for-files
+                                             scalpel-agent--context-files)
+                                            "")
+                                        (or instruction ""))))))
          ;; Rewrite the status line with the real counts as soon as
          ;; they are known.
          (_ (funcall refresh breakdown))
