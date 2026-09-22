@@ -364,6 +364,23 @@ value.  The tooling restores the real value only from the exact
 spelling, so any deviation means the wrong text lands in the file.
 "
    "
+Each continued round carries one line of the form \"Round N of M
+(planning phase / execution phase / final third)\": N and M and
+the phase name are computed by the runtime, so never derive,
+estimate or second-guess the numbers yourself -- read the phase
+name and use it.  In the planning phase, roughly the first third
+of the budget, read freely: peek files and run inspection
+commands to build a picture.  In the execution phase, the middle
+stretch, concentrate on performing the changes already decided on
+and stop broad reading.  In the final third, finish: complete the
+remaining edits, verify what is done and wrap up -- do not open
+new lines of investigation or start work that cannot finish in
+the remaining rounds.  Correctness always outranks speed: if the
+work needs more rounds than remain, do less, but do it right;
+prefer ending with a small, verified change over a rushed,
+unfinished one.
+"
+   "
 Never invent commands the user did not ask for, and never use shell
 to change files: all file changes go through block-edit,
 block-insert, block-delete, file-rename, file-delete and

@@ -1694,13 +1694,18 @@ Whether a round actually continues is decided by
 the round's output is noisy.  An unattended run continues through
 noise without asking: the user is away, and the report bodies stay
 in the buffer for them to read afterwards.  A continued round sends
-`scalpel-prompt--continuation-instruction' instead of INSTRUCTION:
-the original instruction is already inside the history, and
-re-sending it makes the planner run the same shell command again.
-The unattended state is re-read at every round boundary, so
-`scalpel-console-unattended' may arm it while a round is in
-flight, and the time budget ends only the unattended state, not
-the task.  Planner errors that are self-healable are retried
+a phase line instead of INSTRUCTION: escalation is client-side, so
+the round numbers are never shown to the model; in the first third
+the continuation wording is sent unchanged, past one third a
+moderate nudge is prepended, and past two thirds a stronger
+finish-now instruction is prepended.
+`scalpel-prompt--continuation-instruction' supplies the continuation
+wording.  The original instruction is already inside the
+history, and re-sending it makes the planner run the same shell
+command again.  The unattended state is re-read at every round
+boundary, so `scalpel-console-unattended' may arm it while a round
+is in flight, and the time budget ends only the unattended state,
+not the task.  Planner errors that are self-healable are retried
 automatically: at most `scalpel-console-self-heal-max' retries per
 instruction are allowed, counted both per error type and in total,
 and the attempt counters reset with each invocation of this
@@ -1729,6 +1734,18 @@ round."
           (self-heal-total 0))
       (cl-labels
           ((unattended-p () scalpel-console--unattended-p)
+           (phase-line ()
+             (let ((phase
+                    (cond
+                     ((<= round (/ round-limit 3))
+                      scalpel-prompt--continuation-instruction)
+                     ((<= round (* 2 (/ round-limit 3)))
+                      (concat "Wrap up efficiently: batch the remaining work and avoid further exploration.  "
+                              scalpel-prompt--continuation-instruction))
+                     (t
+                      (concat "Budget nearly spent: finish now with what you have, prefer completing over investigating, and do not start new reads.  "
+                              scalpel-prompt--continuation-instruction)))))
+               phase))
            (elapsed-text (start)
              (if (null start)
                  nil
@@ -1850,8 +1867,7 @@ after %s: %s."
                                  "Scalpel: retrying after %s error "
                                  "(attempt %d/%d)")
                                 etype count scalpel-console-self-heal-max))
-                              (setq next-instruction
-                                    scalpel-prompt--continuation-instruction)
+                              (setq next-instruction (phase-line))
                               (run-next)))
                            ((not
                              (and round-result
@@ -1876,8 +1892,7 @@ after %s: %s."
                            ((if (unattended-p)
                                 t
                               (scalpel-console--continue-p round-result))
-                            (setq next-instruction
-                                  scalpel-prompt--continuation-instruction)
+                            (setq next-instruction (phase-line))
                             (run-next))
                            (t
                             (finish-operation t)))))
