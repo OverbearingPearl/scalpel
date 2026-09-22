@@ -543,6 +543,14 @@ Incremented when an operation starts or is aborted, so callbacks
 from an older operation can settle their private resources without
 writing reports or continuing rounds.")
 
+(defvar-local scalpel-console--status-stop nil
+  "Stop closure for the status line of the round currently in flight.
+Set by `scalpel-console--run-round' when the status line is installed;
+cleared by the settle path on a normally settled round; nil when no round
+is in flight.  Kept separately from the generation counter so that
+`scalpel-console-abort' can still cancel the per-second status timer when
+the round's terminal callbacks are dropped by a generation bump.")
+
 (defun scalpel-console--status-start (breakdown)
   "Insert a one-line status display at point-max.
 BREAKDOWN is a plist with keys :system, :context, :history and
@@ -1350,7 +1358,9 @@ plist is recorded in `scalpel-console--round-error' before the header
 rendering; that recorded plist is the signal the round loop in
 `scalpel-console--run-rounds' consults for the automatic self-heal
 retry decision, and it is cleared to nil at the start of each round
-on success paths.  Outbound text is redacted through
+on success paths.  The stop closure returned by the status line is
+recorded buffer-locally so an abort can cancel the status timer
+even when no terminal callback will run.  Outbound text is redacted through
 `scalpel-redact-apply' before it reaches the model -- the
 instruction and the history are wrapped so the real user name never
 leaves the machine -- and inbound text is restored through
@@ -1389,6 +1399,11 @@ holds the real paths the user typed."
                           :instruction 0))))
          (refresh (car status))
          (stop (cdr status))
+         ;; Record the stop closure buffer-locally so `scalpel-console-abort'
+         ;; can reach it when abort fires while a synchronous action chain
+         ;; is in flight and no terminal callback ever runs.
+         (_ (with-current-buffer target
+              (setq-local scalpel-console--status-stop stop)))
          (breakdown
           (with-current-buffer target
             (list :system (scalpel-llm--count-tokens
@@ -1418,6 +1433,12 @@ holds the real paths the user typed."
          (settle (lambda (round-result)
                    (unless settled
                      (setq settled t)
+                     ;; Clear the recorded stop closure so a normally
+                     ;; settled round does not leave a stale closure
+                     ;; behind for a later abort to call.
+                     (when (buffer-live-p target)
+                       (with-current-buffer target
+                         (setq-local scalpel-console--status-stop nil)))
                      (setq scalpel-llm--progress-callback nil)
                      (condition-case err
                          (scalpel-token-record
@@ -1484,6 +1505,11 @@ holds the real paths the user typed."
                    ((error quit)
                     (funcall settle nil)
                     (signal (car err) (cdr err)))))
+               ;; Settle unconditionally: an abort that advanced the
+               ;; generation while a synchronous action chain was in
+               ;; flight leaves no one else to stop the status timer or
+               ;; clear the progress callback, so the round must settle
+               ;; here even though its report is suppressed.
                (funcall settle round-result))
              (lambda (err)
                ;; Record the failing round's error plist before rendering
@@ -2043,6 +2069,12 @@ instruction."
           (let ((cancel (prog1 (buffer-local-value 'scalpel-llm--cancel-current target)
                           (cl-incf scalpel-console--operation-generation))))
             (setq scalpel-console--busy nil)
+            ;; An abort during a synchronous action chain will never
+            ;; see a late callback, so stop the status timer and drop
+            ;; the orphan spinner right here instead.
+            (when (bound-and-true-p scalpel-console--status-stop)
+              (funcall scalpel-console--status-stop)
+              (setq scalpel-console--status-stop nil))
             (when scalpel-console--unattended-p
               (setq scalpel-console--unattended-p nil
                     scalpel-agent-unattended-confirm nil)
