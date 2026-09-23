@@ -867,8 +867,11 @@ before it was turned off."
     (dolist (region (scalpel-console--consumed-body-regions))
       (scalpel-console--mark-consumed-body region))))
 
-(defun scalpel-console--history ()
+(defun scalpel-console--history (&optional from)
   "Return the conversation recorded in the current buffer, as text.
+FROM limits the scan to text at and after that buffer position, so a
+caller holding a compression boundary can collect only the turns
+recorded since; nil scans the whole buffer.
 Every region carrying a `scalpel-console-role' property is joined in
 buffer order; regions without one — the header, context trees,
 status lines — are dropped.  The buffer is the only record: nothing
@@ -897,7 +900,7 @@ whole record.  Which reports are trimmed is shown on screen by
 `scalpel-console--refresh-consumed-body-markers', which derives it
 from the same regions and the same
 `scalpel-console--trim-report'."
-  (let ((pos (point-min))
+  (let ((pos (or from (point-min)))
         (turns nil))
     (while (< pos (point-max))
       (let ((next (next-single-property-change
@@ -927,6 +930,48 @@ from the same regions and the same
                              (scalpel-console--trim-report (nth 3 turn))
                            (nth 3 turn)))
         "")))))
+
+(defcustom scalpel-console-compress-history-threshold 8000
+  "Estimated tokens before a round's history gets compressed.
+At a round boundary, once a continued round's history may reach
+this threshold, one best-effort summary request compresses it.
+Nil disables compression entirely.  The summary replaces the
+conversation for the rest of the operation only: the console buffer
+keeps the whole record, and a failed or non-shrinking summary
+silently sends the raw history."
+  :type '(choice (const :tag "Off" nil)
+                 (natnum :tag "Tokens"))
+  :group 'scalpel)
+
+(defconst scalpel-console--compress-prompt-header
+  "Summarize the conversation below so an agent can continue the\ntask from it.  Keep verbatim: the user's original instruction, the\nlist of files and symbols already changed or created, and the last\ntwo rounds of exchange.  Drop consumed report bodies, stale shell\noutput and anything the retained file list makes re-readable.\nOutput only the summary text, nothing else."
+  "Instruction prefixed to the one-shot history summary request.\nThe summary is a projection for the agent only: the console buffer\nkeeps the whole conversation, so lossiness here is bounded by the\nretained essentials -- original instruction, changed-file ledger\nand the newest rounds.")
+
+(defun scalpel-console--compress-history (conversation on-done)
+  "Compress CONVERSATION with one best-effort LLM summary request.
+ON-DONE receives (COMPRESSED-P TEXT): COMPRESSED-P is non-nil when
+TEXT is a summary shorter than CONVERSATION, and nil when TEXT is
+CONVERSATION itself -- either the history is below
+`scalpel-console-compress-history-threshold', the request failed, or
+the summary would not shrink the payload.  Compression never raises
+into the round loop: a failed summary silently sends the raw
+history, and the next round boundary may try again."
+  (let ((limit scalpel-console-compress-history-threshold))
+    (if (or (null limit)
+            (<= (scalpel-llm--count-tokens conversation) limit))
+        (funcall on-done nil conversation)
+      (scalpel-llm-request-async
+       (concat scalpel-console--compress-prompt-header
+               "\n\nConversation:\n" conversation)
+       (lambda (summary)
+         (if (and (stringp summary)
+                  (not (string-empty-p summary))
+                  (< (scalpel-llm--count-tokens summary)
+                     (scalpel-llm--count-tokens conversation)))
+             (funcall on-done t summary)
+           (funcall on-done nil conversation)))
+       (lambda (_err)
+         (funcall on-done nil conversation))))))
 
 (defun scalpel-console--collapse-report-bodies (beg end)
   "Hide each fenced report body between BEG and END.
@@ -1698,7 +1743,15 @@ a phase line instead of INSTRUCTION: escalation is client-side, so
 the round numbers are never shown to the model; in the first third
 the continuation wording is sent unchanged, past one third a
 moderate nudge is prepended, and past two thirds a stronger
-finish-now instruction is prepended.
+finish-now instruction is prepended.  A continued round whose
+history would exceed
+`scalpel-console-compress-history-threshold' estimated tokens first
+sends one best-effort summary request: the summary replaces the
+conversation for the rest of the operation, and each later round
+sends the summary plus only the turns recorded past the compression
+boundary.  A failed or non-shrinking summary silently sends the raw
+history, compression happens only between rounds, and the console
+buffer is never edited, so the user sees none of it.
 `scalpel-prompt--continuation-instruction' supplies the continuation
 wording.  The original instruction is already inside the
 history, and re-sending it makes the planner run the same shell
@@ -1731,7 +1784,9 @@ round."
           (conversation history)
           (next-instruction instruction)
           (self-heal-attempts nil)
-          (self-heal-total 0))
+          (self-heal-total 0)
+          (summary nil)
+          (compress-pos nil))
       (cl-labels
           ((unattended-p () scalpel-console--unattended-p)
            (phase-line ()
@@ -1746,6 +1801,29 @@ round."
                       (concat "Budget nearly spent: finish now with what you have, prefer completing over investigating, and do not start new reads.  "
                               scalpel-prompt--continuation-instruction)))))
                phase))
+           (continue ()
+             ;; One summary request per operation at most: once it lands,
+             ;; later rounds send the summary plus only the turns recorded
+             ;; past the compression boundary.  A nil COMPRESSED-P leaves the
+             ;; state untouched, so the next boundary may try again.
+             (if summary
+                 (progn
+                   (when (buffer-live-p target)
+                     (with-current-buffer target
+                       (setq conversation
+                             (concat summary "\n\n"
+                                     (scalpel-console--history compress-pos)))))
+                   (run-next))
+               (scalpel-console--compress-history
+                conversation
+                (lambda (compressed-p text)
+                  (when compressed-p
+                    (setq summary text
+                          conversation text)
+                    (when (buffer-live-p target)
+                      (with-current-buffer target
+                        (setq compress-pos (point-max)))))
+                  (run-next)))))
            (elapsed-text (start)
              (if (null start)
                  nil
@@ -1893,7 +1971,7 @@ after %s: %s."
                                 t
                               (scalpel-console--continue-p round-result))
                             (setq next-instruction (phase-line))
-                            (run-next))
+                            (continue))
                            (t
                             (finish-operation t)))))
                     ((error quit)
