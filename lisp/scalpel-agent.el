@@ -1995,7 +1995,7 @@ file outside the context, a bad replacement, no matches, or an
 unbalanced result.  Signal `scalpel-no-validation' for a structured
 language whose provider declares no :balanced-p, so the diagnose
 side can offer block-edit as the retry."
-  (unless (and files pattern (listp pattern) (stringp replacement))
+  (unless (and files pattern (or (stringp pattern) (listp pattern)) (stringp replacement))
     (user-error "Scalpel: malformed file-substitute action: the pattern must be an rx form; %s, files %S"
                 (scalpel-agent--substitute-invocation pattern replacement)
                 files))
