@@ -388,35 +388,37 @@ or nil."
         (setq scalpel-commit--style style)
         (setq scalpel-commit--language language)
         (setq scalpel-commit--tree-state (scalpel-commit--status workdir))))
-    (scalpel-llm-request-async
-     (scalpel-commit--build-prompt diff style language extra)
-     (lambda (message)
-       (with-current-buffer (get-buffer-create (scalpel-commit--buffer-name workdir))
-         (unless (derived-mode-p 'scalpel-commit-mode)
-           (scalpel-commit-mode))
-         (setq scalpel-commit--console console)
-         (setq scalpel-commit--style style)
-         (setq scalpel-commit--language language)
-         (setq scalpel-commit--request-extra extra)
-         (setq scalpel-commit--workdir-cache workdir)
-         (setq scalpel-commit--untracked-files (scalpel-commit--untracked workdir))
-         (setq scalpel-commit--tree-state
-               (when (buffer-live-p console)
-                 (with-current-buffer console scalpel-commit--tree-state)))
-         (rename-buffer (scalpel-commit--buffer-name) t)
-         (scalpel-commit--render message))
-       (message "Scalpel: commit message generation finished.")
-       (when (buffer-live-p console)
-         (with-current-buffer console
-           (setq scalpel-commit--busy nil))))
-     (lambda (payload)
-       (when (buffer-live-p console)
-         (with-current-buffer console
-           (setq scalpel-commit--busy nil)))
-       (message "Scalpel: commit message generation failed: %s"
-                (plist-get payload :message)))
-     (concat "You write git commit messages and nothing else. "
-             "Reply with the message text only."))))
+    (let ((prompt (scalpel-commit--build-prompt diff style language extra)))
+      (message "Scalpel: waiting for commit message: sending ~%d upload tokens to the model..." (scalpel-llm--count-tokens prompt))
+      (scalpel-llm-request-async
+       prompt
+       (lambda (message)
+         (with-current-buffer (get-buffer-create (scalpel-commit--buffer-name workdir))
+           (unless (derived-mode-p 'scalpel-commit-mode)
+             (scalpel-commit-mode))
+           (setq scalpel-commit--console console)
+           (setq scalpel-commit--style style)
+           (setq scalpel-commit--language language)
+           (setq scalpel-commit--request-extra extra)
+           (setq scalpel-commit--workdir-cache workdir)
+           (setq scalpel-commit--untracked-files (scalpel-commit--untracked workdir))
+           (setq scalpel-commit--tree-state
+                 (when (buffer-live-p console)
+                   (with-current-buffer console scalpel-commit--tree-state)))
+           (rename-buffer (scalpel-commit--buffer-name) t)
+           (scalpel-commit--render message))
+         (message "Scalpel: commit message generation finished.")
+         (when (buffer-live-p console)
+           (with-current-buffer console
+             (setq scalpel-commit--busy nil))))
+       (lambda (payload)
+         (when (buffer-live-p console)
+           (with-current-buffer console
+             (setq scalpel-commit--busy nil)))
+         (message "Scalpel: commit message generation failed: %s"
+                  (plist-get payload :message)))
+       (concat "You write git commit messages and nothing else. "
+               "Reply with the message text only.")))))
 
 (defun scalpel-commit--workdir ()
   "Return the repository root the commit buffer serves.
