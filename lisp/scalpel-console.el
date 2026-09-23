@@ -947,6 +947,13 @@ silently sends the raw history."
   "Summarize the conversation below so an agent can continue the\ntask from it.  Keep verbatim: the user's original instruction, the\nlist of files and symbols already changed or created, and the last\ntwo rounds of exchange.  Drop consumed report bodies, stale shell\noutput and anything the retained file list makes re-readable.\nOutput only the summary text, nothing else."
   "Instruction prefixed to the one-shot history summary request.\nThe summary is a projection for the agent only: the console buffer\nkeeps the whole conversation, so lossiness here is bounded by the\nretained essentials -- original instruction, changed-file ledger\nand the newest rounds.")
 
+(defconst scalpel-console--compress-history-progress-message
+  "Scalpel: compressing conversation history...")
+
+(defun scalpel-console--compress-history-progress ()
+  "Show a message-based progress indicator while history compression is in flight."
+  (message scalpel-console--compress-history-progress-message))
+
 (defun scalpel-console--compress-history (conversation on-done)
   "Compress CONVERSATION with one best-effort LLM summary request.
 ON-DONE receives (COMPRESSED-P TEXT): COMPRESSED-P is non-nil when
@@ -955,15 +962,21 @@ CONVERSATION itself -- either the history is below
 `scalpel-console-compress-history-threshold', the request failed, or
 the summary would not shrink the payload.  Compression never raises
 into the round loop: a failed summary silently sends the raw
-history, and the next round boundary may try again."
+history, and the next round boundary may try again.  A message-based
+progress indicator is installed for the duration of the request and
+cleared in both terminal callbacks, since no round-level status line
+exists during compression."
   (let ((limit scalpel-console-compress-history-threshold))
     (if (or (null limit)
             (<= (scalpel-llm--count-tokens conversation) limit))
         (funcall on-done nil conversation)
+      (setq scalpel-llm--progress-callback
+            #'scalpel-console--compress-history-progress)
       (scalpel-llm-request-async
        (concat scalpel-console--compress-prompt-header
                "\n\nConversation:\n" conversation)
        (lambda (summary)
+         (setq scalpel-llm--progress-callback nil)
          (if (and (stringp summary)
                   (not (string-empty-p summary))
                   (< (scalpel-llm--count-tokens summary)
@@ -971,6 +984,7 @@ history, and the next round boundary may try again."
              (funcall on-done t summary)
            (funcall on-done nil conversation)))
        (lambda (_err)
+         (setq scalpel-llm--progress-callback nil)
          (funcall on-done nil conversation))))))
 
 (defun scalpel-console--collapse-report-bodies (beg end)
