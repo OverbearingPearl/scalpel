@@ -159,14 +159,19 @@ predict its reach and the user must always approve it."
   :type '(repeat string)
   :group 'scalpel)
 
-(defvar scalpel-agent-unattended-confirm nil
+(defvar-local scalpel-agent-unattended-confirm nil
   "When non-nil, every confirmable action runs without asking.
 Set by an unattended console run and cleared when it settles, so
 shell, file-rename, file-delete and file-substitute all proceed
 while the user is away.  The sandbox still bounds what a shell
 command may touch, and every executed action is reported in the
 console record, so the user reviews the transcript afterwards
-instead of answering prompts during the run.")
+instead of answering prompts during the run.
+Automatically buffer-local: each console's unattended run sets
+and clears its own local value, so two consoles cannot clobber
+each other's confirm gating.  Code reading this during a round
+executes with the console as the current buffer, while
+non-console callers still see the global default.")
 
 (defvar-local scalpel-agent--context-files nil
   "Files in this buffer's session context, as absolute names.

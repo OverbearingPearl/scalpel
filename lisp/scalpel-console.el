@@ -2139,19 +2139,23 @@ console transcript shows where to start reading when the user
 comes back.  Run this after sending the instruction it should
 carry out: subsequent rounds continue from the callbacks of the
 operation already in flight; this command itself sends no
-request."
+request.  All run state (`scalpel-console--unattended-p',
+`scalpel-console--unattended-limit',
+`scalpel-console--unattended-deadline' and
+`scalpel-console--unattended-start') is buffer-local, so arming
+one console cannot clobber another."
   (interactive "P")
   (let ((just-started (null scalpel-console--unattended-p)))
-    (setq scalpel-console--unattended-p t
-          scalpel-agent-unattended-confirm t
-          scalpel-console--unattended-limit
-          (or (and (numberp rounds) rounds)
-              scalpel-console-unattended-max-rounds))
+    (setq-local scalpel-console--unattended-p t)
+    (setq-local scalpel-agent-unattended-confirm t)
+    (setq-local scalpel-console--unattended-limit
+                (or (and (numberp rounds) rounds)
+                    scalpel-console-unattended-max-rounds))
     (setq-local scalpel-console--unattended-deadline
                 (time-add (current-time)
                           (* 60 scalpel-console-unattended-max-minutes)))
     (when just-started
-      (setq scalpel-console--unattended-start (current-time))))
+      (setq-local scalpel-console--unattended-start (current-time))))
   (scalpel-console--append
    (if (scalpel-console--busy-p)
        (format "Scalpel: Unattended armed at %s. Takes over after the current round; auto-stop after %d rounds or %d minutes."
