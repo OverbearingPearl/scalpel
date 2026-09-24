@@ -205,49 +205,24 @@ structural contract shared with `scalpel-agent--no-change-sentinel',
 which the reply is compared against.")
 
 (defconst scalpel-prompt--substitute-pattern-rule
-  "The form a file-substitute pattern is read in.
-A file-substitute \"pattern\" is an rx form carried as JSON data --
-nested arrays of strings and symbols such as
+  "A file-substitute pattern is an rx form carried as JSON data.
+It is a nested array of strings and symbols such as
   [\"symbol\", [\"or\", \"foo\", \"bar\"]]
 with one string for each literal -- which is compiled locally by
 `rx-to-string' and never evaluated.  The symbols name rx
 constructs; the strings are data, not Lisp and not regexp source.
 
 Write every literal as the exact characters to match, with no
-regexp escapes of any kind: not for dots, not for brackets, not
-for backslashes.  A version is written \"28.1\", not \"28\\\\.1\",
-and a literal backslash character itself is the form
-  [\"literal\", \"\\\\\"]
--- the string holds the one character, and the array says what it
-means, so no escape is ever needed inside a literal.
+escapes of any kind: a version is written \"28.1\", a bracket is
+just \"(\", and the pattern never carries backslashes.
 
 The common forms are
   literal, any, one-or-more, zero-or-more, opt, or, group, bos,
-  eos, line-start, line-end, digit, whitespace, symbol.
-There is deliberately no second string-regexp path: a pattern is
-always an rx form, so a string written where a form is expected is
-read as a literal, and a string that looks like a regexp source
-matches the text it spells.  \"\\\\1\" and \"\\\\&\" in a
-\"replacement\" are unaffected by this rule; they keep their
-whole-match and group meanings there, and only there."
-  "Statement of the form a file-substitute pattern is read in.
-Structural contract shared by `scalpel-prompt-system-prompt', which
-embeds it, and the test that guards it.  The trap it closes is not
-hypothetical: a planner wrote regexp escapes into the literals of
-the rx form -- \"\\\\.1\" for a version dot, \"\\\\(\" for a literal
-bracket -- so the compiled pattern asked for backslash-and-dot and
-backslash-and-bracket, text the file never held, and the rewrite
-refused with zero matches in a file that held what was meant.
-Nothing in the code can read that intent back out of a pattern
-without guessing at it, so the writing rule has to be stated to
-the model.
-
-The second trap is the other borrowing.  \"\\\\&\" is the whole-match
-placeholder of a *replacement*, and only there: a pattern never
-writes backreferences into literals, and the rx form states the
-whole-match by construction rather than by notation, so the
-boundary between pattern data and replacement convention has to be
-stated to the model as well.")
+  eos, line-start, line-end, digit, whitespace, symbol."
+  "A structural contract for the file-substitute pattern rule.
+The rule is embedded in `scalpel-prompt-system-prompt' and guarded
+by its test, because a pattern must always be written as an rx
+form -- the writing rule is stated to the model.")
 
 (defconst scalpel-prompt--block-insert-prompt
   (concat "Anchor signature: %s\n\n"
@@ -333,26 +308,22 @@ between rounds unless you changed it.
    scalpel-prompt--symbol-name-rule
    scalpel-prompt--format-rule
    "
-A file-substitute applies one mechanical textual transformation
-across several files at once -- the bulk change no sequence of
-edits should be spelled out for.  Its \"files\" must all be
-context files named by their exact absolute paths, \"pattern\" is
-an rx expression carried as JSON data -- nested arrays of rx
-constructs, never a regexp string -- compiled locally by
-rx-to-string and never evaluated, and a literal backslash
-character is expressed as [\"literal\", \"\\\\\"];
-\"replacement\" is the text the match is replaced with, where \\1
-and \\& refer to the match.  The substitution
-runs only after the user confirms it, and it refuses entirely
-when it matches nothing or would leave an Emacs Lisp file
-unbalanced: prefer file-substitute only for mechanical batch
-changes -- the same transformation repeated across many places or
-many files.  When the transformation is expected to land in only
-one or two spots, even across several files, block-edit is the
-better tool, because it names a definition and the tooling
-verifies the anchor; a change confined to one spot, even one
-definition, is block-edit work no matter how mechanical it is,
-and shell is only for reading.
+A file-substitute applies one mechanical textual transformation across
+several files at once -- the bulk change no sequence of edits should
+be spelled out for.  Its \"files\" must all be context files named by
+their exact absolute paths, \"pattern\" is an rx expression carried as
+JSON data -- nested arrays of rx constructs, never a regexp string --
+compiled locally by rx-to-string and never evaluated; \"replacement\"
+is the exact text the match is replaced with.  The substitution runs
+only after the user confirms it, and it refuses entirely when it
+matches nothing or would leave an Emacs Lisp file unbalanced: prefer
+file-substitute only for mechanical batch changes -- the same
+transformation repeated across many places or many files.  When the
+transformation is expected to land in only one or two spots, even
+across several files, block-edit is the better tool, because it names
+a definition and the tooling verifies the anchor; a change confined to
+one spot, even one definition, is block-edit work no matter how
+mechanical it is, and shell is only for reading.
 "
    scalpel-prompt--substitute-pattern-rule
    "

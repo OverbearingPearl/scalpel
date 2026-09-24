@@ -68,12 +68,14 @@ no dialect, so a planner wrote \"\\\\(emacs ...\\\\)\" meaning a literal
 bracket -- a group in Emacs syntax -- and the brackets it aimed at
 were absent from the pattern, which then matched nothing in a file
 that held them.  The prompt now names the rx contract: patterns are
-given in rx form, compiled by \"rx-to-string\" and never evaluated,
-and a plain string where a form is expected is read as a literal.
-Nothing in the code can read a model's intent back out of a pattern
-without guessing at it, so the rule has to be stated to the model;
-this guards only that the live prompt still carries it, the way the
-brevity rule and the perl preference are guarded."
+given in rx form, compiled locally by \"rx-to-string\" and never
+evaluated, every literal in a pattern is the exact characters to
+match with no escapes -- a pattern never carries backslashes -- and
+the common rx forms are listed.  Nothing in the code can read a
+model's intent back out of a pattern without guessing at it, so the
+rule has to be stated to the model; this guards only that the live
+prompt still carries it, the way the brevity rule and the perl
+preference are guarded."
   (ert-info ((format "Rule:\n%S" scalpel-prompt--substitute-pattern-rule))
     (should (string-match-p
              (regexp-quote scalpel-prompt--substitute-pattern-rule)
@@ -84,29 +86,11 @@ brevity rule and the perl preference are guarded."
                             scalpel-prompt--substitute-pattern-rule))
     (should (string-match-p "never evaluated"
                             scalpel-prompt--substitute-pattern-rule))
-    ;; The rule is carried with a worked example: the prose statement
-    ;; alone did not stop the escaped spelling, which came back three
-    ;; rounds running, each time refused for matching nothing.  The
-    ;; example is the part a model can copy.  The example text is
-    ;; matched as raw characters, not by a regexp or an escaped
-    ;; needle: the needle is plain text holding two backslash
-    ;; characters between the inner quotes, with no escape counting
-    ;; involved.
-    (should (string-search
-             "[\"literal\", \"\\\\\"]"
-             scalpel-prompt--substitute-pattern-rule))
-    ;; The rule covers the other borrowed convention too: a replacement's
-    ;; whole-match placeholder is not a pattern construct, so the rule
-    ;; states replacements are unaffected by it, and a run of text that
-    ;; repeats inside one pattern is named by a group and a
-    ;; backreference.
-    (should (string-match-p "replacement"
+    (should (string-match-p "exact characters"
                             scalpel-prompt--substitute-pattern-rule))
-    (should (string-match-p "unaffected by this rule"
+    (should (string-match-p "never carries backslashes"
                             scalpel-prompt--substitute-pattern-rule))
-    (should (string-match-p (regexp-quote "\\1")
-                            scalpel-prompt--substitute-pattern-rule))
-    (should (string-match-p (regexp-quote "\\&")
+    (should (string-match-p "zero-or-more, opt, or, group"
                             scalpel-prompt--substitute-pattern-rule))))
 
 (ert-deftest scalpel-prompt-test-system-prompt-takes-names-literally ()
