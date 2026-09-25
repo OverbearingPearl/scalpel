@@ -202,7 +202,11 @@ regexp."
           "Return only the full replacement block, written in "
           "the same language as the block above, as plain "
           "text. Do not include markdown fences or "
-          "explanations. If the requested change is impossible or "
+          "explanations. The instruction describes only what "
+          "should change and may be ignored wherever it "
+          "contains code, diffs, or a restatement of the "
+          "block, since the replacement is carried by the "
+          "reply itself. If the requested change is impossible or "
           "unnecessary for this block, return exactly: NO_CHANGE")
   "Replacement-round prompt sent by `scalpel-agent-block-edit'.
 It is formatted with the block's signature line, current body
@@ -261,6 +265,10 @@ before writing it.")
           "immediately after the anchor, written in the "
           "same language as the anchor, as plain text. Do "
           "not include markdown fences or explanations. "
+          "The instruction describes only what to create; "
+          "ignore any code, diffs, or restatement of the "
+          "definition it may contain, since the new text "
+          "is carried by this reply itself. "
           "If nothing should be created, return exactly: "
           "NO_CHANGE")
   "Creation-round prompt sent by `scalpel-agent-block-insert'.
@@ -540,6 +548,13 @@ applied as a whole-block rewrite by tooling that owns location and
 application, so only the final text matters.  Reading the current
 code to understand it is expected; simulating an edit against it is
 wasted effort.
+
+The instruction of a block-edit or a block-insert states only what
+should change, in a few sentences of plain prose: it must never
+carry the new or the old code, diff text, change markers, or a
+restatement of the block, because the replacement text travels in
+the reply, not in the instruction.  A file-create is the only
+exception -- its text field carries the whole file by design.
 Never emit code or diff text in this response.
 "
    scalpel-prompt--reply-brevity-rule
