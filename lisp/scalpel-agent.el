@@ -1870,12 +1870,12 @@ refusal lacks: it is what separates a pattern aimed at a line the
 file does not hold from one written as the text the rewrite was
 meant to produce.  The lines are quoted, never inferred.
 
-Because PATTERN is compiled from rx, there is no bracket-escape
-misreading to correct: the pattern means exactly what rx compiled it
-to mean, and the quoted lines are the whole of the evidence the
-refusal carries.  A pattern that still matches nothing after the
-planner has read them is rewritten as a different rx form, not as a
-re-spelling of the same one."
+Because PATTERN is an ordinary Emacs regexp string, there is no
+bracket-escape misreading to correct: the pattern means exactly its
+literal regexp meaning, and the quoted lines are the whole of the
+evidence the refusal carries.  A pattern that still matches nothing
+after the planner has read them is rewritten as a different regexp,
+not as a re-spelling of the same one."
   (let (blocks)
     (dolist (entry staged)
       (let ((lines (scalpel-agent--substitute-prefix-lines
@@ -1903,21 +1903,6 @@ PATTERN and REPLACEMENT are printed with %S, so either may be anything
 the action carried, including nil: a malformed action describes itself
 instead of raising a second error inside the message builder."
   (format "pattern %S -> replacement %S" pattern replacement))
-
-(defun scalpel-agent--normalize-json-rx (form)
-  "Convert a JSON-derived RX FORM into proper rx notation.
-Every element of FORM arrives as a string because JSON has no symbols.
-A string heading a list is interned as an rx operator (applied
-recursively to the rest of the list); a bare string is a literal."
-  (cond
-   ((stringp form) form)
-   ((listp form)
-    (let ((head (car form)))
-      (cons (cond ((stringp head) (intern head))
-                  ((symbolp head) head)
-                  (t (error "Invalid rx operator: %S" head)))
-            (mapcar #'scalpel-agent--normalize-json-rx (cdr form)))))
-   (t form)))
 
 (define-error 'scalpel-planner-error
   "Scalpel planner reply was unusable (plist :type :message)")
@@ -1957,13 +1942,14 @@ This is the planner's channel for one mechanical batch
 transformation -- the job a whole-file shell one-liner would
 otherwise be asked to do -- executed by Scalpel itself, so its
 effect is enumerable: every file touched and every occurrence
-replaced is named in the report.  PATTERN is an rx form carried as
-JSON data, compiled once by `rx-to-string' and never evaluated; a
-literal backslash is written as (literal \"\\\").  REPLACEMENT
-is replacement text, where \\\\N and \\\\& refer to the
-match as `replace-regexp-in-string' reads them.  All FILES must be
-in the session context; a path outside it is refused, the same
-boundary a read obeys.
+replaced is named in the report.  PATTERN is a plain Emacs regexp
+string, read by `string-match' and `replace-regexp-in-string' and
+never evaluated; JSON escaping demands doubled backslashes for
+regexp specials, so a literal backslash is written \\\\\\\\ in
+the JSON text.  REPLACEMENT is replacement text, where \\\\N and
+\\\\& refer to the match as `replace-regexp-in-string' reads
+them.  All FILES must be in the session context; a path outside it
+is refused, the same boundary a read obeys.
 
 Only files whose locate provider is registered but declares no
 :balanced-p are refused: the bracket check is the only structural
@@ -2000,8 +1986,8 @@ file outside the context, a bad replacement, no matches, or an
 unbalanced result.  Signal `scalpel-no-validation' for a structured
 language whose provider declares no :balanced-p, so the diagnose
 side can offer block-edit as the retry."
-  (unless (and files pattern (or (stringp pattern) (listp pattern)) (stringp replacement))
-    (user-error "Scalpel: malformed file-substitute action: the pattern must be an rx form; %s, files %S"
+  (unless (and files (stringp pattern) (stringp replacement))
+    (user-error "Scalpel: malformed file-substitute action: the pattern must be a regexp string; %s, files %S"
                 (scalpel-agent--substitute-invocation pattern replacement)
                 files))
   (dolist (file files)
@@ -2016,22 +2002,7 @@ side can offer block-edit as the retry."
            "The file exists on disk"
          "No such file exists on disk")
        (scalpel-agent--substitute-invocation pattern replacement))))
-  ;; Compile the rx form once, before any gate reads it: every scan
-  ;; below works from the same compiled regexp, so the rewrite, the
-  ;; counts, the excerpt pairing, and the zero-match notes all
-  ;; interpret the pattern identically.  JSON parsing carries every
-  ;; rx operator as a string, so the form goes through the JSON
-  ;; normalizer first and raw compilation never sees it.
-  (let ((regexp
-         (condition-case err
-             (rx-to-string (scalpel-agent--normalize-json-rx pattern) 'no-group)
-           (error
-            (signal 'scalpel-planner-error
-                    (list :type 'malformed
-                          :message
-                          (format "Scalpel: file-substitute rx form is malformed: %s\n%s"
-                                  (error-message-string err)
-                                  (scalpel-agent--substitute-invocation pattern replacement))))))))
+  (let ((regexp pattern))
     (dolist (file files)
       (let ((resolved (file-truename (expand-file-name file))))
         (when-let ((provider (scalpel-locate-provider-for-file resolved)))

@@ -1877,7 +1877,7 @@ the report, and the one confirmation is not waivable."
                      (lambda (&rest _) (setq asked (1+ asked)) t)))
             (scalpel-agent-execute-action
              (list :tool "file-substitute" :files files
-                   :pattern '(literal "old-") :replacement "new-"
+                   :pattern "old-" :replacement "new-"
                    :reason "bulk rename")
              (lambda (r) (setq report r))
              (lambda (e) (ert-fail (plist-get e :message)))))
@@ -1919,7 +1919,7 @@ next."
           (let* ((file (car probe))
                  (err (condition-case e
                           (progn (scalpel-agent-file-substitute
-                                  (list file) (list 'literal "foo") "bar")
+                                  (list file) "foo" "bar")
                                  nil)
                         (user-error e))))
             (ert-info ((format "File %S; error: %S" file err))
@@ -2001,7 +2001,7 @@ explaining where it had gone."
         (let ((scalpel-agent--context-files (list (file-truename f1))))
           (let ((report (scalpel-agent-file-substitute
                          (list (file-truename f1))
-                         '(literal "old-a")
+                         "old-a"
                          "new-a")))
             (ert-info ((format "Report:\n%S" report))
               (should (string-match-p "Rewrote 1 occurrence" report))
@@ -2016,17 +2016,14 @@ explaining where it had gone."
 The note is a signal, not boilerplate: one printed on every rewrite
 would be read as noise and stop carrying the renames it exists for.
 
-The pattern is passed as an rx data form, (literal \"nil\"), whose
- sole element is a bare string literal.  A bare string at the top
-level -- just \"nil\" -- is refused as malformed rx, so the refusal
-that would follow from writing it that way proves nothing about the
-note; the form is what the rx gate accepts."
+The pattern is written as a plain regexp string under the new
+contract."
   (scalpel-utils-test-with-temp-file ".el"
     (with-temp-file this-file (insert "(defun foo ()\n  nil)\n"))
     (let* ((resolved (file-truename (expand-file-name this-file)))
            (scalpel-agent--context-files (list resolved))
            (report (scalpel-agent-file-substitute
-                    (list resolved) '(literal "nil") "t")))
+                    (list resolved) "nil" "t")))
       (ert-info ((format "Report:\n%S" report))
         (should (string-match-p "Rewrote 1 occurrence" report))
         (should-not (string-match-p "definitions changed" report))))))
@@ -2044,7 +2041,7 @@ planner trusts it to decide whether the rewrite is complete."
     (let* ((resolved (file-truename (expand-file-name this-file)))
            (scalpel-agent--context-files (list resolved))
            (report (scalpel-agent-file-substitute
-                    (list resolved) '(literal "old") "new")))
+                    (list resolved) "old" "new")))
       (ert-info ((format "Report: %S On disk: %S"
                          report
                          (with-temp-buffer
@@ -2061,21 +2058,19 @@ Regression: the refusal named the pattern and the files and nothing
 else, so a planner whose pattern missed a header by one entry had no
 way to correct it except by spending another round reading the file
 it had already misremembered; the observed next move was to send the
-same pattern again.  The pattern here is passed as an rx form
-\(a JSON-shaped list data structure) that `scalpel-agent-file-substitute'
-compiles with `rx-to-string'."
+same pattern again.  The pattern here is passed as an ordinary
+regular-expression string that `scalpel-agent-file-substitute' uses
+directly."
   (scalpel-utils-test-with-temp-file ".el"
     (with-temp-file this-file
       (insert ";; Package-Requires: ((emacs \"28.1\") (transient \"0.3.0\") "
               "(s \"1.13.0\"))\n"))
     (let* ((resolved (file-truename (expand-file-name this-file)))
            (scalpel-agent--context-files (list resolved))
-           ;; An rx form: a `seq' of two literal strings, with the
-           ;; `seq' head as a symbol. It matches nothing (the file
-           ;; holds 0.3.0, not 0.99.0) but shares a long prefix with
-           ;; the file's line, so the closest-lines note fires.
-           (pattern (list 'seq ";; Package-Requires: ((emacs \"28.1\") (transient "
-                          "0.99.0\"))"))
+           ;; This regexp matches nothing (the file holds 0.3.0, not
+           ;; 0.99.0) but shares a long prefix with the file's line, so
+           ;; the closest-lines note fires.
+           (pattern ";; Package-Requires: ((emacs \"28.1\") (transient 0.99.0\"))")
            (err (condition-case e
                     (progn
                       (scalpel-agent-file-substitute
@@ -2103,7 +2098,7 @@ compiles with `rx-to-string'."
   "A pattern sharing nothing with the file adds no lines to the refusal.
 The note is evidence, not boilerplate: an unrelated pattern must not put
 arbitrary lines under \"closest\", or the planner would read coincidences
-as the text the rx form was aiming at."
+as the text the pattern was aiming at."
   (scalpel-utils-test-with-temp-file ".el"
     (with-temp-file this-file (insert "(defun foo ())\n"))
     (let* ((resolved (file-truename (expand-file-name this-file)))
@@ -2111,7 +2106,7 @@ as the text the rx form was aiming at."
            (err (condition-case e
                     (progn
                       (scalpel-agent-file-substitute
-                       (list resolved) ["zzz-absent-identifier"] "x")
+                       (list resolved) "zzz-absent-identifier" "x")
                       nil)
                   (user-error e))))
       (ert-info ((format "Error: %S" err))
@@ -2138,8 +2133,7 @@ planner to compare against."
                     (progn
                       (scalpel-agent-file-substitute
                        (list resolved)
-                       '(seq "llm-pick-source-register 'artificial-analysis"
-                             " :kind 'other)")
+                       "llm-pick-source-register 'artificial-analysis :kind 'other"
                        "x")
                       nil)
                   (user-error e))))
@@ -2158,7 +2152,7 @@ planner to compare against."
   "No escape note when the files really hold the literal ampersand.
 The note is evidence, not a reflex: a file that holds an ampersand
 must not be reported as lacking one merely because the pattern wrote
-it as (literal \"&\"), or the refusal would send the planner after a
+the & in the pattern, or the refusal would send the planner after a
 difference that is not there."
   (scalpel-utils-test-with-temp-file ".txt"
     (with-temp-file this-file (insert "keep & safe\n"))
@@ -2167,7 +2161,7 @@ difference that is not there."
            (err (condition-case e
                     (progn
                       (scalpel-agent-file-substitute
-                       (list resolved) '(seq "zzz" (literal "&") "zzz") "x")
+                       (list resolved) "zzz&zzz" "x")
                       nil)
                   (user-error e))))
       (ert-info ((format "Error: %S" err))
@@ -2194,10 +2188,9 @@ refusal now carries for that."
     (with-temp-file this-file (insert "(defun foo ())\n"))
     (let* ((resolved (file-truename (expand-file-name this-file)))
            (scalpel-agent--context-files (list resolved))
-           ;; An rx data form; file-substitute compiles it with
-           ;; `rx-to-string'.  The literal parens are matched literally,
-           ;; and it matches the file's (defun foo ()) line.
-           (pattern (list 'literal "(defun foo"))
+           ;; The pattern is a plain regexp string: the literal parens
+           ;; match as-is, so it hits the file's (defun foo ()) line.
+           (pattern "(defun foo")
            ;; A trailing backslash is not a valid replacement text; the
            ;; pattern matches, so the replacement is really read.
            (replacement "\\")
@@ -2249,7 +2242,7 @@ never read its own occurrence counts."
                         (funcall on-success
                                  (concat "[{\"tool\":\"file-substitute\","
                                          "\"files\":[\"" f1 "\"],"
-                                         "\"pattern\":[\"literal\",\"old-\"],"
+                                         "\"pattern\":\"old-\","
                                          "\"replacement\":\"new-\"}]"))))
                 (scalpel-agent-run "bulk rename" nil
                                    (lambda (r) (setq result r))

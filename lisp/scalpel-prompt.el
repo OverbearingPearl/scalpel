@@ -205,24 +205,36 @@ structural contract shared with `scalpel-agent--no-change-sentinel',
 which the reply is compared against.")
 
 (defconst scalpel-prompt--substitute-pattern-rule
-  "A file-substitute pattern is an rx form carried as JSON data.
-It is a nested array of strings and symbols such as
-  [\"symbol\", [\"or\", \"foo\", \"bar\"]]
-with one string for each literal -- which is compiled locally by
-`rx-to-string' and never evaluated.  The symbols name rx
-constructs; the strings are data, not Lisp and not regexp source.
+  "A file-substitute pattern is a plain regexp string written in
+Emacs regexp syntax.  It is compiled by
+`string-match'/`replace-regexp-in-string' and is
+never evaluated as Lisp.
 
-Write every literal as the exact characters to match, with no
-escapes of any kind: a version is written \"28.1\", a bracket is
-just \"(\", and the pattern never carries backslashes.
+Write every literal as the exact characters to match.  Any
+backslash demanded by the regexp must be doubled in the JSON in
+the way JSON escaping demands, so \"\\\\(\" escapes a literal
+paren, a bracket is written as-is inside a character class, and
+a literal backslash itself is \"\\\\\\\\\" in JSON.  The dot
+metacharacter excludes newlines by default; handle newlines
+explicitly with [[:space:]] or a newline in the pattern.  There
+is no non-greedy matching: constrain matches with negated
+character classes, anchors, or backtracking constraints instead
+of lazy quantifiers.
 
-The common forms are
-  literal, any, one-or-more, zero-or-more, opt, or, group, bos,
-  eos, line-start, line-end, digit, whitespace, symbol."
+The replacement is the exact replacement text, with \\\\N and
+\\\\& referring to the match the way
+`replace-regexp-in-string' reads them.
+
+The common constructs are literals, character classes,
+\\\\(?:...\\\\) for grouping without capture, \\\\(capture\\\\),
+\\\\| for alternation, * and \\\\+ and \\\\? for repetition,
+\\\\` and \\\\' for buffer ends, \\\\` line anchors
+\\\\(line-start\\\\) style via ^ and $, and \\\\w, \\\\s, \\\\c
+classes."
   "A structural contract for the file-substitute pattern rule.
 The rule is embedded in `scalpel-prompt-system-prompt' and guarded
-by its test, because a pattern must always be written as an rx
-form -- the writing rule is stated to the model.")
+by its test, because a pattern must always be written as an Emacs
+regexp string -- the writing rule is stated to the model.")
 
 (defconst scalpel-prompt--block-insert-prompt
   (concat "Anchor signature: %s\n\n"
@@ -311,9 +323,10 @@ between rounds unless you changed it.
 A file-substitute applies one mechanical textual transformation across
 several files at once -- the bulk change no sequence of edits should
 be spelled out for.  Its \"files\" must all be context files named by
-their exact absolute paths, \"pattern\" is an rx expression carried as
-JSON data -- nested arrays of rx constructs, never a regexp string --
-compiled locally by rx-to-string and never evaluated; \"replacement\"
+their exact absolute paths, \"pattern\" is an ordinary Emacs regexp
+string -- written in JSON with backslashes doubled per JSON escaping
+rules -- matched and replaced locally by string-match and
+replace-regexp-in-string and never evaluated as Lisp; \"replacement\"
 is the exact text the match is replaced with.  The substitution runs
 only after the user confirms it, and it refuses entirely when it
 matches nothing or would leave an Emacs Lisp file unbalanced: prefer
