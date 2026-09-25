@@ -53,16 +53,18 @@ did not follow the action contract."
 
 (defconst scalpel-diagnose-self-heal-types
   '(parse malformed no-replacement no-such-symbol pattern-no-match
-          bad-path unbalanced prose no-validation)
+          bad-path unbalanced no-validation)
   "Planner error types the console may retry automatically.
 Their failure reports carry enough context (near-miss lines, closest
 symbols) for the model to correct its own reply next round.
-PROSE is an output-contract violation: the planner replied with prose
-instead of the TOML action document.  When the retry names the required
-[[action]] table format, the model can correct its own reply next round.
 NO-VALIDATION is the capability gate's refusal -- its message already
 names the remedy (block-edit), so the retried round can plan the
-right command from it.")
+right command from it.
+PROSE is deliberately excluded: an output-contract violation where
+the planner replied with prose instead of the TOML action document.
+Retrying the identical prompt only repeats the prose and burns
+tokens; instead the prose answer stays in the conversation history
+for the user to read and re-ask on.")
 
 (defun scalpel-diagnose-self-heal-p (err)
   "Return non-nil when ERR is a plist whose :type is self-healable.
