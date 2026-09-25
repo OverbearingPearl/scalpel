@@ -85,6 +85,44 @@ reply's syntax."
     (should-error (scalpel-llm-dialect--default-parse "no toml here")
                   :type 'user-error)))
 
+(ert-deftest scalpel-llm-dialect-test-default-parse-comments-a-prose-header ()
+  "Echo multi-line prose ahead of the tables as commented signal lines.
+Every prose line gets its own `#' prefix, blank separators are kept
+blank, and the tables themselves stay untouched so the raw-TOML echo
+buffer stays parseable."
+  (let ((raw (concat "Two runs are planned.\n"
+                     "Both use the same tool.\n"
+                     "\n"
+                     "[[action]]\ntool = 'reply'\ntext = 'hi'\n"
+                     "\n"
+                     "[[action]]\ntool = 'reply'\ntext = 'bye'\n")))
+    (let ((result (scalpel-llm-dialect--default-parse raw))
+          (echo (with-current-buffer "*Scalpel Raw TOML*"
+                  (buffer-string))))
+      (ert-info ("Both table entries survive the parse")
+        (should (= 2 (length result)))
+        (should (equal (plist-get (nth 0 result) :text) "hi"))
+        (should (equal (plist-get (nth 1 result) :text) "bye")))
+      (ert-info ("Each prose line is individually commented")
+        (should (string-match-p "^# Two runs are planned\\." echo))
+        (should (string-match-p "^# Both use the same tool\\." echo)))
+      (ert-info ("No prose line leaks uncommented into the echo")
+        (should-not (string-match-p "^Two runs" echo))
+        (should-not (string-match-p "^Both use" echo)))
+      (ert-info ("Table lines are echoed verbatim")
+        (should (string-match-p "^\\[\\[action\\]\\]" echo))
+        (should (string-match-p "^tool = 'reply'" echo))
+        (should (string-match-p "^text = 'bye'" echo)))
+      (ert-info ("Every echoed line is a comment, a blank, or TOML")
+        (should (null (seq-find
+                       (lambda (line)
+                         (and (not (string-empty-p line))
+                              (not (string-prefix-p "#" line))
+                              (not (string-prefix-p "[[" line))
+                              (not (string-match-p
+                                    "^[A-Za-z][A-Za-z0-9_-]* = " line))))
+                       (split-string echo "\n"))))))))
+
 (ert-deftest scalpel-llm-dialect-test-default-parse-unterminated-block-signals ()
   "An odd number of ''' fences means a truncated heredoc and signals."
   (ert-info ("Input: heredoc opened but never closed; expect user-error")

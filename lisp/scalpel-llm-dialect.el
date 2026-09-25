@@ -137,6 +137,20 @@ by eye from one that did."
         (print-escape-multibyte t))
     (prin1-to-string raw)))
 
+(defun scalpel-llm-dialect--comment-prose (raw)
+  "Comment out the prose note ahead of the first TOML table.
+Planners sometimes prepend a status sentence before the
+document.  Every line before the first line starting with `['
+is prefixed with `# ' so `toml:read-from-file' still parses
+the cleaned text.  RAW without any table header, or with the
+table header already first, is returned unchanged."
+  (let ((idx (string-match "^\x5c[" raw)))
+    (if (or (null idx) (= idx 0))
+        raw
+      (concat
+       (replace-regexp-in-string "^" "# " (substring raw 0 idx))
+       (substring raw idx)))))
+
 (defconst scalpel-llm-dialect--tool-call-tags
   '("invoke" "tool_call" "tool_calls" "function_call" "function_calls"
     "arg_key" "arg_value")
@@ -316,13 +330,17 @@ API key, quota and network, then retry"))
          (result nil)
          ;; Read KEY from an alist TABLE as produced by
          ;; `toml:read-from-file'; return nil when absent.
-         (table-value (lambda (table key) (cdr (assoc key table)))))
+         (table-value (lambda (table key) (cdr (assoc key table))))
+         ;; Comment the prose note ahead of the first table header so
+         ;; the parser accepts the reply and the reader sees the same
+         ;; commented text.
+         (raw-text (scalpel-llm-dialect--comment-prose raw)))
     ;; Mirror RAW verbatim so failures can be read against the reply
     ;; the planner actually wrote, unmodified.
     (with-current-buffer echo-buffer
       (let ((inhibit-read-only t))
         (erase-buffer)
-        (insert raw)))
+        (insert raw-text)))
     (unwind-protect
         (progn
           ;; Single-quote literal contract: only check that ''' fences
@@ -337,7 +355,7 @@ API key, quota and network, then retry"))
           ;; Write RAW verbatim and parse in a single round trip.
           (setq temp-file (make-temp-file "scalpel-toml"))
           (with-temp-file temp-file
-            (insert raw))
+            (insert raw-text))
           (setq result (condition-case nil (toml:read-from-file temp-file) (error nil)))
           (unless (and (listp result)
                        (cl-every #'consp result))
