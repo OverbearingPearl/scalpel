@@ -20,11 +20,13 @@
       (should-error (scalpel-llm-deepseek-parse-reply raw)
                     :type 'user-error))))
 
-(ert-deftest scalpel-llm-deepseek-test-parse-delegates-valid-json ()
-  "A plain JSON reply parses through the default parser unchanged."
-  (ert-info ("Input: bare action array; expect the action parsed")
+(ert-deftest scalpel-llm-deepseek-test-parse-delegates-valid-toml ()
+  "A plain TOML reply parses through the default parser unchanged.
+which the default parser now refuses by contract; a DSML-free reply
+today is a TOML action document, and delegation must parse it."
+  (ert-info ("Input: [[action]] table; expect the action parsed")
     (let ((result (scalpel-llm-deepseek-parse-reply
-                   "[{\"tool\":\"reply\",\"text\":\"hi\"}]")))
+                   "[[action]]\ntool = 'reply'\ntext = 'hi'\n")))
       (should (equal (plist-get (car result) :tool) "reply")))))
 
 (ert-deftest scalpel-llm-deepseek-test-parse-ascii-tool-call-still-refused ()

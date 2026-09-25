@@ -5,7 +5,7 @@
 ;; Assisted-by: DeepSeek:deepseek-v4-flash, GLM:glm-5.3-flash, Laguna:laguna-s-2.1
 ;; URL: https://github.com/OverbearingPearl/scalpel
 ;; Version: 0.0.1
-;; Package-Requires: ((emacs "29.1") (gptel "0.9.9.6"))
+;; Package-Requires: ((emacs "29.1") (gptel "0.9.9.6") (toml "1.1.0.0"))
 ;; Keywords: tools
 ;; SPDX-License-Identifier: Apache-2.0
 

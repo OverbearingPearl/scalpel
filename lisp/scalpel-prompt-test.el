@@ -27,7 +27,7 @@ filesystem, not a sandboxed one."
   "The prompt must bound how long a reply may be.
 Nothing in the code can bound what the model writes, so the bound
 has to be stated to the model; the failure it prevents, a reply cut
-off mid-JSON by the backend's output limit, cannot be reproduced
+off mid-document by the backend's output limit, cannot be reproduced
 here because every reply in this suite is mocked.  This guards only
 that the live prompt still carries the rule, so a rewrite that drops
 it fails here instead of in a session."

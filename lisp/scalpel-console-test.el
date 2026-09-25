@@ -74,7 +74,9 @@ RET answered \"nothing to send\"."
                      (lambda (prompt on-success _on-error &optional _system)
                        (setq prompt-sent prompt)
                        (funcall on-success
-                                "[{\"tool\":\"reply\",\"text\":\"done\"}]"))))
+                                "[[action]]
+tool = 'reply'
+text = 'done'"))))
             (with-current-buffer buf
               (erase-buffer)
               ;; Output written by the same path the console uses, so the
@@ -105,7 +107,9 @@ The \"Roger. Working...\" acknowledgement is dropped once the reply arrives."
           (cl-letf (((symbol-function 'scalpel-llm-request-async)
                      (lambda (_prompt on-success _on-error &optional _system)
                        (funcall on-success
-                                "[{\"tool\":\"reply\",\"text\":\"done\"}]"))))
+                                "[[action]]
+tool = 'reply'
+text = 'done'"))))
             (with-current-buffer buf
               (erase-buffer)
               (insert "test instruction")
@@ -195,7 +199,9 @@ branch."
                      (lambda (_prompt on-success _on-error &optional _system)
                        (setq seen (functionp scalpel-llm--progress-callback))
                        (funcall on-success
-                                "[{\"tool\":\"reply\",\"text\":\"done\"}]"))))
+                                "[[action]]
+tool = 'reply'
+text = 'done'"))))
             (with-current-buffer buf
               (insert "tick instruction\n")
               (goto-char (point-min))
@@ -212,7 +218,9 @@ branch."
           (cl-letf (((symbol-function 'scalpel-llm-request-async)
                      (lambda (_p on-success _on-error &optional _s)
                        (funcall on-success
-                                "[{\"tool\":\"reply\",\"text\":\"done\"}]"))))
+                                "[[action]]
+tool = 'reply'
+text = 'done'"))))
             ;; Anchor the console to the temp directory: `open' uses the
             ;; caller's `default-directory' as its root, and the test's
             ;; own buffer would anchor it to the package source tree --
@@ -513,8 +521,13 @@ produced output the planner could never be given."
                        (push prompt prompts)
                        (funcall on-success
                                 (if (= (length prompts) 1)
-                                    "[{\"tool\":\"file-peek\",\"file\":\"/tmp/a.el\",\"symbol\":\"foo\"}]"
-                                  "[{\"tool\":\"reply\",\"text\":\"done\"}]"))))
+                                    "[[action]]
+tool = 'file-peek'
+file = '/tmp/a.el'
+symbol = 'foo'"
+                                  "[[action]]
+tool = 'reply'
+text = 'done'"))))
                     ((symbol-function 'scalpel-agent-file-read)
                      (lambda (file symbol)
                        (format (concat "Read: %s in %s\nOutput: 14 bytes\n"
@@ -655,7 +668,9 @@ newly inserted Context block."
                      (lambda (prompt on-success _on-error &optional _system)
                        (setq prompt-sent prompt)
                        (funcall on-success
-                                "[{\"tool\":\"reply\",\"text\":\"done\"}]"))))
+                                "[[action]]
+tool = 'reply'
+text = 'done'"))))
             (with-current-buffer buf
               (erase-buffer)
               (insert "line one\nline two\n")
@@ -679,7 +694,9 @@ newly inserted Context block."
         (cl-letf (((symbol-function 'scalpel-llm-request-async)
                    (lambda (_prompt on-success _on-error &optional _system)
                      (funcall on-success
-                              "[{\"tool\":\"reply\",\"text\":\"ack\"}]"))))
+                              "[[action]]
+tool = 'reply'
+text = 'ack'"))))
           (with-current-buffer buf
             (erase-buffer)
             (scalpel-console--insert-tagged "User: old\n" 'user)
@@ -726,7 +743,9 @@ the conversation, so dumping the buffer would send all of it."
                      (lambda (prompt on-success _on-error &optional _system)
                        (push prompt prompts)
                        (funcall on-success
-                                "[{\"tool\":\"reply\",\"text\":\"first reply\"}]"))))
+                                "[[action]]
+tool = 'reply'
+text = 'first reply'"))))
             (with-current-buffer buf
               (erase-buffer)
               (insert "first instruction\n")
@@ -767,8 +786,14 @@ it asked for, so \"run the tests\" could not lead to a fix."
                        (push prompt prompts)
                        (funcall on-success
                                 (if (= (length prompts) 1)
-                                    "[{\"tool\":\"shell\",\"command\":\"echo hello\",\"reason\":\"check the loop\",\"long-running\":false}]"
-                                  "[{\"tool\":\"reply\",\"text\":\"done\"}]"))))
+                                    "[[action]]
+tool = 'shell'
+command = 'echo hello'
+reason = 'check the loop'
+long-running = false"
+                                  "[[action]]
+tool = 'reply'
+text = 'done'"))))
                     ((symbol-function 'scalpel-sandbox-run)
                      (lambda (&rest _ignore) (cons 0 "hello\n"))))
             (with-current-buffer buf
@@ -803,8 +828,14 @@ the same command over and over."
                        (push prompt prompts)
                        (funcall on-success
                                 (if (= (length prompts) 1)
-                                    "[{\"tool\":\"shell\",\"command\":\"echo hello\",\"reason\":\"check\",\"long-running\":false}]"
-                                  "[{\"tool\":\"reply\",\"text\":\"done\"}]"))))
+                                    "[[action]]
+tool = 'shell'
+command = 'echo hello'
+reason = 'check'
+long-running = false"
+                                  "[[action]]
+tool = 'reply'
+text = 'done'"))))
                     ((symbol-function 'scalpel-sandbox-run)
                      (lambda (&rest _ignore) (cons 0 "hello\n"))))
             (with-current-buffer buf
@@ -873,7 +904,9 @@ next turn clean."
                      (lambda (prompt on-success _on-error &optional _system)
                        (push prompt prompts)
                        (funcall on-success
-                                "[{\"tool\":\"reply\",\"text\":\"ack\"}]"))))
+                                "[[action]]
+tool = 'reply'
+text = 'ack'"))))
             (with-current-buffer buf
               (erase-buffer)
               (insert "first instruction\n")
@@ -913,7 +946,11 @@ away, and the console then stopped without saying why."
                      (lambda (_prompt on-success _on-error &optional _system)
                        (setq requests (1+ requests))
                        (funcall on-success
-                                "[{\"tool\":\"shell\",\"command\":\"echo hi\",\"reason\":\"check\",\"long-running\":false}]")))
+                                "[[action]]
+tool = 'shell'
+command = 'echo hi'
+reason = 'check'
+long-running = false")))
                     ((symbol-function 'yes-or-no-p)
                      (lambda (&rest _) (setq asked (1+ asked)) t))
                     ((symbol-function 'message)
@@ -961,7 +998,9 @@ instruction) after the round-limit notice."
                      (lambda (prompt on-success _on-error &optional _system)
                        (setq prompt-sent prompt)
                        (funcall on-success
-                                "[{\"tool\":\"reply\",\"text\":\"done\"}]"))))
+                                "[[action]]
+tool = 'reply'
+text = 'done'"))))
             (with-current-buffer buf
               (erase-buffer)
               (insert "Scalpel console.\n")
@@ -1033,8 +1072,14 @@ means the question was waived, so the large output goes back."
                        (setq requests (1+ requests))
                        (funcall on-success
                                 (if (= requests 1)
-                                    "[{\"tool\":\"shell\",\"command\":\"seq 1 2000\",\"reason\":\"noise\",\"long-running\":false}]"
-                                  "[{\"tool\":\"reply\",\"text\":\"done\"}]"))))
+                                    "[[action]]
+tool = 'shell'
+command = 'seq 1 2000'
+reason = 'noise'
+long-running = false"
+                                  "[[action]]
+tool = 'reply'
+text = 'done'"))))
                     ((symbol-function 'yes-or-no-p)
                      (lambda (&rest _) (setq asked (1+ asked)) t))
                     ((symbol-function 'scalpel-sandbox-run)
@@ -1069,8 +1114,14 @@ a keystroke and bought no information."
                        (setq requests (1+ requests))
                        (funcall on-success
                                 (if (= requests 1)
-                                    "[{\"tool\":\"shell\",\"command\":\"ls\",\"reason\":\"look\",\"long-running\":false}]"
-                                  "[{\"tool\":\"reply\",\"text\":\"done\"}]"))))
+                                    "[[action]]
+tool = 'shell'
+command = 'ls'
+reason = 'look'
+long-running = false"
+                                  "[[action]]
+tool = 'reply'
+text = 'done'"))))
                     ((symbol-function 'yes-or-no-p)
                      (lambda (&rest _) (setq asked (1+ asked)) t))
                     ((symbol-function 'scalpel-sandbox-run)
@@ -1099,9 +1150,11 @@ request -- leaking the boundary the prompt deliberately omits."
                      (lambda (prompt on-success _on-error &optional _system)
                        (push prompt prompts)
                        (funcall on-success
-                                (concat "[{\"tool\":\"shell\",\"command\":\"ls\","
-                                        "\"reason\":\"look\","
-                                        "\"long-running\":false}]"))))
+                                (concat "[[action]]\n"
+                                        "tool = 'shell'\n"
+                                        "command = 'ls'\n"
+                                        "reason = 'look'\n"
+                                        "long-running = false"))))
                     ((symbol-function 'scalpel-sandbox-run)
                      (lambda (&rest _ignore)
                        (signal 'scalpel-sandbox-error
@@ -1153,7 +1206,9 @@ released too early -- or never -- would still look correct."
                                             (buffer-string)))))
             ;; Settle from outside the call stack of `send-line'.
             (funcall (car pending)
-                     "[{\"tool\":\"reply\",\"text\":\"done\"}]")
+                     "[[action]]
+tool = 'reply'
+text = 'done'")
             (with-current-buffer buf
               (ert-info ((format "Buffer:\n%S" (buffer-string)))
                 (should-not scalpel-console--busy)
@@ -1180,7 +1235,9 @@ pointing at a console it no longer owns would still pass."
               (scalpel-console-send-line))
             (should (functionp scalpel-llm--progress-callback))
             (funcall (car pending)
-                     "[{\"tool\":\"reply\",\"text\":\"done\"}]")
+                     "[[action]]
+tool = 'reply'
+text = 'done'")
             (ert-info ("the refresh must be unbound once the round settles")
               (should-not scalpel-llm--progress-callback))))
       (scalpel-utils-test-kill-buffer (buffer-name buf)))))
@@ -1210,7 +1267,9 @@ buffer-local and died with the buffer."
             ;; The deferred callback arrives after the buffer is gone;
             ;; it must return normally rather than signal.
             (funcall (car pending)
-                     "[{\"tool\":\"reply\",\"text\":\"done\"}]")))
+                     "[[action]]
+tool = 'reply'
+text = 'done'")))
       (when (buffer-live-p buf) (kill-buffer buf)))))
 
 (ert-deftest scalpel-console-test-add-file-from-another-buffer ()
@@ -1672,13 +1731,10 @@ while the planner already saw the error as the newest turn."
                        (setq requests (1+ requests))
                        (if (= requests 1)
                            (funcall on-success
-                                    (concat "[{\"tool\":\"shell\","
-                                            "\"command\":\"ls\","
-                                            "\"reason\":\"look\","
-                                            "\"long-running\":false}]"))
+                                    "[[action]]\ntool = 'shell'\ncommand = 'ls'\nreason = 'look'\nlong-running = false")
                          (funcall on-error
                                   (list :type 'parse
-                                        :message "Bad JSON")))))
+                                        :message "Bad TOML")))))
                     ((symbol-function 'scalpel-sandbox-run)
                      (lambda (&rest _ignore) (cons 0 "a.el\n"))))
             (with-current-buffer buf
@@ -1694,7 +1750,7 @@ while the planner already saw the error as the newest turn."
               (should (eq (get-text-property (match-beginning 0) 'face)
                           'scalpel-console-consumed-body-face))
               (goto-char (point-min))
-              (should (search-forward "Scalpel planner error: Bad JSON" nil t))
+              (should (search-forward "Scalpel planner error: Bad TOML" nil t))
               ;; The error turn holds no fenced body, so nothing is
               ;; dropped from it: the consumed-body mark must not land
               ;; on it.  Its face is the planner-error dim, which is a
@@ -1789,7 +1845,9 @@ not tell that resending the instruction was the whole fix."
           (cl-letf (((symbol-function 'scalpel-llm-request-async)
                      (lambda (_prompt on-success _on-error &optional _system)
                        (funcall on-success
-                                "[{\"tool\":\"shell\",\"command\":\"ls\"}]"))))
+                                "[[action]]
+tool = 'shell'
+command = 'ls'"))))
             (with-current-buffer buf
               (erase-buffer)
               (insert "look around\n")
@@ -1940,7 +1998,9 @@ the whole instruction by hand to try again."
                      (lambda (prompt on-success _on-error &optional _system)
                        (push prompt prompts)
                        (funcall on-success
-                                "[{\"tool\":\"reply\",\"text\":\"done\"}]"))))
+                                "[[action]]
+tool = 'reply'
+text = 'done'"))))
             (with-current-buffer buf
               (erase-buffer)
               (insert "first instruction\n")
@@ -2051,7 +2111,9 @@ failure in the non-critical accounting step skipped
           (cl-letf (((symbol-function 'scalpel-llm-request-async)
                      (lambda (_prompt on-success _on-error &optional _system)
                        (funcall on-success
-                                "[{\"tool\":\"reply\",\"text\":\"done\"}]")))
+                                "[[action]]
+tool = 'reply'
+text = 'done'")))
                      ((symbol-function 'scalpel-token-record)
                      (lambda (_name _up _down _breakdown)
                        (error "Accounting failed")))

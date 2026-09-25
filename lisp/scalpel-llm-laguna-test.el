@@ -105,23 +105,25 @@ the decision; false would run the command without one."
       (should (eq (plist-get action :long-running) t))
       (should (scalpel-agent--confirm-needed-p action)))))
 
-(ert-deftest scalpel-llm-laguna-test-parse-leaves-a-json-reply-whole ()
-  "A JSON action array keeps its JSON reading.
-The markers can also appear inside a quoted string, and a reply that
-names one without completing a call must still parse as JSON."
+(ert-deftest scalpel-llm-laguna-test-parse-leaves-a-toml-reply-whole ()
+  "A TOML action table keeps its TOML reading.
+A reply carrying no call marker falls through to the TOML
+default parser, which reads the [[action]] table."
   (let ((actions
          (scalpel-llm-laguna-parse-reply
-          (concat "Sure.\n[{\"tool\":\"reply\",\"text\":\""
-                  "the marker <tool_call> is not a call\"}]"))))
+          "[[action]]
+tool = 'reply'
+text = '''the marker is not a call'''
+")))
     (ert-info ((format "Actions: %S" actions))
       (should (= (length actions) 1))
       (should (equal (plist-get (car actions) :tool) "reply"))
-      (should (string-match-p "<tool_call>"
-                              (plist-get (car actions) :text))))))
+      (should (equal (plist-get (car actions) :text)
+                     "the marker is not a call")))))
 
 (ert-deftest scalpel-llm-laguna-test-brackets-in-a-command-stay-a-call ()
-  "A bracket in an argument does not divert the reply to the JSON parser.
-A reading that looks for a JSON payload first would find the bracket
+  "A bracket in an argument does not divert the reply to the TOML parser.
+A reading that looks for a TOML payload first would find the bracket
 in the grep pattern, fail to parse it, and refuse a call that was
 well formed; a complete call is therefore taken first."
   (let ((actions

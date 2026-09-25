@@ -11,14 +11,14 @@
 ;; Reply dialect for Laguna backends.  Laguna writes its answer in a
 ;; text calling convention of its own -- one `<tool_call>' block per
 ;; action, each holding a tool name and `<arg_key>'/`<arg_value>'
-;; pairs -- instead of the JSON action array Scalpel asks for.  The
+;; pairs -- instead of the TOML action document Scalpel asks for.  The
 ;; names inside those blocks are Scalpel's own, so the plan is right
 ;; and only the envelope around it is wrong; this module converts the
 ;; envelope, one action per block, in the order written.
 ;;
 ;; The conversion is narrow on purpose.  It runs only for a reply that
 ;; holds a complete, well-formed call: a complete call is taken even
-;; when a bracket inside an argument makes the text look like JSON
+;; when a bracket inside an argument makes the text look like TOML
 ;; (shell commands carry brackets all the time), while markup the
 ;; reply merely mentions, and a call the backend cut off, still reach
 ;; `scalpel-llm-dialect--parse-error' and are refused as loudly as
@@ -172,8 +172,8 @@ than the call."
   "Parse a Laguna raw reply RAW into a list of action plists.
 RAW holding a complete text call is converted, one action per call,
 in the order written.  Anything else goes to
-`scalpel-llm-dialect--default-parse' unchanged, which reads a JSON
-action array and refuses the rest loudly: a call the backend cut off,
+`scalpel-llm-dialect--default-parse' unchanged, which reads a TOML
+action document and refuses the rest loudly: a call the backend cut off,
 and markup the reply only quotes, both yield no complete call here
 and so are refused there."
   (let ((calls (scalpel-llm-laguna--parse-calls raw)))

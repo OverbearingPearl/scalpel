@@ -1542,7 +1542,7 @@ holds the real paths the user typed."
                            ;; assistant turn: sending it back would hand the
                            ;; planner the very boundary the prompt omits.  Only a
                            ;; round failure that says something about the planner
-                           ;; -- malformed JSON, for one -- stays in the history.
+                           ;; -- malformed TOML, for one -- stays in the history.
                            (scalpel-console--append
                             (format "Scalpel error: %s"
                                     (scalpel-redact-restore (or (plist-get err :message) ""))))

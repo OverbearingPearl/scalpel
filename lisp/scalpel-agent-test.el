@@ -582,9 +582,14 @@ Regression: `scalpel-agent--project-actions' kept only declared
 fields and `scalpel-agent--validate-action' required every declared
 one, so an optional field could be neither declared nor dropped."
   (let ((parsed (scalpel-llm-dialect--default-parse
-                 (concat "[{\"tool\":\"file-peek\",\"file\":\"/tmp/a.el\"},"
-                         "{\"tool\":\"file-peek\",\"file\":\"/tmp/a.el\","
-                         "\"symbol\":\"foo\"}]"))))
+                 (concat "[[action]]\n"
+                         "tool = 'file-peek'\n"
+                         "file = '/tmp/a.el'\n"
+                         "\n"
+                         "[[action]]\n"
+                         "tool = 'file-peek'\n"
+                         "file = '/tmp/a.el'\n"
+                         "symbol = 'foo'\n"))))
     (should (= (length parsed) 2))
     (should-not (plist-get (car parsed) :symbol))
     (should (equal (plist-get (cadr parsed) :symbol) "foo")))
@@ -615,8 +620,7 @@ never ran the round that would have read it back."
           (fset 'scalpel-llm-request-async
                 (lambda (_prompt on-success _on-error &optional _system)
                   (funcall on-success
-                           (concat "[{\"tool\":\"file-peek\",\"file\":\"/tmp/a.el\","
-                                   "\"symbol\":\"foo\"}]"))))
+                           "[[action]]\ntool = 'file-peek'\nfile = '/tmp/a.el'\nsymbol = 'foo'")))
           (let (result)
             (cl-letf (((symbol-function 'scalpel-agent-file-read)
                        (lambda (file symbol)
@@ -924,7 +928,9 @@ Regression: `let' bound `tool' before `fields' used it, so the
 field list was always nil and the projected action lost its keys."
   (cl-letf (((symbol-function 'scalpel-llm-request-async)
              (lambda (_prompt on-success _on-error &optional _system)
-               (funcall on-success "[{\"tool\":\"reply\",\"text\":\"hi\"}]"))))
+               (funcall on-success "[[action]]
+tool = 'reply'
+text = 'hi'"))))
     (let (actions)
       (scalpel-agent-plan
        "say hi" nil
@@ -998,7 +1004,7 @@ from the system prompt, so the planner could never emit it."
     (ert-info ((format "Tool %S is not declared in `scalpel-prompt-system-prompt'"
                        tool))
       (should (string-match-p
-               (format "\"tool\"[ \t]*:[ \t]*\"%s\"" (regexp-quote tool))
+               (format "tool[ \t]*=[ \t]*'%s'" (regexp-quote tool))
                scalpel-prompt-system-prompt)))))
 
 (ert-deftest scalpel-agent-test-edit-prompt-asks-in-the-file-language ()
@@ -1133,7 +1139,7 @@ it."
                (lambda (&rest _) (setq asked (1+ asked)) t))
               ((symbol-function 'scalpel-agent-shell)
                (lambda (&rest _) (setq ran (1+ ran)) "report")))
-      ;; JSON booleans reach this code as `t' and `:false', so the
+      ;; TOML booleans reach this code as `t' and `:false', so the
       ;; test uses those symbols rather than nil to keep the
       ;; `(eq ... t)' check honest.
       (let ((quick '(:tool "shell" :command "rm -rf build"
@@ -1274,9 +1280,11 @@ The report preserves the raw output size for continuation decisions."
           (fset 'scalpel-llm-request-async
                 (lambda (_prompt on-success _on-error &optional _system)
                   (funcall on-success
-                           (concat "[{\"tool\":\"shell\",\"command\":\"printf abc\","
-                                   "\"reason\":\"size\","
-                                   "\"long-running\":false}]"))))
+                           (concat "[[action]]\n"
+                                   "tool = 'shell'\n"
+                                   "command = 'printf abc'\n"
+                                   "reason = 'size'\n"
+                                   "long-running = false\n"))))
           (fset 'scalpel-sandbox-run
                 (lambda (&rest _ignore) (cons 0 "abc")))
           (fset 'scalpel-agent-shell
@@ -2240,10 +2248,11 @@ never read its own occurrence counts."
                 (fset 'scalpel-llm-request-async
                       (lambda (_p on-success _on-error &optional _s)
                         (funcall on-success
-                                 (concat "[{\"tool\":\"file-substitute\","
-                                         "\"files\":[\"" f1 "\"],"
-                                         "\"pattern\":\"old-\","
-                                         "\"replacement\":\"new-\"}]"))))
+                                 (concat "[[action]]\n"
+                                         "tool = 'file-substitute'\n"
+                                         "files = ['" f1 "']\n"
+                                         "pattern = 'old-'\n"
+                                         "replacement = 'new-'"))))
                 (scalpel-agent-run "bulk rename" nil
                                    (lambda (r) (setq result r))
                                    (lambda (e) (ert-fail (plist-get e :message))))
@@ -2277,9 +2286,10 @@ writing tool a planner reaches for most often."
                 (fset 'scalpel-llm-request-async
                       (lambda (_p on-success _on-error &optional _s)
                         (funcall on-success
-                                 (format (concat "[{\"tool\":\"file-create\","
-                                                 "\"file\":%S,"
-                                                 "\"text\":\"(defun a ())\"}]")
+                                 (format (concat "[[action]]\n"
+                                                 "tool = 'file-create'\n"
+                                                 "file = '%s'\n"
+                                                 "text = '(defun a ())'")
                                          (expand-file-name "new.el" dir)))))
                 (scalpel-agent-run
                  "create it" nil

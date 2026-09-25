@@ -26,7 +26,6 @@
 ;;; Code:
 
 (require 'cl-lib)
-(require 'json)
 (require 'subr-x)
 (require 'scalpel-llm)
 (require 'scalpel-llm-dialect)
@@ -1944,9 +1943,9 @@ otherwise be asked to do -- executed by Scalpel itself, so its
 effect is enumerable: every file touched and every occurrence
 replaced is named in the report.  PATTERN is a plain Emacs regexp
 string, read by `string-match' and `replace-regexp-in-string' and
-never evaluated; JSON escaping demands doubled backslashes for
-regexp specials, so a literal backslash is written \\\\\\\\ in
-the JSON text.  REPLACEMENT is replacement text, where \\\\N and
+never evaluated; the pattern is written verbatim inside a TOML
+literal string with no escaping at all, so a backslash is a
+literal backslash.  REPLACEMENT is replacement text, where \\\\N and
 \\\\& refer to the match as `replace-regexp-in-string' reads
 them.  All FILES must be in the session context; a path outside it
 is refused, the same boundary a read obeys.
@@ -2163,7 +2162,7 @@ runs with a prompt, regardless of that list.  A tool in
 `scalpel-agent-confirm-tools' is confirmed, except a shell action
 the planner did not flag as long-running: the sandbox already
 bounds what a command may touch, so only the editor-freezing case
-needs an answer.  JSON booleans arrive as t and :false; only t
+needs an answer.  TOML booleans arrive as t and :false; only t
 counts as true, so a missing or false flag still asks.  The flag
 gates the prompt only: it never relaxes the working directory or
 the environment the command runs in."

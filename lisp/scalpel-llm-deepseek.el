@@ -11,7 +11,7 @@
 ;; Reply dialect for DeepSeek backends.  DeepSeek models emit their
 ;; internal tool-call delimiters (U+FF5C fullwidth vertical bars around
 ;; DSML tags) as literal text when the API layer does not carry the
-;; tool-call channel; such a reply is not a JSON action array, and
+;; tool-call channel; such a reply is not a TOML action document, and
 ;; translating it here would paper over a planner that ignored the
 ;; output contract.  The dialect therefore detects the markers and
 ;; fails loud with a readable error; every other reply goes through
@@ -27,7 +27,7 @@
 The delimiters are U+FF5C (fullwidth vertical bar), which the
 tokenizer emits around its internal tool-call tags; as literal
 response text they mean the planner answered in tool-call syntax
-instead of the JSON action array.")
+instead of the TOML action document.")
 
 (defun scalpel-llm-deepseek-parse-reply (raw)
   "Parse a DeepSeek raw reply RAW, refusing DSML tool-call syntax.
@@ -39,7 +39,7 @@ Otherwise delegate to the default parser."
     (signal 'scalpel-llm-dialect-tool-call-error
             (list
              (format (concat "Scalpel: DeepSeek planner emitted DSML "
-                             "tool-call syntax instead of the JSON action "
+                             "tool-call syntax instead of the TOML action "
                              "array; nothing was executed.  Reply was: %s")
                      (scalpel-llm-dialect--visible-raw raw)))))
   (scalpel-llm-dialect--default-parse raw))

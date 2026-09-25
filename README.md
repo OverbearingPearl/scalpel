@@ -249,6 +249,7 @@ never speculative whole-file changes.
 
 - Emacs 29.1+
 - a working `gptel` setup (any backend: OpenAI, Anthropic, Ollama, ...)
+- `toml` package: the plan output contract is TOML (single-quoted literal strings); parsing requires the `toml` package and is checked at load time
 - Git (used for local undo/rollback and to expand context directories through gitignore rules)
 - optionally `lsp-mode`/`eglot` and language servers for richer semantics
 
