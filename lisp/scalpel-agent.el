@@ -1903,6 +1903,78 @@ the action carried, including nil: a malformed action describes itself
 instead of raising a second error inside the message builder."
   (format "pattern %S -> replacement %S" pattern replacement))
 
+(defun scalpel-agent--perl-substitute (pattern replacement text)
+  "Apply PATTERN -> REPLACEMENT over TEXT with perl 5.x.
+The pattern is compiled by perl's own qr//, so a pattern perl
+refuses comes back as a concrete error the next attempt repairs.
+TEXT is piped on stdin and perl prints a \\\"SCALPEL-COUNT n\\\"
+line followed by the rewritten text, both on stdout, so no stderr
+channel is involved.  On a compile failure perl prints a
+\\\"SCALPEL-ERROR ...\\\" line and exits 2, surfacing perl's concrete
+message.  In REPLACEMENT, \\\\N means the Nth capture group and
+\\\\& the whole match.  Signal `user-error' when perl refuses to
+compile the pattern."
+  (with-temp-buffer
+    (insert text)
+    (let* ((process-environment
+            (cons (format "SCALPEL_PATTERN=%s" pattern)
+                  (cons (format "SCALPEL_REPLACEMENT=%s" replacement)
+                        process-environment)))
+           (exit
+            (call-process-region (point-min) (point-max) "perl" t t nil
+                                 "-e"
+                                 "my $p = $ENV{SCALPEL_PATTERN};
+my $r = $ENV{SCALPEL_REPLACEMENT};
+my $re = eval { qr/$p/ };
+if (!$re) {
+    print \"SCALPEL-ERROR perl cannot compile the pattern: $@\\n\";
+    exit 2;
+}
+local $/;
+my $new = <STDIN>;
+my $n = 0;
+$new =~ s[$re][
+    $n++;
+    my @g = map { defined $_ ? $_ : \"\" } @{^CAPTURE};
+    my $out = $r;
+    $out =~ s/\\\\(\\d+)/defined $g[$1-1] ? $g[$1-1] : \"\"/ge;
+    $out =~ s/\\\\&/$&/g;
+    $out
+]ge;
+print \"SCALPEL-COUNT $n\\n\";
+print $new;"))
+           (first-line-start (point-min))
+           (first-line-end (progn (goto-char (point-min))
+                                  (line-end-position)))
+           (first-line (buffer-substring-no-properties
+                        first-line-start first-line-end))
+           (new-text (progn (goto-char (point-min))
+                            (buffer-substring-no-properties
+                             (line-beginning-position 2) (point-max)))))
+      (if (/= exit 0)
+          (if (string-match "\\`SCALPEL-ERROR " first-line)
+              (user-error
+               (concat "Scalpel: pattern is not valid perl 5.x regexp "
+                       "text compiled with qr//, perl said: %s\n%s")
+               (string-trim (substring first-line (match-end 0)))
+               (scalpel-agent--substitute-invocation pattern replacement))
+            (user-error
+             (concat "Scalpel: perl exited with code %d while "
+                     "rewriting (target engine perl 5.x, compiled "
+                     "with qr//): %s\n%s")
+             exit
+             (string-trim first-line)
+             (scalpel-agent--substitute-invocation pattern replacement)))
+        (unless (string-match "\\`SCALPEL-COUNT \\([0-9]+\\)" first-line)
+          (user-error
+           (concat "Scalpel: perl produced no count report (target "
+                   "engine perl 5.x, compiled with qr//); first 200 "
+                   "chars: %s\n%s")
+           (substring first-line 0 (min 200 (length first-line)))
+           (scalpel-agent--substitute-invocation pattern replacement)))
+        (cons (string-to-number (match-string 1 first-line))
+              new-text)))))
+
 (define-error 'scalpel-planner-error
   "Scalpel planner reply was unusable (plist :type :message)")
 
@@ -1937,209 +2009,180 @@ that never finds its close."
 
 (defun scalpel-agent-file-substitute (files pattern replacement)
   "Apply the mechanical replacement PATTERN -> REPLACEMENT across FILES.
-This is the planner's channel for one mechanical batch
-transformation -- the job a whole-file shell one-liner would
-otherwise be asked to do -- executed by Scalpel itself, so its
-effect is enumerable: every file touched and every occurrence
-replaced is named in the report.  PATTERN is a plain Emacs regexp
-string, read by `string-match' and `replace-regexp-in-string' and
-never evaluated; the pattern is written verbatim inside a TOML
-literal string with no escaping at all, so a backslash is a
-literal backslash.  REPLACEMENT is replacement text, where \\\\N and
-\\\\& refer to the match as `replace-regexp-in-string' reads
-them.  All FILES must be in the session context; a path outside it
-is refused, the same boundary a read obeys.
+This is the planner's channel for one mechanical batch transformation --
+the job a whole-file shell one-liner would otherwise be asked to do --
+executed by Scalpel itself, so its effect is enumerable: every file
+touched and every occurrence replaced is named in the report.
 
-Only files whose locate provider is registered but declares no
-:balanced-p are refused: the bracket check is the only structural
-validation a rewrite gets, so a registered language that cannot
-answer it has no safety net, and prose damage like emptied
-backtick pairs would pass silently.  Files with no registered
-provider are not structured languages and are outside this
-contract; they remain governed by the guards below.  Block-edit is
-the channel for such structured files, one named definition at a
-time.
+PATTERN is pure regexp text targeting the perl 5.x engine: perl compiles
+it with its own qr// through `scalpel-agent--perl-substitute', so a
+pattern perl refuses comes back with the concrete compile error and the
+next attempt repairs the pattern instead of re-deriving it from memory.
+PATTERN is written verbatim inside a TOML literal string with no escaping
+at all, so a backslash is a literal backslash.  REPLACEMENT is replacement
+text, where \\\\N means the Nth capture group and \\\\& the whole match,
+translated by `scalpel-agent--perl-substitute'; perl owns the occurrence
+count.
+
+All FILES must be in the session context; a path outside it is refused,
+the same boundary a read obeys.  Only files whose locate provider is
+registered but declares no :balanced-p are refused: the bracket check is
+the only structural validation a rewrite gets, so a registered language
+that cannot answer it has no safety net, and prose damage like emptied
+backtick pairs would pass silently.  Files with no registered provider
+are not structured languages and are outside this contract; they remain
+governed by the guards below.  Block-edit is the channel for such
+structured files, one named definition at a time.
 
 The whole transformation is computed and validated before anything
-reaches disk: new contents are built in memory, an `.el' file whose
-new content has unbalanced brackets refuses the whole rewrite, and
-zero occurrences anywhere refuses it too -- a rewrite that matched
-nothing is a planner mistake, not a success.  An unbalanced refusal
-names the first offset where the rewritten text goes wrong, through
-`scalpel-agent--first-unbalance-offset', with a short excerpt, so
-the next attempt corrects the replacement instead of re-deriving it
-from memory.  The report also names the definitions the rewrite
-changed in each file, because a bulk rename leaves the old name in
-the planner's hands and the next round's locate failure explains
-nothing on its own.  A zero-match refusal quotes the lines that
-begin like the pattern, so the planner can correct the pattern it
-wrote rather than spend a round reading the text it had already
-misremembered.  The report quotes before/after lines for the first
-occurrences, so a prose-damaging replacement is visible, not just
-counted.  Every refusal states the pattern and the replacement
-together, through `scalpel-agent--substitute-invocation', because
-the two are one action: a refusal naming only the half which failed
-leaves the other half to be restored from memory.  Return a
-human-readable report.  Signal `user-error' on malformed input, a
-file outside the context, a bad replacement, no matches, or an
+reaches disk: new contents are built in memory through
+`scalpel-agent--perl-substitute', an `.el' file whose new content has
+unbalanced brackets refuses the whole rewrite, and zero occurrences
+anywhere refuses it too -- a rewrite that matched nothing is a planner
+mistake, not a success.  An unbalanced refusal names the first offset
+where the rewritten text goes wrong, through
+`scalpel-agent--first-unbalance-offset', with a short excerpt, so the
+next attempt corrects the replacement instead of re-deriving it from
+memory.  The report also names the definitions the rewrite changed in
+each file, because a bulk rename leaves the old name in the planner's
+hands and the next round's locate failure explains nothing on its own.
+A zero-match refusal quotes the lines that begin like the pattern when
+Emacs can read it, so the planner can correct the pattern it wrote.  The
+report quotes before/after lines for the first occurrences, so a
+prose-damaging replacement is visible, not just counted.  Every refusal
+states the pattern and the replacement together, through
+`scalpel-agent--substitute-invocation', because the two are one action:
+a refusal naming only the half which failed leaves the other half to be
+restored from memory.
+
+Return a human-readable report.  Signal `user-error' on malformed input,
+a file outside the context, a perl compile error, no matches, or an
 unbalanced result.  Signal `scalpel-no-validation' for a structured
-language whose provider declares no :balanced-p, so the diagnose
-side can offer block-edit as the retry."
+language whose provider declares no :balanced-p, so the diagnose side
+can offer block-edit as the retry."
   (unless (and files (stringp pattern) (stringp replacement))
-    (user-error "Scalpel: malformed file-substitute action: the pattern must be a regexp string; %s, files %S"
+    (user-error (concat "Scalpel: malformed file-substitute action: the pattern "
+                        "must be perl 5.x regexp text and the replacement a "
+                        "string; perl owns the compilation and the count. "
+                        "%s, files %S")
                 (scalpel-agent--substitute-invocation pattern replacement)
                 files))
   (dolist (file files)
     (unless (scalpel-agent--context-file-p file)
-      (user-error
-       (concat "Scalpel: %s is not in the context, so file-substitute "
-               "refuses it: the action never changes a file outside the "
-               "context.  %s; ask the user to add it (C-c C-a in the "
-               "console) and try again\n%s")
-       file
-       (if (file-exists-p (expand-file-name file))
-           "The file exists on disk"
-         "No such file exists on disk")
-       (scalpel-agent--substitute-invocation pattern replacement))))
-  (let ((regexp pattern))
+      (user-error (concat "Scalpel: %s is not in the context, so file-substitute "
+                          "refuses it: the action never changes a file outside the "
+                          "context. %s; ask the user to add it (C-c C-a in the "
+                          "console) and try again\n%s")
+                  file
+                  (if (file-exists-p (expand-file-name file))
+                      "The file exists on disk"
+                    "No such file exists on disk")
+                  (scalpel-agent--substitute-invocation pattern replacement)))
+    (let ((resolved (file-truename (expand-file-name file))))
+      (when-let ((provider (scalpel-locate-provider-for-file resolved)))
+        (when (not (plist-get provider :balanced-p))
+          (signal 'scalpel-no-validation
+                  (list (format (concat "Scalpel: file-substitute is a structured-language tool "
+                                        "and %s's provider declares no bracket check "
+                                        "(:balanced-p), so a rewrite there cannot be validated; "
+                                        "refused. Retry next round with block-edit instead, "
+                                        "one named definition at a time\n%s")
+                                resolved
+                                (scalpel-agent--substitute-invocation pattern replacement))))))))
+  ;; First pass: compute every new content in memory through perl, so a failure in
+  ;; the last file cannot leave the first ones half-rewritten. Perl compiles the
+  ;; pattern with its own qr// and owns the count.
+  (let (staged)
     (dolist (file files)
-      (let ((resolved (file-truename (expand-file-name file))))
-        (when-let ((provider (scalpel-locate-provider-for-file resolved)))
-          (when (not (plist-get provider :balanced-p))
-            (signal 'scalpel-no-validation
-                    (list
-                     (format
-                      (concat "Scalpel: file-substitute is a structured-language tool "
-                              "and %s's provider declares no bracket check "
-                              "(:balanced-p), so a rewrite there cannot be validated; "
-                              "refused.  Retry next round with block-edit instead, "
-                              "one named definition at a time\n%s")
-                      resolved
-                      (scalpel-agent--substitute-invocation pattern replacement))))))))
-    ;; First pass: compute every new content in memory, so a failure in
-    ;; the last file cannot leave the first ones half-rewritten.
-    (let (staged)
-      (dolist (file files)
-        (let* ((resolved (file-truename (expand-file-name file)))
-               (old (with-current-buffer (find-file-noselect resolved)
-                      (buffer-substring-no-properties
-                       (point-min) (point-max))))
-               (new (condition-case err
-                        (let ((case-fold-search nil))
-                          (replace-regexp-in-string regexp replacement old))
-                      (error
-                       (user-error
-                        (concat "Scalpel: file-substitute replacement is "
-                                "malformed (in %s): %s\n%s")
+      (let* ((resolved (file-truename (expand-file-name file)))
+             (old (with-current-buffer (find-file-noselect resolved)
+                    (buffer-substring-no-properties (point-min) (point-max))))
+             (perl (scalpel-agent--perl-substitute pattern replacement old))
+             (count (car perl))
+             (new (cdr perl)))
+        ;; The bracket question is the language provider's, asked of the rewritten
+        ;; text: one answer for both this check and a refused reply, so a language
+        ;; that says nothing about bracket shape is never reported as having one.
+        (when (not (scalpel-locate-balanced-p resolved new))
+          (let ((offset (scalpel-agent--first-unbalance-offset new)))
+            (user-error (concat "Scalpel: file-substitute of %s would leave unbalanced "
+                                "brackets; refused whole\n%s%s")
                         resolved
-                        (error-message-string err)
-                        (scalpel-agent--substitute-invocation
-                         pattern replacement))))))
-          ;; The bracket question is the language provider's, asked of the
-          ;; rewritten text: one answer for both this check and a refused
-          ;; reply, so a language that says nothing about bracket shape is
-          ;; never reported as having one.  It used to be an Emacs Lisp walk
-          ;; written here, beside the one in the refusal path.
-          (when (not (scalpel-locate-balanced-p resolved new))
-            (let ((offset (scalpel-agent--first-unbalance-offset new)))
-              (user-error
-               (concat "Scalpel: file-substitute of %s would leave unbalanced "
-                       "brackets; refused whole\n%s%s")
-               resolved
-               (scalpel-agent--substitute-invocation pattern replacement)
-               (if (< offset (length new))
-                   (format "\nThe rewritten text first goes wrong at character %d: %S"
-                           offset
-                           (replace-regexp-in-string
-                            "\n" "\\\\n"
-                            (substring new
-                                       (max 0 (- offset 30))
-                                       (min (length new) (+ offset 30)))))
-                 "\nThe rewritten text left an unclosed bracket."))))
-          (push (list resolved old new) staged)))
-      (setq staged (nreverse staged))
-      ;; Zero matches overall is a planner mistake: refuse instead of
-      ;; reporting a successful no-op.  A file whose content changed is
-      ;; one that matched at least once.
-      (unless (cl-some (lambda (entry)
-                         (not (string= (nth 1 entry) (nth 2 entry))))
-                       staged)
-        (user-error
-         (concat "Scalpel: file-substitute matched nothing in any of the "
-                 "%d file(s) (%s); refusing\n%s%s")
-         (length staged)
-         (string-join (mapcar (lambda (entry) (nth 0 entry)) staged) ", ")
-         (scalpel-agent--substitute-invocation pattern replacement)
-         (scalpel-agent--substitute-near-miss-note staged regexp)))
-      ;; Second pass: apply through the visiting buffers and save, the
-      ;; way `scalpel-execute' writes.
-      (let ((lines nil))
-        (pcase-dolist (`(,resolved ,old ,new) staged)
-          (let ((count 0)
-                (pos 0)
-                (excerpts nil)
-                ;; The count has to read the pattern exactly as the
-                ;; replacement did.  The replacement above runs with case
-                ;; folding off, so counting with the buffer's default would
-                ;; report occurrences the rewrite never made -- and the
-                ;; planner reads that number to decide whether the batch is
-                ;; complete.
-                (case-fold-search nil))
-            (while (string-match regexp old pos)
-              (setq count (1+ count)
-                    pos (match-end 0)))
-            ;; Pair the match lines by index: the Nth match in OLD and the
-            ;; Nth match in NEW both come from the same scan order, so the
-            ;; Nth line of each names the same occurrence before and after
-            ;; the rewrite.
-            (let ((new-lines
-                   (let ((ls nil)
-                         (npos 0))
-                     (while (string-match regexp new npos)
-                       (push (scalpel-agent--line-at new (match-beginning 0))
-                             ls)
-                       (setq npos (match-end 0)))
-                     (nreverse ls)))
-                  (old-lines
-                   (let ((ls nil)
-                         (opos 0))
-                     (while (string-match regexp old opos)
-                       (push (scalpel-agent--line-at old (match-beginning 0))
-                             ls)
-                       (setq opos (match-end 0)))
-                     (nreverse ls))))
-              (setq excerpts
-                    (seq-take
-                     (cl-pairlis old-lines new-lines)
-                     5)))
-            ;; The definition listing is taken from the two texts before
-            ;; anything is written: it is the only record of what the
-            ;; rewrite did to the definitions, and the next round has no
-            ;; other way to learn that a name it is about to use is gone.
-            ;; It is read from the texts rather than from the buffer, so
-            ;; the answer does not depend on which file was written first.
-            (let ((before (scalpel-agent--definitions-in-text resolved old))
-                  (after (scalpel-agent--definitions-in-text resolved new)))
-              (with-current-buffer (find-file-noselect resolved)
-                (let ((inhibit-read-only t))
-                  (erase-buffer)
-                  (insert new))
-                (save-buffer))
-              (push (format "Rewrote %d occurrence(s) in %s" count resolved)
-                    lines)
-              (dolist (pair excerpts)
-                (push
-                 (format "  %s -> %s"
-                         (scalpel-agent--excerpt-line (car pair))
-                         (scalpel-agent--excerpt-line (cdr pair)))
-                 lines))
-              (when (and excerpts (> count (length excerpts)))
-                (push (format "  ... and %d more" (- count (length excerpts)))
-                      lines))
-              (let ((note (scalpel-agent--rewrite-definition-note
-                           resolved before after)))
-                (when note (push note lines))))))
-        (string-join (nreverse lines) "\n")))))
+                        (scalpel-agent--substitute-invocation pattern replacement)
+                        (if (< offset (length new))
+                            (format "\nThe rewritten text first goes wrong at character %d: %S"
+                                    offset
+                                    (replace-regexp-in-string
+                                     "\n" "\\\\n"
+                                     (substring new (max 0 (- offset 30))
+                                                (min (length new) (+ offset 30)))))
+                          "\nThe rewritten text left an unclosed bracket."))))
+        (push (list resolved old new count) staged)))
+    (setq staged (nreverse staged))
+    ;; Zero matches overall is a planner mistake: refuse instead of reporting a
+    ;; successful no-op. A file whose content changed is one that matched at least
+    ;; once; the count comes from perl itself.
+    (unless (cl-some (lambda (entry) (> (nth 3 entry) 0)) staged)
+      (user-error (concat "Scalpel: file-substitute matched nothing in any of the "
+                          "%d file(s) (%s); refusing\n%s%s")
+                  (length staged)
+                  (string-join (mapcar (lambda (entry) (nth 0 entry)) staged) ", ")
+                  (scalpel-agent--substitute-invocation pattern replacement)
+                  ;; A perl-flavored pattern Emacs cannot compile loses only the
+                  ;; near-miss hint, never the refusal itself.
+                  (condition-case nil
+                      (scalpel-agent--substitute-near-miss-note staged pattern)
+                    (error ""))))
+    ;; Second pass: apply through the visiting buffers and save, the way
+    ;; `scalpel-execute' writes.
+    (let ((lines nil))
+      (pcase-dolist (`(,resolved ,old ,new ,count) staged)
+        ;; Excerpts pair the match lines by index: the Nth match in OLD and the Nth
+        ;; match in NEW both come from the same scan order, so the Nth line of each
+        ;; names the same occurrence before and after the rewrite. A perl-flavored
+        ;; pattern Emacs cannot compile loses only the excerpts, never the rewrite
+        ;; or count.
+        (let ((excerpts
+               (condition-case nil
+                   (let ((case-fold-search nil)
+                         (old-lines nil)
+                         (new-lines nil)
+                         (pos 0))
+                     (while (string-match pattern new pos)
+                       (push (scalpel-agent--line-at new (match-beginning 0)) new-lines)
+                       (setq pos (match-end 0)))
+                     (setq new-lines (nreverse new-lines))
+                     (setq pos 0)
+                     (while (string-match pattern old pos)
+                       (push (scalpel-agent--line-at old (match-beginning 0)) old-lines)
+                       (setq pos (match-end 0)))
+                     (setq old-lines (nreverse old-lines))
+                     (seq-take (cl-pairlis old-lines new-lines) 5))
+                 (error nil))))
+          ;; The definition listing is taken from the two texts before anything is
+          ;; written: it is the only record of what the rewrite did to the
+          ;; definitions, and the next round has no other way to learn that a name
+          ;; it is about to use is gone. It is read from the texts rather than from
+          ;; the buffer, so the answer does not depend on which file was written
+          ;; first.
+          (let ((before (scalpel-agent--definitions-in-text resolved old))
+                (after (scalpel-agent--definitions-in-text resolved new)))
+            (with-current-buffer (find-file-noselect resolved)
+              (let ((inhibit-read-only t))
+                (erase-buffer)
+                (insert new))
+              (save-buffer))
+            (push (format "Rewrote %d occurrence(s) in %s" count resolved) lines)
+            (dolist (pair excerpts)
+              (push (format "  %s -> %s"
+                            (scalpel-agent--excerpt-line (car pair))
+                            (scalpel-agent--excerpt-line (cdr pair)))
+                    lines))
+            (when (and excerpts (> count (length excerpts)))
+              (push (format "  ... and %d more" (- count (length excerpts))) lines))
+            (let ((note (scalpel-agent--rewrite-definition-note resolved before after)))
+              (when note (push note lines))))))
+      (string-join (nreverse lines) "\n"))))
 
 (defun scalpel-agent-confirm (text)
   "Return TEXT as a confirmation request to the user.

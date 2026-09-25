@@ -65,22 +65,21 @@ is the denial, not a phrase."
   "The prompt states the pattern contract the model must follow.
 Regression: the prompt asked for patterns in rx form, so the rule was
 written for rx -- but the contract has since changed: a pattern is now
-an ordinary Emacs regexp string, compiled by the caller and never
-evaluated as Lisp, where every literal in a pattern is the exact
-characters to match, and where Emacs has no non-greedy operators.
-Nothing in the code can read a model's intent back out of a pattern
-without guessing at it, so the rule has to be stated to the model;
-this guards only that the live prompt still carries it, the way the
-brevity rule and the perl preference are guarded."
+pure regular expression text targeting the Perl 5.x engine, compiled by
+perl's own qr//, with every literal the exact characters to match and no
+non-greedy operators.  Nothing in the code can read a model's intent back
+out of a pattern without guessing at it, so the rule has to be stated to
+the model; this guards only that the live prompt still carries it, the
+way the brevity rule and the perl preference are guarded."
   (ert-info ((format "Rule:\n%S" scalpel-prompt--substitute-pattern-rule))
     (should (string-match-p
              (regexp-quote scalpel-prompt--substitute-pattern-rule)
              scalpel-prompt-system-prompt))
     (should (string-match-p "regexp string"
                             scalpel-prompt--substitute-pattern-rule))
-    (should (string-match-p "Emacs regexp"
+    (should (string-match-p "Perl 5.x"
                             scalpel-prompt--substitute-pattern-rule))
-    (should (string-match-p "never evaluated as Lisp"
+    (should (string-match-p "qr// or m//"
                             scalpel-prompt--substitute-pattern-rule))
     (should (string-match-p "exact characters"
                             scalpel-prompt--substitute-pattern-rule))

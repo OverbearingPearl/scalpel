@@ -211,38 +211,48 @@ structural contract shared with `scalpel-agent--no-change-sentinel',
 which the reply is compared against.")
 
 (defconst scalpel-prompt--substitute-pattern-rule
-  "A file-substitute pattern is a plain regexp string written in
-Emacs regexp syntax.  It is compiled by
-`string-match'/`replace-regexp-in-string' and is
-never evaluated as Lisp.
+  "A file-substitute pattern is a plain regexp string,
+nothing else: output only the regexp text itself, with no
+quotes, no delimiters, no flags, no qr// or m// wrapper, and no
+prose.  The pattern lands inside a TOML literal string and is
+handed to Perl verbatim.
 
-Write every literal as the exact characters to match, inside a
-single-quoted literal string: '...' for a one-line pattern with
-no single quote, '''...''' when it contains a single quote or
-spans lines.  There is no escaping inside a literal string: a
-backslash is a literal backslash and a double quote is a literal
-double quote, so a character class such as [\"'] is written
-unchanged.  Only a pattern containing three consecutive single
-quotes needs a TOML double-quoted string instead.
-The dot metacharacter excludes newlines by default; handle
-newlines explicitly with [[:space:]] or a newline in the pattern.
-There is no non-greedy matching: constrain matches with negated
-character classes, anchors, or backtracking constraints instead
-of lazy quantifiers.
+The target engine is Perl 5.x: write a Perl-compatible regular
+expression and do not use Emacs-only constructs.
 
-The replacement is the exact replacement text, with \\\\N and
-\\\\& referring to the match the way
-`replace-regexp-in-string' reads them.
+Before writing the pattern, compile-test it in Perl itself with
+qr// or m//, for example `perl -e 'qr/PATTERN/'`.  If
+compilation fails, take the concrete error message Perl prints
+and fix the pattern next round rather than guessing.
 
-The common constructs are literals, character classes,
-\\\\(?:...\\\\) for grouping without capture, \\\\(capture\\\\),
-\\\\| for alternation, * and \\\\+ and \\\\? for repetition,
-\\\\` and \\\\' for buffer ends, ^ and $ line anchors, and
-\\\\w, \\\\s, \\\\c classes."
+Write every literal as the exact characters to match.  Inside a
+TOML literal string there is no escaping: a backslash is a
+literal backslash and a double quote is a literal double quote,
+so a character class such as [\"'] is written unchanged.  Only a
+value holding three consecutive single quotes needs a TOML
+double-quoted string instead, where a backslash is written \\\\ and
+a quote is written \\\".
+
+The dot metacharacter excludes newlines by default, so handle
+newlines explicitly with [[:space:]] or \\n.
+
+There is no non-greedy matching guarantee across engines:
+constrain matches with negated character classes, anchors, or
+backtracking constraints instead of lazy quantifiers.
+
+The replacement is exact replacement text where \\\\N and \\\\& refer
+to the match: Perl's $1-style numbering is what the engine uses,
+and \\\\& means the whole match.
+
+The common constructs are literals, character classes, (?:...)
+non-capturing groups, (capture), | alternation, * + ? repetition,
+^ and $ anchors, \\w \\s \\d classes, and \\A and \\z for absolute
+string ends."
   "A structural contract for the file-substitute pattern rule.
 The rule is embedded in `scalpel-prompt-system-prompt' and guarded
-by its test, because a pattern must always be written as an Emacs
-regexp string -- the writing rule is stated to the model.")
+by its test, because a pattern must always be stated as a Perl
+5.x regexp string that the model compile-tests with qr// or m//
+before writing it.")
 
 (defconst scalpel-prompt--block-insert-prompt
   (concat "Anchor signature: %s\n\n"

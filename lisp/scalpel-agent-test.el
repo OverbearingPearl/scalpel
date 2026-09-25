@@ -2184,24 +2184,27 @@ difference that is not there."
   (should-error (scalpel-agent-file-substitute nil "x" "y") :type 'user-error)
   (should-error (scalpel-agent-file-substitute '("/tmp/a.el") nil "y")
                 :type 'user-error))
-
 (ert-deftest scalpel-agent-test-rewrite-malformed-replacement-names-the-pair ()
-  "A refused replacement names the pattern and the replacement itself.
-Regression: the refusal said only that the replacement was malformed,
-so the other half of the action had to be restored from memory before
-another one could be written -- and memory wrote the malformed half.
+  "A refused substitution names the pattern and the replacement itself.
+Regression history: the refusal once said only that the replacement
+was malformed, so the other half had to be restored from memory
+before another attempt could be written -- and memory wrote the
+malformed half.  The engine has since changed: perl 5.x now compiles
+the pattern with its own qr// and owns the replacement, so a
+replacement perl accepts is no longer refused; the pair-naming
+guarantee is guarded on a perl compile failure instead.
 `scalpel-agent--substitute-invocation' is what every file-substitute
-refusal now carries for that."
+refusal still carries for that."
   (scalpel-utils-test-with-temp-file ".el"
     (with-temp-file this-file (insert "(defun foo ())\n"))
     (let* ((resolved (file-truename (expand-file-name this-file)))
            (scalpel-agent--context-files (list resolved))
-           ;; The pattern is a plain regexp string: the literal parens
-           ;; match as-is, so it hits the file's (defun foo ()) line.
-           (pattern "(defun foo")
-           ;; A trailing backslash is not a valid replacement text; the
-           ;; pattern matches, so the replacement is really read.
-           (replacement "\\")
+           ;; An unbalanced open paren is refused by perl's own qr//
+           ;; compile, so the pattern is really read by perl.
+           (pattern "(unclosed")
+           ;; A plain string perl accepts as a replacement: the
+           ;; refusal must still name the whole pair.
+           (replacement "ok")
            (err (condition-case e
                     (progn
                       (scalpel-agent-file-substitute
@@ -2211,9 +2214,12 @@ refusal now carries for that."
       (ert-info ((format "Error: %S" err))
         (should err)
         (let ((message (error-message-string err)))
-          (ert-info ((format "Message:\n%S" message))
-            (should (string-match-p "replacement is malformed" message))
-            (should (string-match-p (regexp-quote resolved) message))
+          (ert-info ((format "Expected a perl compile refusal, got:\n%S"
+                             message))
+            (should (string-match-p
+                     "perl cannot compile the pattern" message)))
+          (ert-info ((format "Expected the pattern and replacement to be \
+named together, got:\n%S" message))
             (should (string-match-p
                      (regexp-quote
                       (scalpel-agent--substitute-invocation
