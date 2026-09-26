@@ -122,6 +122,18 @@ careful attempt.  Like `scalpel-prompt--why' and
 `scalpel-prompt--summarize', the response must not include any
 unrelated modification beyond the new attempt.")
 
+(defconst scalpel-prompt--resume
+  "The previous round was cut off by an interruption outside
+your control -- an unstable network, a server error, or the
+like.  Your last action may never have run, and its outcome is
+unknown.  Read the conversation above, judge from it how far
+the work actually got, and continue from there rather than
+starting over.  Issue at most one concrete next action."
+  "Prompt sent in the interrupted-connection case.
+It covers a previous round that was cut off before its outcome
+was known, unlike `scalpel-prompt--retry', which covers a change
+that ran and failed.  Sent by the resume command in the console.")
+
 (defconst scalpel-prompt--continuation-instruction
   "The action from the previous round already ran; its output is in the
 conversation above.  Read that output and decide now: if it already

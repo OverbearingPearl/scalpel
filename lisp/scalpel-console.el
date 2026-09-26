@@ -481,6 +481,18 @@ caller can delete them without invalidating earlier ones."
         (setq pos next)))
     (nreverse regions)))
 
+(defun scalpel-console--delete-pending-input-regions ()
+  "Delete all pending input regions in the console buffer.
+Pending input regions are the text carrying neither
+\\='scalpel-console-role nor \\='scalpel-console-output.  They are
+deleted back to front so earlier positions remain valid while
+later ones are removed.  Must be called inside the console buffer."
+  (let ((regions (scalpel-console--pending-input-regions)))
+    (save-excursion
+      (let ((inhibit-read-only t))
+        (dolist (region (reverse regions))
+          (delete-region (car region) (cdr region)))))))
+
 (defvar scalpel-console-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "RET") #'scalpel-console-send-line)
@@ -500,6 +512,8 @@ caller can delete them without invalidating earlier ones."
     (define-key map (kbd "C-c C-n") #'scalpel-console-send-replan)
     (define-key map (kbd "C-c C-w") #'scalpel-console-send-why)
     (define-key map (kbd "C-c C-s") #'scalpel-console-send-summarize)
+    ;; Resume after an interrupted round.
+    (define-key map (kbd "C-c C-j") #'scalpel-console-send-resume)
     ;; Analyze deeply and try again.
     (define-key map (kbd "C-c C-t") #'scalpel-console-send-retry)
     ;; Prepares an LLM commit for the current console's project.
@@ -1905,11 +1919,13 @@ after %s: %s."
   "Re-send the previous instruction without retyping it.
 The instruction is inserted as pending input and sent through the
 ordinary send path, so the conversation, the context and the busy
-guard all behave exactly as if the user had typed it again."
+guard all behave exactly as if the user had typed it again.
+Unsent input is discarded first so the repeat is sent alone."
   (interactive)
   (with-current-buffer (scalpel-console--target-buffer)
     (unless scalpel-console--last-instruction
       (user-error "Scalpel: no previous instruction to repeat"))
+    (scalpel-console--delete-pending-input-regions)
     (goto-char (point-max))
     (insert scalpel-console--last-instruction "\n")
     (scalpel-console-send-line)))
@@ -1918,9 +1934,12 @@ guard all behave exactly as if the user had typed it again."
   "Send a fixed prompt telling the model to decide for the user.
 Interactive companion to `scalpel-console-repeat': the fixed prompt
 lives in `scalpel-prompt--decide-for-me' on purpose, beside
-the planner's other prompt text."
+the planner's other prompt text.
+Any pending untyped input regions in the target buffer are discarded
+before the prompt is inserted."
   (interactive)
   (with-current-buffer (scalpel-console--target-buffer)
+    (scalpel-console--delete-pending-input-regions)
     (goto-char (point-max))
     (insert (concat scalpel-prompt--decide-for-me "\n"))
     (scalpel-console-send-line)))
@@ -1928,9 +1947,12 @@ the planner's other prompt text."
 (defun scalpel-console-send-replan ()
   "Send a fixed prompt asking the model to propose a better plan.
 The fixed prompt lives in `scalpel-prompt--replan' on
-purpose, beside the planner's other prompt text."
+purpose, beside the planner's other prompt text.
+Unsent pending input is discarded first, so the fixed
+prompt is sent alone."
   (interactive)
   (with-current-buffer (scalpel-console--target-buffer)
+    (scalpel-console--delete-pending-input-regions)
     (goto-char (point-max))
     (insert scalpel-prompt--replan "\n")
     (scalpel-console-send-line)))
@@ -1939,19 +1961,25 @@ purpose, beside the planner's other prompt text."
   "Send a fixed prompt asking for the root cause.
 
 The fixed prompt lives in `scalpel-prompt--why' on purpose, beside the
-planner's other prompt text."
+planner's other prompt text.
+
+Unsent input is discarded first, so the fixed prompt is sent alone."
   (interactive)
   (with-current-buffer (scalpel-console--target-buffer)
+    (scalpel-console--delete-pending-input-regions)
     (goto-char (point-max))
     (insert scalpel-prompt--why "\n")
     (scalpel-console-send-line)))
 
 (defun scalpel-console-send-summarize ()
   "Send a fixed prompt asking the model to summarize more concisely.
+Before sending, discard all pending untyped input regions in the
+target buffer via `scalpel-console--delete-pending-input-regions'.
 The fixed prompt lives in `scalpel-prompt--summarize' on
 purpose, beside the planner's other prompt text."
   (interactive)
   (with-current-buffer (scalpel-console--target-buffer)
+    (scalpel-console--delete-pending-input-regions)
     (goto-char (point-max))
     (insert (concat scalpel-prompt--summarize "\n"))
     (scalpel-console-send-line)))
@@ -1959,11 +1987,31 @@ purpose, beside the planner's other prompt text."
 (defun scalpel-console-send-retry ()
   "Send a fixed prompt asking the model to analyze deeply and try again.
 The fixed prompt lives in `scalpel-prompt--retry' on purpose, beside
-the planner's other prompt text."
+the planner's other prompt text.
+Unsent pending input is discarded first, so the fixed prompt is sent alone."
   (interactive)
   (with-current-buffer (scalpel-console--target-buffer)
+    (scalpel-console--delete-pending-input-regions)
     (goto-char (point-max))
     (insert (concat scalpel-prompt--retry "\n"))
+    (scalpel-console-send-line)))
+
+(defun scalpel-console-send-resume ()
+  "Send the fixed resume prompt to the agent console.
+
+Sends the fixed prompt stored in `scalpel-prompt--resume' beside the
+planner's other prompt text, asking the agent to resume after the
+previous round was cut off by an interruption such as a network
+failure.
+
+Any pending unsent input regions are deleted first so that the fixed
+prompt is sent alone."
+  (interactive)
+  (with-current-buffer (scalpel-console--target-buffer)
+    (scalpel-console--delete-pending-input-regions)
+    (goto-char (point-max))
+    (insert scalpel-prompt--resume)
+    (insert "\n")
     (scalpel-console-send-line)))
 
 (defun scalpel-console--busy-p ()

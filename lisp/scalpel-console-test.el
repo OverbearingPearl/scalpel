@@ -2020,6 +2020,45 @@ text = 'done'"))))
               (should (string-match-p "Scalpel: done" (buffer-string))))))
       (scalpel-utils-test-kill-buffer (buffer-name buf)))))
 
+(ert-deftest scalpel-console-test-resume-discards-unsent-input ()
+  "The resume command sends only the fixed resume prompt.
+Resuming after an unexpected interruption must not mix in
+previously typed unsent input."
+  (let ((console-buffer (scalpel-console-test--new-console-buffer))
+        (captured-prompts '()))
+    (unwind-protect
+        (let ((scalpel-agent--context-files nil)
+              (scalpel-console-max-rounds 1)
+              (scalpel-console-self-heal-max 0))
+          (cl-letf (((symbol-function 'scalpel-llm-request-async)
+                     (lambda (&rest args)
+                       (let ((prompt (car args))
+                             (on-success (cadr args)))
+                         (push prompt captured-prompts)
+                         (funcall on-success
+                                  (concat
+                                   "```toml\n"
+                                   "[[action]]\n"
+                                   "tool = \"reply\"\n"
+                                   "text = \"resumed\"\n"
+                                   "```"))))))
+            ;; Simulate stale typed text left over from before the
+            ;; interruption.
+            (with-current-buffer console-buffer
+              (goto-char (point-max))
+              (insert "stale unsent input"))
+            (with-current-buffer console-buffer
+              (setq captured-prompts '())
+              (scalpel-console-send-resume)
+              (ert-info ("Exactly one prompt should have been sent")
+                (should (= 1 (length captured-prompts))))
+              (ert-info ("The prompt should mention the interruption")
+                (should (string-match-p "interruption" (car captured-prompts))))
+              (ert-info ("Stale typed input must be gone from the buffer")
+                (should-not (string-match-p "stale unsent input"
+                                            (buffer-string)))))))
+      (scalpel-utils-test-kill-buffer console-buffer))))
+
 (ert-deftest scalpel-console-test-repeat-without-history-signals ()
   "Repeating with no previous instruction fails loudly."
   (let ((buf (scalpel-console-test--new-console-buffer)))
