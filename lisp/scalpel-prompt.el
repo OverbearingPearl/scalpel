@@ -173,20 +173,23 @@ exact-spacing text, even when it exceeds 80 columns."
 Language-specific formatting belongs to per-language prompt providers.")
 
 (defconst scalpel-prompt--redaction-rule
-  (concat
-   "When you must write an absolute path under the user's home \
-directory, never invent or recall the user name.  The session uses a "
-   ;; The placeholder text is supplied by the redaction subsystem; fall
-   ;; back to the literal placeholder so this rule never goes stale.
-   (if (boundp 'scalpel-redact--home-placeholder)
-       scalpel-redact--home-placeholder
-     "{{SCALPEL_USER}}")
-   " redaction placeholder standing in for the user name.  Copy that \
-placeholder character for character, braces and all, into any path you \
-write.  If a read or edit is refused because the file is not in your \
-context, first check whether the user name in the path was guessed, \
-and if so rewrite the path with the placeholder in place of the user \
-name before retrying."))
+  (let ((ph (or (and (boundp 'scalpel-redact--home-placeholder)
+                     scalpel-redact--home-placeholder)
+                "{{SCALPEL_USER}}")))
+    (concat
+     "The redaction placeholder \""
+     ph
+     "\" represents the entire home-directory prefix (e.g., \"/Users/username\").\n"
+     "You must use it as the complete start of any path under the user's home.\n"
+     "Never add \"/Users/\" before the placeholder or invent a username.\n"
+     "For example, instead of \"/Users/john/Documents\", use \""
+     ph
+     "/Documents\".\n"
+     "Do not expand or replace the placeholder; leave it as is.\n"
+     "If you see a path like \"/Users/username\", replace it with \""
+     ph
+     "\" as a whole."))
+  "Prompt rule for redaction home directory placeholder.")
 
 (defvar scalpel-prompt-language-rules nil
   "Store language-specific prompt rules as filename regexp entries.
