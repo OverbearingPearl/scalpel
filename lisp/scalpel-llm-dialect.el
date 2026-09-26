@@ -126,16 +126,14 @@ matching registration falls back to the default parser."
            when entry return (cdr entry)))
 
 (defun scalpel-llm-dialect--visible-raw (raw)
-  "Return RAW with newlines, control bytes and non-ASCII characters escaped.
-`prin1' alone hides control bytes (`print-escape-control-characters'
-defaults to nil) and prints non-ASCII literally (`print-escape-nonascii'
-defaults to nil), so a reply that failed to parse is indistinguishable
-by eye from one that did."
-  (let ((print-escape-newlines t)
-        (print-escape-control-characters t)
-        (print-escape-nonascii t)
-        (print-escape-multibyte t))
-    (prin1-to-string raw)))
+  "Render RAW as a human-friendly string for direct console display.
+The result is meant to be read by a human, not by the reader: it keeps
+newlines, tabs and every non-ASCII character (including Chinese)
+exactly as written, matching the original reply's shape, with no
+read-syntax escaping.  Only control characters the console cannot show
+are dropped.  The filtering is delegated to
+`scalpel-llm-dialect--readable-raw'."
+  (scalpel-llm-dialect--readable-raw raw))
 
 (defun scalpel-llm-dialect--comment-prose (raw)
   "Comment out the prose note ahead of the first TOML table.
