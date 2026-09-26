@@ -2085,85 +2085,134 @@ is dropped instead of writing a report or continuing a round.
 An unattended run is also disarmed here, with its own timestamped
 mark, so the transcript records why the run ended.  The cancel
 closure is per-console (buffer-local), read from this console's
-target buffer.  Because the round's instruction was never answered,
-an abort restores that instruction to the input area instead of
-leaving it in the conversation -- a tagged user record would ride
-along in every later round as a dead question.  The newest text
-region whose `scalpel-console-role' property is user is found by
-walking property changes the same way `scalpel-console--history'
-collects turns; if no user-tagged region exists, the restoration is
-skipped entirely.  The region is deleted and re-inserted at the end
-of the buffer as plain untagged text, minus the leading \"User: \"
-prefix and with outer whitespace trimmed, carrying neither
+target buffer.
+
+When aborting a busy console, any pending input is inspected before
+the abort notices are appended.  If it contains non-whitespace text,
+all pending input is discarded and the previously sent user
+instruction is left untouched.  If the input area is empty, the
+round's instruction was never answered, so its newest user-tagged
+region is restored to the input area instead of being left in the
+conversation -- a tagged user record would ride along in every later
+round's history as a dead question.  The newest text region whose
+`scalpel-console-role' property is user is found by walking property
+changes the same way `scalpel-console--history' collects turns.  The
+restored region is deleted and re-inserted at the end of the buffer
+as plain untagged text, minus the leading \"User: \" prefix and with
+outer whitespace trimmed, carrying neither
 `scalpel-console-role' nor `scalpel-console-output', so
 `scalpel-console--pending-input-regions' reads it as typed-but-unsent
 input again; point is placed at the start of the restored text, just
-below the abort notice, ready for editing or resending."
+below the abort notice, ready for editing or resending.
+
+When no operation is active,
+\\<scalpel-console-mode-map>\\[scalpel-console-abort] also
+discards all pending untagged input regions instead of merely
+reporting that no request is in flight.  Those regions are
+removed in reverse buffer order so the surrounding transcript
+remains intact, and point is left at the end of the buffer."
   (interactive)
   (let ((target (scalpel-console--target-buffer)))
     (with-current-buffer target
       (if scalpel-console--busy
-          (let ((cancel (prog1 (buffer-local-value 'scalpel-llm--cancel-current target)
-                          (cl-incf scalpel-console--operation-generation))))
-            (setq scalpel-console--busy nil)
-            ;; An abort during a synchronous action chain will never
-            ;; see a late callback, so stop the status timer and drop
-            ;; the orphan spinner right here instead.
-            (when (bound-and-true-p scalpel-console--status-stop)
-              (funcall scalpel-console--status-stop)
-              (setq scalpel-console--status-stop nil))
-            (when scalpel-console--unattended-p
-              (setq scalpel-console--unattended-p nil
-                    scalpel-agent-unattended-confirm nil)
+          (let* ((pending (scalpel-console--pending-input-regions))
+                 (pending-has-text nil))
+            ;; Inspect the input before appending notices.  Whitespace-only
+            ;; input counts as an empty input area and permits restoration
+            ;; of the aborted round's instruction.
+            (dolist (region pending)
+              (when (string-match-p
+                     "[^[:space:]]"
+                     (buffer-substring (car region) (cdr region)))
+                (setq pending-has-text t)))
+            ;; Typed-but-unsent input belongs to the user, not to the
+            ;; aborted round.  Remove it before appending notices, so
+            ;; the previously sent user instruction remains untouched.
+            (when pending
+              (let ((inhibit-read-only t))
+                (dolist (region
+                         (sort (copy-sequence pending)
+                               (lambda (a b)
+                                 (> (car a) (car b)))))
+                  (delete-region (car region) (cdr region)))))
+            (let ((cancel (prog1 (buffer-local-value 'scalpel-llm--cancel-current target)
+                            (cl-incf scalpel-console--operation-generation))))
+              (setq scalpel-console--busy nil)
+              ;; An abort during a synchronous action chain will never
+              ;; see a late callback, so stop the status timer and drop
+              ;; the orphan spinner right here instead.
+              (when (bound-and-true-p scalpel-console--status-stop)
+                (funcall scalpel-console--status-stop)
+                (setq scalpel-console--status-stop nil))
+              (when scalpel-console--unattended-p
+                (setq scalpel-console--unattended-p nil
+                      scalpel-agent-unattended-confirm nil)
+                (scalpel-console--append
+                 (format "Scalpel: Unattended aborted at %s."
+                         (format-time-string "%H:%M"))))
               (scalpel-console--append
-               (format "Scalpel: Unattended aborted at %s."
-                       (format-time-string "%H:%M"))))
-            (scalpel-console--append
-             "Scalpel: Mission aborted, breaking off, out.")
-            ;; The aborted round's instruction was never answered, so
-            ;; restore it to the input area at the end of the buffer
-            ;; instead of leaving it as a tagged user turn that would
-            ;; be collected into every later round's history as a dead
-            ;; question.  Scan the role regions in the same order
-            ;; scalpel-console--history does and remember the last
-            ;; user one; the appended abort notices above carry the
-            ;; display-only output tag and stay untouched.
-            (let ((user-start nil)
-                  (user-end nil)
-                  (pos (point-min)))
-              (while (/= pos (point-max))
-                (let ((next (next-single-property-change
-                             pos 'scalpel-console-role nil (point-max))))
-                  (when (eq (get-text-property pos 'scalpel-console-role)
-                            'user)
-                    (setq user-start pos
-                          user-end next))
-                  (setq pos next)))
-              (when user-start
-                (let* ((text (buffer-substring user-start user-end))
-                       (prefix-len 0))
-                  (when (string-prefix-p "User: " text)
-                    (setq prefix-len (length "User: ")))
-                  (let ((stripped (substring text prefix-len)))
-                    (setq stripped
-                          (string-trim stripped))
-                    (delete-region user-start user-end)
-                    (let ((inhibit-read-only t))
-                      (goto-char (point-max))
-                      (let ((insert-start (point)))
-                        (insert stripped)
-                        ;; Plain untagged text: typed-but-unsent input
-                        ;; again for scalpel-console--pending-input-regions.
-                        (remove-text-properties
-                         insert-start (point)
-                         '(scalpel-console-role nil
-                           scalpel-console-output nil))
-                        (goto-char insert-start)))))))
-            (when cancel
-              (funcall cancel))
-            (message "Scalpel: current operation aborted."))
-        (ding)
-        (message "Scalpel: no request in flight to cancel.")))))
+               "Scalpel: Mission aborted, breaking off, out.")
+              ;; Restore the aborted round's instruction only when the
+              ;; input area was empty.  Otherwise that input has already
+              ;; been discarded and the sent user instruction must remain
+              ;; a tagged history turn.
+              (unless pending-has-text
+                ;; Scan the role regions in the same order
+                ;; scalpel-console--history does and remember the last
+                ;; user one; the appended abort notices above carry
+                ;; the display-only output tag and stay untouched.
+                (let ((user-start nil)
+                      (user-end nil)
+                      (pos (point-min)))
+                  (while (/= pos (point-max))
+                    (let ((next (next-single-property-change
+                                 pos 'scalpel-console-role nil (point-max))))
+                      (when (eq (get-text-property pos 'scalpel-console-role)
+                                'user)
+                        (setq user-start pos
+                              user-end next))
+                      (setq pos next)))
+                  (when user-start
+                    (let* ((text (buffer-substring user-start user-end))
+                           (prefix-len 0))
+                      (when (string-prefix-p "User: " text)
+                        (setq prefix-len (length "User: ")))
+                      (let ((stripped (substring text prefix-len)))
+                        (setq stripped
+                              (string-trim stripped))
+                        (delete-region user-start user-end)
+                        (let ((inhibit-read-only t))
+                          (goto-char (point-max))
+                          (let ((insert-start (point)))
+                            (insert stripped)
+                            ;; Plain untagged text: typed-but-unsent input
+                            ;; again for scalpel-console--pending-input-regions.
+                            (remove-text-properties
+                             insert-start (point)
+                             '(scalpel-console-role nil
+                               scalpel-console-output nil))
+                            (goto-char insert-start))))))))
+              (when cancel
+                (funcall cancel))
+              (message "Scalpel: current operation aborted.")))
+        ;; With no active operation, C-c C-k is also a way to discard
+        ;; unsent input.  Delete regions from the end toward the
+        ;; beginning so each deletion leaves the other transcript
+        ;; regions' positions valid, then leave point at the buffer end.
+        (let ((pending (scalpel-console--pending-input-regions)))
+          (if pending
+              (progn
+                (let ((inhibit-read-only t))
+                  (dolist (region
+                           (sort (copy-sequence pending)
+                                 (lambda (a b)
+                                   (> (car a) (car b)))))
+                    (delete-region (car region) (cdr region)))
+                  (goto-char (point-max)))
+                (message
+                 "Scalpel: input area cleared."))
+            (ding)
+            (message "Scalpel: no request in flight to cancel.")))))))
 
 (defun scalpel-console-unattended (&optional rounds)
   "Arm the current task to run unattended, callable at any time.
