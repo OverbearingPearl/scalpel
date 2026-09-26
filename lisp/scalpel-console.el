@@ -2085,9 +2085,20 @@ is dropped instead of writing a report or continuing a round.
 An unattended run is also disarmed here, with its own timestamped
 mark, so the transcript records why the run ended.  The cancel
 closure is per-console (buffer-local), read from this console's
-target buffer.  The cursor is moved to the newest output so the
-user can confirm the cancellation took hold and send the next
-instruction."
+target buffer.  Because the round's instruction was never answered,
+an abort restores that instruction to the input area instead of
+leaving it in the conversation -- a tagged user record would ride
+along in every later round as a dead question.  The newest text
+region whose `scalpel-console-role' property is user is found by
+walking property changes the same way `scalpel-console--history'
+collects turns; if no user-tagged region exists, the restoration is
+skipped entirely.  The region is deleted and re-inserted at the end
+of the buffer as plain untagged text, minus the leading \"User: \"
+prefix and with outer whitespace trimmed, carrying neither
+`scalpel-console-role' nor `scalpel-console-output', so
+`scalpel-console--pending-input-regions' reads it as typed-but-unsent
+input again; point is placed at the start of the restored text, just
+below the abort notice, ready for editing or resending."
   (interactive)
   (let ((target (scalpel-console--target-buffer)))
     (with-current-buffer target
@@ -2109,9 +2120,45 @@ instruction."
                        (format-time-string "%H:%M"))))
             (scalpel-console--append
              "Scalpel: Mission aborted, breaking off, out.")
-            ;; Abort demands the user's attention, so jump to the
-            ;; newest text rather than following.
-            (goto-char (point-max))
+            ;; The aborted round's instruction was never answered, so
+            ;; restore it to the input area at the end of the buffer
+            ;; instead of leaving it as a tagged user turn that would
+            ;; be collected into every later round's history as a dead
+            ;; question.  Scan the role regions in the same order
+            ;; scalpel-console--history does and remember the last
+            ;; user one; the appended abort notices above carry the
+            ;; display-only output tag and stay untouched.
+            (let ((user-start nil)
+                  (user-end nil)
+                  (pos (point-min)))
+              (while (/= pos (point-max))
+                (let ((next (next-single-property-change
+                             pos 'scalpel-console-role nil (point-max))))
+                  (when (eq (get-text-property pos 'scalpel-console-role)
+                            'user)
+                    (setq user-start pos
+                          user-end next))
+                  (setq pos next)))
+              (when user-start
+                (let* ((text (buffer-substring user-start user-end))
+                       (prefix-len 0))
+                  (when (string-prefix-p "User: " text)
+                    (setq prefix-len (length "User: ")))
+                  (let ((stripped (substring text prefix-len)))
+                    (setq stripped
+                          (string-trim stripped))
+                    (delete-region user-start user-end)
+                    (let ((inhibit-read-only t))
+                      (goto-char (point-max))
+                      (let ((insert-start (point)))
+                        (insert stripped)
+                        ;; Plain untagged text: typed-but-unsent input
+                        ;; again for scalpel-console--pending-input-regions.
+                        (remove-text-properties
+                         insert-start (point)
+                         '(scalpel-console-role nil
+                           scalpel-console-output nil))
+                        (goto-char insert-start)))))))
             (when cancel
               (funcall cancel))
             (message "Scalpel: current operation aborted."))
