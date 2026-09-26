@@ -57,9 +57,9 @@ SECRET is the original secret text that replaces PLACEHOLDER on restore."
   "Regexp matching the user name part of absolute home paths."
   (concat "/Users/" (regexp-quote (user-real-login-name))))
 
-(defun scalpel-redact--home-placeholder ()
-  "Placeholder standing in for the user name in home paths."
-  "{{SCALPEL_USER}}")
+(defconst scalpel-redact--home-placeholder
+  "{{SCALPEL_USER}}"
+  "Placeholder string standing in for the user name in home paths.")
 
 (defun scalpel-redact-install-defaults ()
   "Install the built-in rules when none are registered yet.
@@ -73,7 +73,7 @@ ever appear."
   (unless scalpel-redact-rules
     (scalpel-redact-register
      (scalpel-redact--home-pattern)
-     (scalpel-redact--home-placeholder)
+     scalpel-redact--home-placeholder
      (concat "/Users/" (user-real-login-name)))))
 
 (defun scalpel-redact-apply (text)

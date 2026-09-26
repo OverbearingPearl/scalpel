@@ -172,6 +172,22 @@ exact-spacing text, even when it exceeds 80 columns."
   "Language-agnostic formatting rule for generated text.
 Language-specific formatting belongs to per-language prompt providers.")
 
+(defconst scalpel-prompt--redaction-rule
+  (concat
+   "When you must write an absolute path under the user's home \
+directory, never invent or recall the user name.  The session uses a "
+   ;; The placeholder text is supplied by the redaction subsystem; fall
+   ;; back to the literal placeholder so this rule never goes stale.
+   (if (boundp 'scalpel-redact--home-placeholder)
+       scalpel-redact--home-placeholder
+     "{{SCALPEL_USER}}")
+   " redaction placeholder standing in for the user name.  Copy that \
+placeholder character for character, braces and all, into any path you \
+write.  If a read or edit is refused because the file is not in your \
+context, first check whether the user name in the path was guessed, \
+and if so rewrite the path with the placeholder in place of the user \
+name before retrying."))
+
 (defvar scalpel-prompt-language-rules nil
   "Store language-specific prompt rules as filename regexp entries.
 
@@ -445,6 +461,7 @@ it, translate it, or replace it with a guessed or remembered
 value.  The tooling restores the real value only from the exact
 spelling, so any deviation means the wrong text lands in the file.
 "
+   scalpel-prompt--redaction-rule
    "
 Each continued round carries one line of the form \"Round N of M
 (planning phase / execution phase / final third)\": N and M and
