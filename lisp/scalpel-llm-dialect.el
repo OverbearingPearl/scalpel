@@ -233,8 +233,7 @@ value at all -- prose, where there is no document to be invalid --
 and one that was simply not valid TOML.  RAW is the reply as
 received.  A prose reply is shown as it was written, because it is
 the answer rather than a failed parse; the other branches show it
-escaped, wrapped in a fenced TOML block so the console renders it
-as a code block.
+escaped so the console renders the exact reply text.
 
 Classification is fence-based: the reply's TOML document lives
 inside triple-quote fences, so an even number of ''' fences means
@@ -268,19 +267,15 @@ plain `user-error'."
                (format (concat "Scalpel: planner used tool-call syntax "
                                "instead of the TOML action document; nothing "
                                "was executed.  Reply was: %s")
-                       (concat "```toml\n"
-                               (scalpel-llm-dialect--visible-raw raw)
-                               "\n```")))))
+                       (scalpel-llm-dialect--visible-raw raw)))))
      ((or (cl-oddp fences)
           (and (zerop fences)
                (string-match-p "^\\[\\[action\\]\\]" raw)))
       (user-error
        (concat "Scalpel: planner reply was cut off before its TOML document "
                "closed (likely the backend's output limit); nothing was "
-               "executed.  Reply was: %s")
-       (concat "```toml\n"
-               (scalpel-llm-dialect--visible-raw raw)
-               "\n```")))
+               "executed.  Reply was:\n%s")
+       (scalpel-llm-dialect--visible-raw raw)))
      ;; No fence opened anywhere in the reply and no `key = ' assignment
      ;; either, so there is no document that could be invalid: the
      ;; planner answered in prose.  Naming a syntax error here would
@@ -306,10 +301,8 @@ plain `user-error'."
                ;; the answer itself, not the error narrative above.
                (scalpel-llm-dialect--readable-raw raw))))
      (t
-      (user-error "Scalpel: planner returned invalid TOML: %s"
-                  (concat "```toml\n"
-                          (scalpel-llm-dialect--visible-raw raw)
-                          "\n```"))))))
+      (user-error "Scalpel: planner returned invalid TOML:\n%s"
+                  (scalpel-llm-dialect--visible-raw raw))))))
 
 (defun scalpel-llm-dialect--default-parse (raw)
   "Parse RAW to a list of action plists with the default dialect.
