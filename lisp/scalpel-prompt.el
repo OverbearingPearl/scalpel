@@ -45,6 +45,22 @@ model.  The failure it prevents is a reply cut off mid-document by the
 backend's output limit, which loses the whole round, and the suite
 cannot see it because every reply there is mocked.")
 
+(defconst scalpel-prompt--no-tail-rule
+  "\
+End the response immediately once the TOML document is
+complete.  Do not write any prose, summary, or closing remark
+after the document: everything outside the document is discarded
+unread, it only wastes output tokens, pushes the reply toward the
+backend truncation budget, and delays handing control back to
+the editor."
+  "Prompt rule forbidding any text after the TOML document.
+
+Nothing in the code can bound what the model appends to a reply,
+so without this rule a chatty model may emit a summary or a
+closing remark after the document and the trailing text pushes
+the reply toward the truncation budget.  The suite cannot
+reproduce this failure because replies are mocked.")
+
 (defconst scalpel-prompt--action-budget-rule
   (concat
    "Write each block-edit or block-insert instruction as a few sentences "
@@ -611,6 +627,7 @@ Never emit code or diff text in this response.
 "
    scalpel-prompt--reply-brevity-rule
    scalpel-prompt--action-budget-rule
+   scalpel-prompt--no-tail-rule
    (if scalpel-prompt-reply-language
        (concat "\n" (scalpel-prompt--reply-language-rule))
      ""))

@@ -37,9 +37,19 @@ it fails here instead of in a session."
              scalpel-prompt-system-prompt))))
 
 (ert-deftest scalpel-prompt-test-system-prompt-bounds-action-budget-rule ()
-  "The suite cannot reproduce a truncated multi-action round because replies are mocked, so this only guards that the live prompt still carries the rule verbatim."
+  "Guard that the live prompt still carries the action budget rule verbatim.
+The suite cannot reproduce a truncated multi-action round because replies are mocked, so this only checks the rule text."
   (ert-info ((format "Action budget rule expected verbatim: %S" scalpel-prompt--action-budget-rule))
     (should (string-match-p (regexp-quote scalpel-prompt--action-budget-rule)
+                            scalpel-prompt-system-prompt))))
+
+(ert-deftest scalpel-prompt-test-system-prompt-bounds-document-rule ()
+  "Test that the live system prompt carries the document-end rule verbatim.
+The test suite mocks replies uniformly, so the truncation failure itself
+cannot be reproduced here; we only guard that the rule text is present."
+  (ert-info ((format "system prompt should contain the rule: %S"
+                     scalpel-prompt--no-tail-rule))
+    (should (string-match-p (regexp-quote scalpel-prompt--no-tail-rule)
                             scalpel-prompt-system-prompt))))
 
 (ert-deftest scalpel-prompt-test-prompt-example-parses ()
