@@ -1081,7 +1081,7 @@ inside the same system message."
       (should (string-match-p (regexp-quote scalpel-prompt--example)
                               system))
       (should (string-match-p
-               (regexp-quote scalpel-prompt--reply-brevity-rule)
+               (regexp-quote scalpel-prompt-rules--reply-brevity)
                system)))))
 
 (ert-deftest scalpel-agent-test-shell-runs-command-through-a-shell ()

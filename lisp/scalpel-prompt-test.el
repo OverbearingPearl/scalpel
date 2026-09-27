@@ -31,16 +31,16 @@ off mid-document by the backend's output limit, cannot be reproduced
 here because every reply in this suite is mocked.  This guards only
 that the live prompt still carries the rule, so a rewrite that drops
 it fails here instead of in a session."
-  (ert-info ((format "Rule:\n%S" scalpel-prompt--reply-brevity-rule))
+  (ert-info ((format "Rule:\n%S" scalpel-prompt-rules--reply-brevity))
     (should (string-match-p
-             (regexp-quote scalpel-prompt--reply-brevity-rule)
+             (regexp-quote scalpel-prompt-rules--reply-brevity)
              scalpel-prompt-system-prompt))))
 
 (ert-deftest scalpel-prompt-test-system-prompt-bounds-action-budget-rule ()
   "Guard that the live prompt still carries the action budget rule verbatim.
 The suite cannot reproduce a truncated multi-action round because replies are mocked, so this only checks the rule text."
-  (ert-info ((format "Action budget rule expected verbatim: %S" scalpel-prompt--action-budget-rule))
-    (should (string-match-p (regexp-quote scalpel-prompt--action-budget-rule)
+  (ert-info ((format "Action budget rule expected verbatim: %S" scalpel-prompt-rules--action-budget))
+    (should (string-match-p (regexp-quote scalpel-prompt-rules--action-budget)
                             scalpel-prompt-system-prompt))))
 
 (ert-deftest scalpel-prompt-test-system-prompt-bounds-document-rule ()
@@ -48,8 +48,8 @@ The suite cannot reproduce a truncated multi-action round because replies are mo
 The test suite mocks replies uniformly, so the truncation failure itself
 cannot be reproduced here; we only guard that the rule text is present."
   (ert-info ((format "system prompt should contain the rule: %S"
-                     scalpel-prompt--no-tail-rule))
-    (should (string-match-p (regexp-quote scalpel-prompt--no-tail-rule)
+                     scalpel-prompt-rules--no-tail))
+    (should (string-match-p (regexp-quote scalpel-prompt-rules--no-tail)
                             scalpel-prompt-system-prompt))))
 
 (ert-deftest scalpel-prompt-test-prompt-example-parses ()
@@ -87,20 +87,20 @@ non-greedy operators.  Nothing in the code can read a model's intent back
 out of a pattern without guessing at it, so the rule has to be stated to
 the model; this guards only that the live prompt still carries it, the
 way the brevity rule and the perl preference are guarded."
-  (ert-info ((format "Rule:\n%S" scalpel-prompt--substitute-pattern-rule))
+  (ert-info ((format "Rule:\n%S" scalpel-prompt-rules--substitute-pattern))
     (should (string-match-p
-             (regexp-quote scalpel-prompt--substitute-pattern-rule)
+             (regexp-quote scalpel-prompt-rules--substitute-pattern)
              scalpel-prompt-system-prompt))
     (should (string-match-p "regexp string"
-                            scalpel-prompt--substitute-pattern-rule))
+                            scalpel-prompt-rules--substitute-pattern))
     (should (string-match-p "Perl 5.x"
-                            scalpel-prompt--substitute-pattern-rule))
+                            scalpel-prompt-rules--substitute-pattern))
     (should (string-match-p "qr// or m//"
-                            scalpel-prompt--substitute-pattern-rule))
+                            scalpel-prompt-rules--substitute-pattern))
     (should (string-match-p "exact characters"
-                            scalpel-prompt--substitute-pattern-rule))
+                            scalpel-prompt-rules--substitute-pattern))
     (should (string-match-p "no non-greedy"
-                            scalpel-prompt--substitute-pattern-rule))))
+                            scalpel-prompt-rules--substitute-pattern))))
 
 (ert-deftest scalpel-prompt-test-system-prompt-takes-names-literally ()
   "The prompt says a symbol name is copied, never re-spelled.
@@ -111,12 +111,12 @@ edited, although the SYMBOLS list in the prompt stated the right
 spelling.  Nothing in the code can prevent the spelling, so the rule
 has to be stated to the model; this guards only that the live prompt
 still carries it, the way the dialect and brevity rules are guarded."
-  (ert-info ((format "Rule:\n%S" scalpel-prompt--symbol-name-rule))
+  (ert-info ((format "Rule:\n%S" scalpel-prompt-rules--symbol-name))
     (should (string-match-p
-             (regexp-quote scalpel-prompt--symbol-name-rule)
+             (regexp-quote scalpel-prompt-rules--symbol-name)
              scalpel-prompt-system-prompt))
     (should (string-match-p "taken literally"
-                            scalpel-prompt--symbol-name-rule))))
+                            scalpel-prompt-rules--symbol-name))))
 
 (ert-deftest scalpel-prompt-test-system-prompt-prefers-perl ()
   "The prompt steers text-transformation commands toward perl.
