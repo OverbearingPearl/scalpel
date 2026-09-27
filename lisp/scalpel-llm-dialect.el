@@ -228,7 +228,8 @@ other way."
 (defun scalpel-llm-dialect--parse-error (raw)
   "Signal the `user-error' describing why RAW failed to parse.
 Distinguishes a planner reply that used tool-call syntax, one that
-was cut off before its TOML document closed, one that held no TOML
+was cut off before its TOML document closed, one that carried a
+quote run a literal string cannot hold, one that held no TOML
 value at all -- prose, where there is no document to be invalid --
 and one that was simply not valid TOML.  RAW is the reply as
 received.  A prose reply is shown as it was written, because it is
@@ -240,8 +241,25 @@ inside triple-quote fences, so an even number of ''' fences means
 the document is complete and either parses or is invalid TOML,
 while an odd count means it was cut off before it closed; a reply
 that opens an [[action]] table but never closes a fence was cut off
-too, even if no fence ever opened.  A reply with no fence and no
-`key = ' assignment anywhere is prose.
+too, even if no fence ever opened.  Among the cut-off replies there
+is a sharper sub-case: when at least three fences have been counted
+and the trimmed reply itself ends on a run of three single quotes,
+the quote run is not a fence that failed to open -- it is text
+inside a literal-string value, which a literal string cannot carry
+and which closed the string early, so the document ended mid-value
+and the odd fence count follows from that, not from a backend
+truncation.  Such a reply is reported as carrying the quote run
+rather than as cut off.  A truncated reply whose fewer-than-three
+fences also end on the quote run keeps the cut-off message: there
+the run really is the document's opening fence, not text inside a
+value.
+
+A reply with no fence and no `key = ' assignment anywhere is
+prose.  In the invalid-TOML fallback there is a sub-case too: a
+backslash immediately before a single quote escaped that quote, and
+since TOML literal strings take no escapes at all, the quote closed
+its literal string early -- the parse failed on that sequence, not
+on TOML at large.
 
 Every message states the failure and shows the reply, and nothing
 more: what the user can do about it belongs to the console, which
@@ -271,11 +289,31 @@ plain `user-error'."
      ((or (cl-oddp fences)
           (and (zerop fences)
                (string-match-p "^\\[\\[action\\]\\]" raw)))
-      (user-error
-       (concat "Scalpel: planner reply was cut off before its TOML document "
-               "closed (likely the backend's output limit); nothing was "
-               "executed.  Reply was:\n%s")
-       (scalpel-llm-dialect--visible-raw raw)))
+      ;; A reply ending on a ''' run with three or more fences counted
+      ;; was not cut off: the run is text inside a literal-string
+      ;; value, which a literal cannot carry, and it closed the string
+      ;; early -- the odd count follows from that, not from
+      ;; truncation.  With fewer than three fences the run is the
+      ;; document's own opening fence and the reply really was cut
+      ;; off, so the existing message applies.
+      (if (and (>= fences 3)
+               (string-match-p
+                "[\r\n]?[ \t]*'''[ \t\r\n]*\\'"
+                (string-trim raw)))
+          (user-error
+           (concat "Scalpel: planner reply holds three consecutive "
+                   "single quotes, which a TOML literal string cannot "
+                   "carry; they closed the literal string early and "
+                   "broke the document -- nothing was executed.  "
+                   "Rephrase the text without them, or write that "
+                   "value as a TOML double-quoted string.  Reply "
+                   "was:\n%s")
+           (scalpel-llm-dialect--visible-raw raw))
+        (user-error
+         (concat "Scalpel: planner reply was cut off before its TOML document "
+                 "closed (likely the backend's output limit); nothing was "
+                 "executed.  Reply was:\n%s")
+         (scalpel-llm-dialect--visible-raw raw))))
      ;; No fence opened anywhere in the reply and no `key = ' assignment
      ;; either, so there is no document that could be invalid: the
      ;; planner answered in prose.  Naming a syntax error here would
@@ -300,6 +338,19 @@ plain `user-error'."
                ;; caller that degrades prose into a reply action delivers
                ;; the answer itself, not the error narrative above.
                (scalpel-llm-dialect--readable-raw raw))))
+     ;; A backslash before a single quote is the real failure: TOML
+     ;; literal strings take no escapes at all, so the quote closed its
+     ;; literal string early and the document broke there.  Keep the
+     ;; generic message when no such sequence appears.
+     ((string-match-p "\\\\'" raw)
+      (user-error
+       (concat "Scalpel: planner returned invalid TOML: a backslash-"
+               "escaped single quote closed a single-quoted literal "
+               "string early, because TOML literal strings take no "
+               "escapes at all -- nothing was executed.  A value "
+               "holding a single quote must be written as a "
+               "triple-quoted literal instead.  Reply was:\n%s")
+       (scalpel-llm-dialect--visible-raw raw)))
      (t
       (user-error "Scalpel: planner returned invalid TOML:\n%s"
                   (scalpel-llm-dialect--visible-raw raw))))))

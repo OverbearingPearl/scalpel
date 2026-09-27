@@ -148,6 +148,49 @@ merely rejected."
         (should (string-match-p "tool-call syntax"
                                 (error-message-string err)))))))
 
+(ert-deftest scalpel-llm-dialect-test-parse-error-names-literal-string-causes ()
+  "Pin the literal-string diagnostics of `scalpel-llm-dialect--parse-error'."
+  (let ((triple-run-end
+         "[[tool]]\nname = 'grep'\ntext = '''\nabc\n'''\n'''")
+        (truncated
+         "[[tool]]\nname = 'grep'\ntext = '''\nabc")
+        (backslash-before-quote
+         "[[tool]]\nname = 'grep'\ncommand = 'ls\\' 'file'")
+        (plain-invalid
+         "[[tool]]\nname = 'grep'\nthis line is not valid toml"))
+    (ert-info ((format "Reply with an odd fence count ending on a triple-quote run signals three consecutive quotes; input: %S" triple-run-end))
+      (let ((msg (condition-case err
+                     (progn (scalpel-llm-dialect--parse-error triple-run-end) nil)
+                   (user-error (error-message-string err)))))
+        (should msg)
+        (ert-info ((format "Expected 'three consecutive' and no 'cut off'; actual: %S" msg))
+          (should (string-match-p "three consecutive" msg))
+          (should-not (string-match-p "cut off" msg)))))
+    (ert-info ((format "Reply truncated inside an open literal value signals cut off; input: %S" truncated))
+      (let ((msg (condition-case err
+                     (progn (scalpel-llm-dialect--parse-error truncated) nil)
+                   (user-error (error-message-string err)))))
+        (should msg)
+        (ert-info ((format "Expected 'cut off'; actual: %S" msg))
+          (should (string-match-p "cut off" msg)))))
+    (ert-info ((format "Reply with a backslash before a single quote in a command value signals backslash; input: %S" backslash-before-quote))
+      (let ((msg (condition-case err
+                     (progn (scalpel-llm-dialect--parse-error backslash-before-quote) nil)
+                   (user-error (error-message-string err)))))
+        (should msg)
+        (ert-info ((format "Expected 'backslash'; actual: %S" msg))
+          (should (string-match-p "backslash" msg)))))
+    (ert-info ((format "Reply invalid for an unrelated reason falls back to the generic invalid TOML message; input: %S" plain-invalid))
+      (let ((msg (condition-case err
+                     (progn (scalpel-llm-dialect--parse-error plain-invalid) nil)
+                   (user-error (error-message-string err)))))
+        (should msg)
+        (ert-info ((format "Expected 'invalid TOML' and none of 'backslash', 'cut off', 'three consecutive'; actual: %S" msg))
+          (should (string-match-p "invalid TOML" msg))
+          (should-not (string-match-p "backslash" msg))
+          (should-not (string-match-p "cut off" msg))
+          (should-not (string-match-p "three consecutive" msg)))))))
+
 (ert-deftest scalpel-llm-dialect-test-tool-call-detection-covers-every-tag ()
   "Every registered tool-call tag makes the reply fail as tool-call syntax.
 The list is the contract: a dialect added to it is detected with no
