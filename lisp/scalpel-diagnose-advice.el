@@ -32,11 +32,12 @@ broken.  To try again anyway: C-c C-e")
 parse, so nothing was executed.  A backend that answers this way
 tends to answer this way again, so retrying the same request
 rarely helps: switch the backend with C-c C-b, or rephrase.  To
-try again anyway: C-c C-e")
+try again anyway, C-c C-t analyzes the failure deeply first")
     (prose
      . "the model followed no parseable convention at all, so nothing was
 executed.  Retry tends to repeat it: switch the backend with
-C-c C-b, or rephrase the instruction.  To try again anyway: C-c C-e")
+C-c C-b, or rephrase the instruction.  To try again anyway,
+C-c C-t analyzes the failure deeply first")
     (parse
      . "the model's reply was not readable; nothing was executed.  A
 second try may come back whole.  Press C-c C-e or M-x
