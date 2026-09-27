@@ -141,7 +141,7 @@ text = 'done'"))))
             (with-current-buffer buf
               (goto-char (point-min))
               (should (search-forward "User: bad instruction" nil t))
-              (should (search-forward "Scalpel error: Boom" nil t))
+              (should (search-forward "Scalpel [bug]: Boom" nil t))
               (should-not (search-forward "thinking" nil t)))))
       (when (buffer-live-p buf) (kill-buffer buf)))))
 
@@ -1750,7 +1750,7 @@ while the planner already saw the error as the newest turn."
               (should (eq (get-text-property (match-beginning 0) 'face)
                           'scalpel-console-consumed-body-face))
               (goto-char (point-min))
-              (should (search-forward "Scalpel planner error: Bad TOML" nil t))
+              (should (search-forward "Scalpel [planner error]: Bad TOML" nil t))
               ;; The error turn holds no fenced body, so nothing is
               ;; dropped from it: the consumed-body mark must not land
               ;; on it.  Its face is the planner-error dim, which is a
@@ -1855,7 +1855,7 @@ command = 'ls'"))))
               (scalpel-console-send-line)))
           (with-current-buffer buf
             (ert-info ((format "Buffer:\n%S" (buffer-string)))
-              (should (string-match-p "Scalpel planner error" (buffer-string)))
+              (should (string-match-p "Scalpel \\[planner error\\]" (buffer-string)))
               (should (string-match-p "missing required field" (buffer-string)))
               (should (string-match-p
                        (regexp-quote (scalpel-diagnose-advice-for 'parse))
@@ -1863,7 +1863,7 @@ command = 'ls'"))))
               ;; The failure header is dimmed for reading, while the
               ;; turn still joins the conversation.
               (goto-char (point-min))
-              (should (search-forward "Scalpel planner error" nil t))
+              (should (search-forward "Scalpel [planner error]" nil t))
               (should (eq (get-text-property (match-beginning 0) 'face)
                           'scalpel-console-planner-error-face))
               ;; The failure stays in the conversation: it is about the
@@ -1896,7 +1896,7 @@ message with no advice."
           (with-current-buffer buf
             (goto-char (point-min))
             (should (re-search-forward
-                     "^Scalpel context error" nil t))
+                     "^Scalpel \\[context error\\]" nil t))
             (goto-char (match-beginning 0))
             (should (eq (get-text-property (point) 'face)
                         'scalpel-console-planner-error-face))
@@ -1924,8 +1924,10 @@ whatever backend and model the test session carries."
         (progn
           (cl-letf (((symbol-function 'scalpel-llm-request-async)
                      (lambda (_prompt on-success _on-error &optional _system)
-                       (funcall on-success
-                                (concat "<tool_call>shell<arg_key>command</arg_key><arg_value>ls</arg_value></tool_call>")))))
+                       (let ((tag (car scalpel-llm-dialect--tool-call-tags)))
+                         (funcall on-success
+                                  (format "<%s>{\"command\": \"ls\"}</%s>"
+                                          tag tag))))))
             (with-current-buffer buf
               (erase-buffer)
               (insert "look around\n")
@@ -1933,8 +1935,7 @@ whatever backend and model the test session carries."
               (scalpel-console-send-line)))
           (with-current-buffer buf
             (ert-info ((format "Buffer:\n%S" (buffer-string)))
-              (should (string-match-p "Scalpel planner error"
-                                      (buffer-string)))
+              (should (string-match-p "Scalpel \\[planner error\\]" (buffer-string)))
               (should (string-match-p
                        (regexp-quote (scalpel-diagnose-advice-for 'tool-call))
                        (buffer-string)))
@@ -1971,7 +1972,7 @@ retry it and only report failure once the budget is spent."
             (ert-info ((format "Buffer:\n%S" (buffer-string)))
               ;; The prose round is a planner failure with the
               ;; diagnose advice, not a silently completed answer.
-              (should (string-match-p "Scalpel planner error"
+              (should (string-match-p "Scalpel \\[planner error\\]"
                                       (buffer-string)))
               (should (string-match-p
                        "the model followed no parseable convention at all"

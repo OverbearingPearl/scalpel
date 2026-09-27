@@ -1573,7 +1573,7 @@ holds the real paths the user typed."
                                 (header
                                  (cond
                                   ((eq category 'planner)
-                                   (format "Scalpel planner error: %s\n%s\n\n"
+                                   (format "Scalpel [planner error]: %s\n%s\n\n"
                                            err-message
                                            (scalpel-diagnose-advice-plist err)))
                                   ((eq category 'context)
@@ -1583,11 +1583,11 @@ holds the real paths the user typed."
                                    ;; remedy must still be stated, so the
                                    ;; category-advice table is no longer dead
                                    ;; code on the render path.
-                                   (format "Scalpel context error: %s\n%s\n\n"
+                                   (format "Scalpel [context error]: %s\n%s\n\n"
                                            err-message
                                            (scalpel-diagnose-advice-plist err)))
                                   (t
-                                   (format "Scalpel error: %s\n\n"
+                                   (format "Scalpel [bug]: %s\n\n"
                                            err-message)))))
                            (scalpel-console--insert-tagged
                             header
