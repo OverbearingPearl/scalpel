@@ -465,7 +465,11 @@ Use EXTRA as the new instruction."
 
 (defun scalpel-commit--commit ()
   "Run `git commit' with the message shown in the buffer.
-The tree is re-checked first: a file changed since the message was
+The buffer content is validated first: both the \"--- BEGIN COMMIT
+MESSAGE ---\" and \"--- END COMMIT MESSAGE ---\" marker lines must be
+present, with BEGIN before END; a missing marker is reported as a
+user-error naming it.
+The tree is re-checked next: a file changed since the message was
 generated means the message may be stale, and the user is told to
 regenerate rather than commit something undescribed.  The commit
 carries staged and unstaged tracked changes (the diff ran
@@ -476,8 +480,22 @@ the commit failed; a nil status (git error or a stubbed read in
 tests) counts as success and the user is never asked to commit
 manually on its account."
   (interactive)
-  (let ((workdir (scalpel-commit--workdir)))
+  (let ((workdir (scalpel-commit--workdir))
+        (begin-marker "--- BEGIN COMMIT MESSAGE ---")
+        (end-marker "--- END COMMIT MESSAGE ---"))
     (message "Scalpel: committing...")
+    (let ((begin-pos (save-excursion
+                       (goto-char (point-min))
+                       (re-search-forward
+                        (concat "^" (regexp-quote begin-marker) "$") nil t))))
+      (unless begin-pos
+        (user-error "Scalpel: missing marker line: %s" begin-marker))
+      (let ((end-pos (save-excursion
+                       (goto-char begin-pos)
+                       (re-search-forward
+                        (concat "^" (regexp-quote end-marker) "$") nil t))))
+        (unless end-pos
+          (user-error "Scalpel: missing marker line: %s" end-marker))))
     (when (scalpel-commit--tree-changed-p workdir)
       (user-error
        (concat "Scalpel: the working tree changed since this message "
@@ -568,13 +586,15 @@ manually on its account."
 These keys belong to this buffer's own map, so they cannot
 collide with the console's keys.")
 
-(define-derived-mode scalpel-commit-mode special-mode "Scalpel Commit"
+(define-derived-mode scalpel-commit-mode text-mode "Scalpel Commit"
   "Major mode showing a generated commit message awaiting confirmation.
+The message body is freely editable; it is only validated at commit time
+\(\\[scalpel-commit--commit]).
 \\<scalpel-commit-mode-map>\\[scalpel-commit--commit] commits; the other keys tune the message and regenerate it:
 \\[scalpel-commit--more-detail] more detail, \\[scalpel-commit--shorter] shorter, \\[scalpel-commit--regen] regenerate,
 \\[scalpel-commit--switch-style] switch style, \\[scalpel-commit--switch-language] switch language,
 \\[scalpel-commit--abort] abort."
-  (setq buffer-read-only t))
+  (setq-local buffer-read-only nil))
 
 (provide 'scalpel-commit)
 

@@ -135,7 +135,8 @@
       (should-error (scalpel-commit--commit)))))
 
 (ert-deftest scalpel-commit-test-commit-runs-git-and-closes-buffer ()
-  "A confirmed commit runs `git commit' with the shown message."
+  "A confirmed commit runs `git commit' with the shown message.
+A buffer without the marker lines is refused."
   (let* ((args nil)
          (buffer (get-buffer-create (scalpel-commit--buffer-name)))
          (console (get-buffer-create " *scalpel-commit-test console*")))
@@ -157,7 +158,26 @@
             (scalpel-commit--commit)
             (should (equal (list "commit" "-m" "msg")
                            args))
-            (should-not (get-buffer (scalpel-commit--buffer-name)))))
+            (should-not (get-buffer (scalpel-commit--buffer-name)))
+            ;; A buffer without the marker lines must be refused.
+            (let ((plain (get-buffer-create (scalpel-commit--buffer-name))))
+              (unwind-protect
+                  (with-current-buffer plain
+                    (setq buffer-read-only nil)
+                    (erase-buffer)
+                    (insert "msg\n")
+                    (setq scalpel-commit--console console)
+                    (setq scalpel-commit--workdir-cache default-directory)
+                    (setq scalpel-commit--tree-state nil)
+                    (let ((git-called nil))
+                      (cl-letf (((symbol-function 'scalpel-commit--git)
+                                 (lambda (_call &optional _dir)
+                                   (setq git-called t) ""))
+                                ((symbol-function 'scalpel-commit--status)
+                                 (lambda (_dir) nil)))
+                        (should-error (scalpel-commit--commit))
+                        (should-not git-called))))
+                (condition-case nil (kill-buffer plain) (error nil))))))
       (condition-case nil (kill-buffer buffer) (error nil))
       (condition-case nil (kill-buffer console) (error nil)))))
 
