@@ -360,7 +360,11 @@ through `scalpel-llm-dialect--parse-error'."
     (user-error
      "Scalpel: planner returned an empty reply; check the backend's \
 API key, quota and network, then retry"))
-  (let* ((echo-buffer (get-buffer-create "*Scalpel Raw TOML*"))
+  (let* ((echo-buffer (get-buffer-create
+           (if (and (boundp 'scalpel-console--root)
+                    (buffer-local-value 'scalpel-console--root (current-buffer)))
+               (format "*scalpel-raw-toml<%s>*" (buffer-name))
+             "*Scalpel Raw TOML*")))
          (temp-file nil)
          (result nil)
          ;; Read KEY from an alist TABLE as produced by

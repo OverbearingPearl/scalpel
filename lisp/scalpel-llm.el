@@ -294,7 +294,8 @@ start, so a concurrent request cannot zero an earlier one's count."
                      ;; back to real values on the whole raw reply before
                      ;; dialect parse, so every downstream consumer sees
                      ;; real paths.
-                     (funcall on-success (scalpel-redact-restore payload))
+                     (with-current-buffer owner
+                       (funcall on-success (scalpel-redact-restore payload)))
                    (error
                     (notify-error
                      (list :type 'callback
