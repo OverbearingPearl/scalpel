@@ -36,6 +36,12 @@ it fails here instead of in a session."
              (regexp-quote scalpel-prompt--reply-brevity-rule)
              scalpel-prompt-system-prompt))))
 
+(ert-deftest scalpel-prompt-test-system-prompt-bounds-action-budget-rule ()
+  "The suite cannot reproduce a truncated multi-action round because replies are mocked, so this only guards that the live prompt still carries the rule verbatim."
+  (ert-info ((format "Action budget rule expected verbatim: %S" scalpel-prompt--action-budget-rule))
+    (should (string-match-p (regexp-quote scalpel-prompt--action-budget-rule)
+                            scalpel-prompt-system-prompt))))
+
 (ert-deftest scalpel-prompt-test-prompt-example-parses ()
   "The example the system prompt shows is one the parser accepts.
 Regression: the prompt presented prose before the array as an

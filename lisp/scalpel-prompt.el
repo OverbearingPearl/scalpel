@@ -45,6 +45,25 @@ model.  The failure it prevents is a reply cut off mid-document by the
 backend's output limit, which loses the whole round, and the suite
 cannot see it because every reply there is mocked.")
 
+(defconst scalpel-prompt--action-budget-rule
+  (concat
+   "Write each block-edit or block-insert instruction as a few sentences "
+   "of plain prose, never more than roughly ten lines. Only two kinds of "
+   "action are allowed to be long by design: a file-create carrying a "
+   "whole file, and a file-substitute carrying its pattern and replacement. "
+   "Do not pack many heavy actions into one round. Emit at most a handful "
+   "of lightweight actions plus at most one verification shell action per "
+   "round, and split large multi-file work across rounds. The whole "
+   "document is bounded by the backend output budget, and every action in "
+   "the document is thrown away when the reply is cut off, so a round that "
+   "nearly exhausts the budget loses everything it did.")
+  "Structural contract shared by `scalpel-prompt-system-prompt' and its test.
+Guards against the planner emitting oversized or over-packed action rounds
+whose tail actions are discarded when the backend output budget truncates
+the reply.  The failure this prevents -- truncated multi-action rounds --
+cannot be reproduced in the mocked suite, which never exercises the real
+output budget; keep prose and this contract in sync.")
+
 (defcustom scalpel-prompt-reply-language nil
   "Language the planner's reply actions are written in, or nil.
 Nil lets the model choose freely; a non-nil value is stated to the
@@ -469,12 +488,13 @@ shell is only for reading.
 "
    scalpel-prompt--substitute-pattern-rule
    "
-When the conversation shows a redaction placeholder -- text of the
-form {{NAME}} or another opaque marker standing in for secret
+When the conversation shows a redaction placeholder -- text of
+the form {{NAME}} or another opaque marker standing in for secret
 content -- copy it back character for character: never paraphrase
 it, translate it, or replace it with a guessed or remembered
 value.  The tooling restores the real value only from the exact
-spelling, so any deviation means the wrong text lands in the file.
+spelling, so any deviation means the wrong text lands in the
+file.
 "
    scalpel-prompt--redaction-rule
    "
@@ -590,6 +610,7 @@ exception -- its text field carries the whole file by design.
 Never emit code or diff text in this response.
 "
    scalpel-prompt--reply-brevity-rule
+   scalpel-prompt--action-budget-rule
    (if scalpel-prompt-reply-language
        (concat "\n" (scalpel-prompt--reply-language-rule))
      ""))
