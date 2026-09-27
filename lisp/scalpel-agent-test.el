@@ -1078,7 +1078,7 @@ inside the same system message."
       (should system)
       (should (string-match-p (regexp-quote scalpel-prompt-cod-prompt)
                               system))
-      (should (string-match-p (regexp-quote scalpel-prompt--example)
+      (should (string-match-p (regexp-quote scalpel-prompt-rules--example)
                               system))
       (should (string-match-p
                (regexp-quote scalpel-prompt-rules--reply-brevity)

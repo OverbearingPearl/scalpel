@@ -75,11 +75,11 @@
          (file (expand-file-name "foo.el" dir)))
     (with-temp-file (expand-file-name "prompt.elisp" dir)
       (insert "user rule"))
-    (let ((scalpel-prompt-language-rules
+    (let ((scalpel-prompt-programming-language-rules
            '(("\\.el\\'" . "builtin rule"))))
       (should (equal (scalpel-user-prompt-with-language-rule file)
                      "builtin rule\n\n<!-- Scalpel user prompt: prompt.elisp -->\n\nuser rule"))
-      (let ((scalpel-prompt-language-rules nil))
+      (let ((scalpel-prompt-programming-language-rules nil))
         (should (equal (scalpel-user-prompt-with-language-rule file)
                        "<!-- Scalpel user prompt: prompt.elisp -->\n\nuser rule"))))))
 

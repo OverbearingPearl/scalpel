@@ -189,7 +189,7 @@ nil as a prompt name would crash `expand-file-name'."
   "Combine the registered language rule and the user prompt text for FILE.
 This is the text appended to a per-file replacement or creation
 round; either piece may be absent."
-  (let ((rule (scalpel-prompt-language-rule-for-file file))
+  (let ((rule (scalpel-prompt-programming-language-rule-for-file file))
         (user (scalpel-user-prompt-for-file file)))
     (cond ((and rule user) (concat rule "\n\n" user))
           (rule)

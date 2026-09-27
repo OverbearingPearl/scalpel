@@ -14,20 +14,6 @@
 
 ;;; Code:
 
-(defconst scalpel-prompt--example
-  "[[action]]\ntool = 'reply'\ntext = 'hello'"
-  "Correct-response example embedded in `scalpel-prompt-system-prompt'.
-A TOML document accepted by `scalpel-llm-dialect--default-parse':
-a single [[action]] array-of-tables entry.  Literal strings are
-the default form, and a double quote inside one is content, not
-a delimiter.  Double-quoted strings are accepted for any value
-the TOML parser accepts, including the one case a literal string
-cannot hold -- a value containing three consecutive single
-quotes.  Structural contract shared by the prompt, which shows
-it, and the test that parses it: an example the parser rejects
-would teach the planner a shape that fails, and the prompt would
-then be describing a system other than this one.")
-
 (defcustom scalpel-prompt-cod-prompt
   "You are a coding agent operating inside Emacs via the Scalpel package.
 
@@ -61,14 +47,17 @@ user-facing reply only: reasoning, planning, code, comments and
 prompt wording stay in the language best suited to them.\n")
 
 (defun scalpel-prompt--reply-language-rule ()
-  "Return the reply-language rule appended by `scalpel-prompt-system-prompt'.
-Returns nil when `scalpel-prompt-reply-language' is unset, so the
-model chooses freely; otherwise returns a paragraph stating the
-chosen language as a constraint on reply text only."
+  "Return the natural-language reply-language rule for the system prompt.
+The result is appended by `scalpel-prompt-system-prompt'.  Returns
+nil when `scalpel-prompt-reply-language' is unset, so the model
+chooses freely; otherwise returns a paragraph stating the chosen
+language as a constraint on reply text only.  The rule text is
+formatted through the constant
+`scalpel-prompt-rules--reply-language-format' from
+scalpel-prompt-rules.el."
   (when scalpel-prompt-reply-language
-    (concat
-     (format scalpel-prompt--reply-language-rule-header
-             scalpel-prompt-reply-language))))
+    (format scalpel-prompt-rules--reply-language-format
+            scalpel-prompt-reply-language)))
 
 (defconst scalpel-prompt--decide-for-me
   "The choice is yours: if you've reached a conclusion and judge
@@ -157,37 +146,27 @@ this same text.
 This is a structural contract shared with `scalpel-console--run-rounds';
 changing the wording here requires checking that caller.")
 
-(defconst scalpel-prompt--format-rule
-  "Wrap generated prose in strings, docstrings, and comments readably
-within 80 columns at natural word boundaries.
-
-Preserve non-prose or layout-sensitive content, including regular
-expressions, JSON, code examples, URLs, tables, structured data, and
-exact-spacing text, even when it exceeds 80 columns."
-  "Language-agnostic formatting rule for generated text.
-Language-specific formatting belongs to per-language prompt providers.")
-
-(defvar scalpel-prompt-language-rules nil
+(defvar scalpel-prompt-programming-language-rules nil
   "Store language-specific prompt rules as filename regexp entries.
 
 Each entry maps a filename regexp to a prompt string.  Later registration
 replaces an entry having the same regexp.")
 
-(defun scalpel-prompt-register-prompt-language-rule (filename-regexp rule)
+(defun scalpel-prompt-register-programming-language-rule (filename-regexp rule)
   "Register RULE as the prompt rule for FILENAME-REGEXP.
 FILENAME-REGEXP is a regular expression matched against a file name.
 RULE is the language-specific prompt rule used for matching files."
-  (setq scalpel-prompt-language-rules
+  (setq scalpel-prompt-programming-language-rules
         (cons (cons filename-regexp rule)
               (assoc-delete-all filename-regexp
-                                scalpel-prompt-language-rules))))
+                                scalpel-prompt-programming-language-rules))))
 
-(defun scalpel-prompt-language-rule-for-file (file)
+(defun scalpel-prompt-programming-language-rule-for-file (file)
   "Return the rule string registered for FILE's language, or nil.
 The registry contains (FILENAME-REGEXP . RULE) pairs.  A rule
 matches when FILE, the full absolute name, matches the entry's
 regexp."
-  (assoc-default file scalpel-prompt-language-rules
+  (assoc-default file scalpel-prompt-programming-language-rules
                  (lambda (regexp key)
                    (string-match-p regexp key))))
 
@@ -232,9 +211,10 @@ exactly of that token signals that nothing should be created.")
 (defcustom scalpel-prompt-system-prompt
   (concat
    scalpel-prompt-rules--document "\n"
+   scalpel-prompt-rules--example "\n"
    scalpel-prompt-rules--actions "\n"
    scalpel-prompt-rules--string-syntax "\n"
-   scalpel-prompt--format-rule "\n"
+   scalpel-prompt-rules--format "\n"
    scalpel-prompt-rules--symbol-name "\n"
    scalpel-prompt-rules--shell "\n"
    scalpel-prompt-rules--reading "\n"

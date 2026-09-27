@@ -59,8 +59,8 @@ outright failure, while `scalpel-llm-dialect--default-parse' digs
 the array out of surrounding prose and a test asserts it does, so
 the prompt described a system other than this one."
   (let ((parsed (scalpel-llm-dialect--default-parse
-                 scalpel-prompt--example)))
-    (ert-info ((format "Example: %S" scalpel-prompt--example))
+                 scalpel-prompt-rules--example)))
+    (ert-info ((format "Example: %S" scalpel-prompt-rules--example))
       (should (equal (plist-get (car parsed) :tool) "reply")))))
 
 (ert-deftest scalpel-prompt-test-system-prompt-denies-tool-calling ()

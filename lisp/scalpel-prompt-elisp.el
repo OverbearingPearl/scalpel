@@ -25,7 +25,7 @@
    "backtracking constraints to prevent unintended match expansion.")
   "Formatting guidance for generated Emacs Lisp text.")
 
-(scalpel-prompt-register-prompt-language-rule
+(scalpel-prompt-register-programming-language-rule
  "\\.el\\'"
  scalpel-prompt-elisp--format-rule)
 
