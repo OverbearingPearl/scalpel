@@ -31,6 +31,7 @@
 (require 'scalpel-llm-dialect)
 (require 'scalpel-llm-deepseek)
 (require 'scalpel-llm-laguna)
+(require 'scalpel-diagnose)
 (require 'scalpel-locate)
 (require 'scalpel-execute)
 (require 'scalpel-sandbox)
@@ -717,17 +718,6 @@ own: everything the LLM may rely on arrives here."
            "User instruction:\n"
            instruction)))
 
-(defconst scalpel-agent--dialect-error-types
-  '((scalpel-llm-dialect-tool-call-error . tool-call)
-    (scalpel-llm-dialect-prose-reply-error . prose))
-  "Reply-dialect conditions, and the planner error type each becomes.
-Both conditions carry their whole message as their single data
-element, so it is read through
-`scalpel-llm-dialect-error-message' rather than
-`error-message-string'.  The types stay apart because they degrade
-differently: a prose reply is delivered as a reply action, while a
-tool-call reply stays an error the console advises on.")
-
 (defun scalpel-agent-plan (instruction history on-success on-error)
   "Ask the LLM for a structured plan for INSTRUCTION, without blocking.
 HISTORY is the conversation text recorded before INSTRUCTION, or
@@ -735,7 +725,7 @@ nil.  ON-SUCCESS receives the projected action list.  ON-ERROR
 receives a plist (:type SYMBOL :message STRING): `parse' when the
 reply does not yield a valid action array, `tool-call' when it
 answered in another convention, `prose' when the reply is pure
-prose -- the conditions `scalpel-agent--dialect-error-types' names,
+prose -- the conditions `scalpel-diagnose-dialect-error-types' names,
 whose messages are read through `scalpel-llm-dialect-error-message'
 -- otherwise the type forwarded by `scalpel-llm-request-async'.
 Forwarding a prose reply to ON-ERROR instead of delivering it keeps
@@ -754,7 +744,7 @@ planner error."
                                         (scalpel-llm-dialect-parse raw))))
                      (error
                       (let* ((dialect (assq (car err)
-                                            scalpel-agent--dialect-error-types))
+                                            scalpel-diagnose-dialect-error-types))
                              ;; A dialect condition carries its whole
                              ;; message as its data, so it is read
                              ;; verbatim: `error-message-string' would

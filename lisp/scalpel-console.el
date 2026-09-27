@@ -43,6 +43,7 @@
 (require 'scalpel-commit)
 (require 'scalpel-agent)
 (require 'scalpel-diagnose)
+(require 'scalpel-diagnose-advice)
 (require 'scalpel-token)
 
 (defcustom scalpel-console-buffer-name-format "*scalpel: %s*"
@@ -1574,7 +1575,7 @@ holds the real paths the user typed."
                                   ((eq category 'planner)
                                    (format "Scalpel planner error: %s\n%s\n\n"
                                            err-message
-                                           (scalpel-diagnose-advice err)))
+                                           (scalpel-diagnose-advice-plist err)))
                                   ((eq category 'context)
                                    ;; Retry advice is useless here: the
                                    ;; instruction will fail again until the
@@ -1584,7 +1585,7 @@ holds the real paths the user typed."
                                    ;; code on the render path.
                                    (format "Scalpel context error: %s\n%s\n\n"
                                            err-message
-                                           (scalpel-diagnose-advice err)))
+                                           (scalpel-diagnose-advice-plist err)))
                                   (t
                                    (format "Scalpel error: %s\n\n"
                                            err-message)))))

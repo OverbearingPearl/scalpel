@@ -17,6 +17,7 @@
 
 (require 'ert)
 (require 'scalpel-diagnose)
+(require 'scalpel-diagnose-advice)
 
 (ert-deftest scalpel-diagnose-test-planner-types-are-planner-category ()
   (dolist (type scalpel-diagnose-planner-types)
@@ -44,14 +45,14 @@
 (ert-deftest scalpel-diagnose-test-advice-for-unknown-type-is-nil ()
   (should (stringp (scalpel-diagnose-advice-for 'some-unknown-type)))
   (should (equal (scalpel-diagnose-advice-for 'some-unknown-type)
-                 (cdr (assq 'executor scalpel-diagnose-category-advice)))))
+                 (cdr (assq 'executor scalpel-diagnose-advice-category-table)))))
 
 (ert-deftest scalpel-diagnose-test-advice-accepts-an-error-plist ()
   (should (equal (scalpel-diagnose-advice-for 'tool-call)
-                 (cdr (assq 'tool-call scalpel-diagnose-advice))))
-  (should (equal (scalpel-diagnose-advice (list :type 'malformed))
+                 (cdr (assq 'tool-call scalpel-diagnose-advice-table))))
+  (should (equal (scalpel-diagnose-advice-plist (list :type 'malformed))
                  (scalpel-diagnose-advice-for 'malformed)))
-  (should (equal (scalpel-diagnose-advice (list :type 'unknown))
+  (should (equal (scalpel-diagnose-advice-plist (list :type 'unknown))
                  (scalpel-diagnose-advice-for 'executor))))
 
 (provide 'scalpel-diagnose-test)
