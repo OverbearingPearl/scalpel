@@ -125,22 +125,6 @@ matching registration falls back to the default parser."
                                    scalpel-llm-dialect-providers)
            when entry return (cdr entry)))
 
-(defun scalpel-llm-dialect--visible-raw (raw)
-  "Render RAW as a human-friendly string for direct console display.
-The result is meant to be read by a human, not by the reader: it keeps
-newlines, tabs and every non-ASCII character (including Chinese)
-exactly as written, matching the original reply's shape, with no
-read-syntax escaping.  Only control characters the console cannot show
-are dropped.  The filtering is delegated to
-`scalpel-llm-dialect--readable-raw'; the result is then wrapped in a
-TOML code fence (an opening \"toml\" line and a closing line of three
-backticks) so the block is visually distinct in the console for the
-tool-call, truncated and invalid-TOML error branches, the only
-callers."
-  (concat "```toml\n"
-          (scalpel-llm-dialect--readable-raw raw)
-          "\n```"))
-
 (defun scalpel-llm-dialect--comment-prose (raw)
   "Comment out the prose note ahead of the first TOML table.
 Planners sometimes prepend a status sentence before the
@@ -190,24 +174,19 @@ ERR is a `scalpel-llm-dialect-tool-call-error' condition value, as
 first data element.  That element is read directly rather than
 through `error-message-string', which renders a condition defined
 by `define-error' as \"MESSAGE: DATA\" with DATA printed by `%S':
-the sentence would come back doubled, and a reply that
-`scalpel-llm-dialect--visible-raw' escaped on purpose would be
-re-escaped into a form the user cannot read."
+the sentence would come back doubled."
   (cadr err))
 
 (defun scalpel-llm-dialect--readable-raw (raw)
-  "Return RAW as it was written, for a reply that is prose.
-The reply is the answer here, not a failed parse: there is no syntax
-to inspect, and escaping it -- as `scalpel-llm-dialect--visible-raw'
-does for the branches that do have one -- turns a multi-paragraph
-answer into a single line of \\n and \\uXXXX escapes, which is what
-made a prose reply unreadable in the console.  Newlines and tabs are
-kept, because they are the answer's own shape.  Every other control
-character is dropped: the console would ring its bell for one, and a
-C1 byte would hide the text after it.  The filter mirrors
-`scalpel-agent--printable-output', which cannot be reused here --
-`scalpel-agent' requires this module, so the dependency runs the
-other way."
+  "Return RAW as written, for display inside an error message.
+Showing a reply this way keeps it readable: escaping would flatten a
+multi-paragraph reply into a single line of escaped newline and
+unicode escapes.  Newlines and tabs are kept, because they are the
+reply's own shape.  Every other control character is dropped: the
+console would ring its bell for one, and a C1 byte would hide the
+text after it.  The filter mirrors `scalpel-agent--printable-output',
+which cannot be reused here -- `scalpel-agent' requires this module,
+so the dependency runs the other way."
   (mapconcat #'char-to-string
              (cl-remove-if-not
               (lambda (char)
@@ -234,7 +213,8 @@ value at all -- prose, where there is no document to be invalid --
 and one that was simply not valid TOML.  RAW is the reply as
 received.  A prose reply is shown as it was written, because it is
 the answer rather than a failed parse; the other branches show it
-escaped so the console renders the exact reply text.
+as written too, set off by blank lines so the console renders the
+exact reply text.
 
 Classification is fence-based: the reply's TOML document lives
 inside triple-quote fences, so an even number of ''' fences means
@@ -284,8 +264,8 @@ plain `user-error'."
               (list
                (format (concat "Scalpel: planner used tool-call syntax "
                                "instead of the TOML action document; nothing "
-                               "was executed.  Reply was: %s")
-                       (scalpel-llm-dialect--visible-raw raw)))))
+                               "was executed.  Reply was:\n%s")
+                       (concat "\n" (scalpel-llm-dialect--readable-raw raw) "\n")))))
      ((or (cl-oddp fences)
           (and (zerop fences)
                (string-match-p "^\\[\\[action\\]\\]" raw)))
@@ -308,12 +288,12 @@ plain `user-error'."
                    "Rephrase the text without them, or write that "
                    "value as a TOML double-quoted string.  Reply "
                    "was:\n%s")
-           (scalpel-llm-dialect--visible-raw raw))
+           (concat "\n" (scalpel-llm-dialect--readable-raw raw) "\n"))
         (user-error
          (concat "Scalpel: planner reply was cut off before its TOML document "
                  "closed (likely the backend's output limit); nothing was "
                  "executed.  Reply was:\n%s")
-         (scalpel-llm-dialect--visible-raw raw))))
+         (concat "\n" (scalpel-llm-dialect--readable-raw raw) "\n"))))
      ;; No fence opened anywhere in the reply and no `key = ' assignment
      ;; either, so there is no document that could be invalid: the
      ;; planner answered in prose.  Naming a syntax error here would
@@ -350,10 +330,10 @@ plain `user-error'."
                "escapes at all -- nothing was executed.  A value "
                "holding a single quote must be written as a "
                "triple-quoted literal instead.  Reply was:\n%s")
-       (scalpel-llm-dialect--visible-raw raw)))
+       (concat "\n" (scalpel-llm-dialect--readable-raw raw) "\n")))
      (t
       (user-error "Scalpel: planner returned invalid TOML:\n%s"
-                  (scalpel-llm-dialect--visible-raw raw))))))
+                  (concat "\n" (scalpel-llm-dialect--readable-raw raw) "\n"))))))
 
 (defun scalpel-llm-dialect--default-parse (raw)
   "Parse RAW to a list of action plists with the default dialect.
