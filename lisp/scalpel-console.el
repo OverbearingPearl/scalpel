@@ -677,6 +677,7 @@ Not a user entry point: open a console with `scalpel-open', which
 also anchors the buffer to a root directory."
   (setq-local electric-indent-mode nil)
   (setq-local comment-start "")
+  (electric-quote-mode -1)
   (setq buffer-read-only nil)
   ;; Yank restores the killed text's properties, so text killed from a
   ;; tagged region (header, context tree, a report) would paste back
