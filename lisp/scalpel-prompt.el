@@ -30,7 +30,7 @@ reference is resolvable at load time."
   :type 'string
   :group 'scalpel)
 
-(require 'scalpel-prompt-rules)
+(require 'scalpel-prompt-rule)
 
 (defcustom scalpel-prompt-reply-language nil
   "Language the planner's reply actions are written in, or nil.
@@ -53,10 +53,10 @@ nil when `scalpel-prompt-reply-language' is unset, so the model
 chooses freely; otherwise returns a paragraph stating the chosen
 language as a constraint on reply text only.  The rule text is
 formatted through the constant
-`scalpel-prompt-rules--reply-language-format' from
-scalpel-prompt-rules.el."
+`scalpel-prompt-rule--reply-language-format' from
+scalpel-prompt-rule.el."
   (when scalpel-prompt-reply-language
-    (format scalpel-prompt-rules--reply-language-format
+    (format scalpel-prompt-rule--reply-language-format
             scalpel-prompt-reply-language)))
 
 (defconst scalpel-prompt--decide-for-me
@@ -210,26 +210,26 @@ exactly of that token signals that nothing should be created.")
 
 (defcustom scalpel-prompt-system-prompt
   (concat
-   scalpel-prompt-rules--document "\n"
-   scalpel-prompt-rules--example "\n"
-   scalpel-prompt-rules--actions "\n"
-   scalpel-prompt-rules--string-syntax "\n"
-   scalpel-prompt-rules--format "\n"
-   scalpel-prompt-rules--symbol-name "\n"
-   scalpel-prompt-rules--shell "\n"
-   scalpel-prompt-rules--reading "\n"
-   scalpel-prompt-rules--feedback-fence "\n"
-   scalpel-prompt-rules--shell-hygiene "\n"
-   scalpel-prompt-rules--file-actions "\n"
-   scalpel-prompt-rules--substitute "\n"
-   scalpel-prompt-rules--substitute-pattern "\n"
-   scalpel-prompt-rules--redaction "\n"
-   scalpel-prompt-rules--scope "\n"
-   scalpel-prompt-rules--whole-block "\n"
-   scalpel-prompt-rules--instruction "\n"
-   scalpel-prompt-rules--reply-brevity "\n"
-   scalpel-prompt-rules--no-tail "\n"
-   scalpel-prompt-rules--action-budget
+   scalpel-prompt-rule--document "\n"
+   scalpel-prompt-rule--example "\n"
+   scalpel-prompt-rule--actions "\n"
+   scalpel-prompt-rule--string-syntax "\n"
+   scalpel-prompt-rule--format "\n"
+   scalpel-prompt-rule--symbol-name "\n"
+   scalpel-prompt-rule--shell "\n"
+   scalpel-prompt-rule--reading "\n"
+   scalpel-prompt-rule--feedback-fence "\n"
+   scalpel-prompt-rule--shell-hygiene "\n"
+   scalpel-prompt-rule--file-actions "\n"
+   scalpel-prompt-rule--substitute "\n"
+   scalpel-prompt-rule--substitute-pattern "\n"
+   scalpel-prompt-rule--redaction "\n"
+   scalpel-prompt-rule--scope "\n"
+   scalpel-prompt-rule--whole-block "\n"
+   scalpel-prompt-rule--instruction "\n"
+   scalpel-prompt-rule--reply-brevity "\n"
+   scalpel-prompt-rule--no-tail "\n"
+   scalpel-prompt-rule--action-budget
    (if scalpel-prompt-reply-language
        (concat "\n" (scalpel-prompt--reply-language-rule))
      ""))

@@ -1078,10 +1078,10 @@ inside the same system message."
       (should system)
       (should (string-match-p (regexp-quote scalpel-prompt-cod-prompt)
                               system))
-      (should (string-match-p (regexp-quote scalpel-prompt-rules--example)
+      (should (string-match-p (regexp-quote scalpel-prompt-rule--example)
                               system))
       (should (string-match-p
-               (regexp-quote scalpel-prompt-rules--reply-brevity)
+               (regexp-quote scalpel-prompt-rule--reply-brevity)
                system)))))
 
 (ert-deftest scalpel-agent-test-shell-runs-command-through-a-shell ()

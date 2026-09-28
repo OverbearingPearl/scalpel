@@ -264,7 +264,7 @@ of it can be used.  A reader of the buffer sees nothing wrong, and
 neither does a reader of the parsed forms; only a check that looks
 at what follows a docstring finds it, which is this one."
   (let* ((lisp-dir (scalpel-utils-test--lisp-directory))
-         (files (append (directory-files lisp-dir t "\\.el\\'")
+         (files (append (directory-files lisp-dir t "/[^.][^/]*\\.el\\'")
                         (directory-files (expand-file-name ".." lisp-dir)
                                          t "\\`scalpel[^/]*\\.el\\'"))))
     (ert-info ((format "Files: %S" files))
