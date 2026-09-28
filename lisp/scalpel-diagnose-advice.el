@@ -41,6 +41,13 @@ structural check (:balanced-p), so a batch rewrite there cannot be
 validated.  Redo the edit as one block-edit per named definition
 next round; the refusal is what frees the retry, so nothing is
 broken.  To try again anyway: C-c C-e")
+    (pattern-no-match
+     . "the pattern matched nothing in any file, so nothing was
+executed.  The target text may already have been rewritten by an
+earlier round, leaving the pattern stale.  The planner must
+re-read the file with file-peek to confirm the current text
+before rewriting the pattern or giving up; resending the
+identical action only repeats the refusal")
     (tool-call
      . "the planner violated the output contract by wrapping its answer
 in XML-style tags instead of writing the TOML action document

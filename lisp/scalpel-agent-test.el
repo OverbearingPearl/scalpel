@@ -522,7 +522,7 @@ keeps the failure loud."
           (scalpel-agent-file-read-max-bytes 10))
       (let ((err (condition-case e
                      (progn (scalpel-agent-file-read this-file "foo") nil)
-                   (user-error e))))
+                   ((user-error scalpel-planner-error) e))))
         (ert-info ((format "Error: %S" err))
           (should err)
           (should (string-match-p "over the read limit"
@@ -1533,7 +1533,7 @@ named, so the refusal hands back the facts instead."
                            (progn (scalpel-agent--resolve-symbol
                                    (car scalpel-agent--context-files) "dup")
                                   nil)
-                         (user-error e))))
+                         ((user-error scalpel-planner-error) e))))
               (ert-info ((format "Error: %S" err))
                 (should err)
                 (should (string-match-p "several context files"
@@ -1560,7 +1560,7 @@ file next round, so \"not found\" alone is a dead end."
                      (progn (scalpel-agent--resolve-symbol
                              (car scalpel-agent--context-files) "gone")
                             nil)
-                   (user-error e))))
+                   ((user-error scalpel-planner-error) e))))
         (ert-info ((format "Error: %S" err))
           (should err)
           (should (string-match-p "nor anywhere in the context"
@@ -1589,7 +1589,7 @@ one asked for, and the requested spelling is not among them."
                              (car scalpel-agent--context-files)
                              "llm-pick-view--main")
                             nil)
-                   (user-error e))))
+                   ((user-error scalpel-planner-error) e))))
         (ert-info ((format "Error: %S" err))
           (should err)
           (let ((message (error-message-string err)))
@@ -1642,7 +1642,7 @@ away -- `llm-pick-view--cache-dir' was asked for while the file held
                              (car scalpel-agent--context-files)
                              "llm-pick-view--cache-dir")
                             nil)
-                   (user-error e))))
+                   ((user-error scalpel-planner-error) e))))
         (ert-info ((format "Error: %S" err))
           (should err)
           (let ((message (error-message-string err)))
@@ -1668,7 +1668,7 @@ sentence would send the planner after a definition it never named."
                              (car scalpel-agent--context-files)
                              "llm-pick-view--cache-dir")
                             nil)
-                   (user-error e))))
+                   ((user-error scalpel-planner-error) e))))
         (should err)
         (should-not (string-match-p "only the separators differ"
                                     (error-message-string err)))))))
@@ -1687,7 +1687,7 @@ context, and the two must not share a message."
                      (progn (scalpel-agent--resolve-symbol
                              (car scalpel-agent--context-files) "gone")
                             nil)
-                   (user-error e))))
+                   ((user-error scalpel-planner-error) e))))
         (ert-info ((format "Error: %S" err))
           (should err)
           (should (string-match-p "reads no definition in it"
@@ -1704,7 +1704,7 @@ out, and cost a round."
       (let ((err (condition-case e
                      (progn (scalpel-agent--resolve-symbol this-file "gone")
                             nil)
-                   (user-error e))))
+                   ((user-error scalpel-planner-error) e))))
         (ert-info ((format "Error: %S" err))
           (should err)
           (should (string-match-p "ask the user to add it"
@@ -1929,7 +1929,7 @@ next."
                           (progn (scalpel-agent-file-substitute
                                   (list file) "foo" "bar")
                                  nil)
-                        (user-error e))))
+                        ((user-error scalpel-planner-error) e))))
             (ert-info ((format "File %S; error: %S" file err))
               (should err)
               (let ((message (error-message-string err)))
@@ -1955,10 +1955,11 @@ and a refusal without the pattern is a dead end for the user too."
                                  (list (file-truename f1))
                                  "no-such-token" "x")
                                 nil)
-                       (user-error e))))
+                       (scalpel-planner-error e))))
             (ert-info ((format "Error: %S" err))
               (should err)
-              (let ((message (error-message-string err)))
+              (let ((message (plist-get (cdr err) :message)))
+                (should (stringp message))
                 (should (string-match-p "no-such-token" message))
                 (should (string-match-p "replacement \"x\"" message))
                 (should (string-match-p
@@ -1982,7 +1983,7 @@ extent nothing downstream could know."
                          (progn (scalpel-agent-file-substitute
                                  files "(defun keep" "(defun keep (")
                                 nil)
-                       (user-error e))))
+                       ((user-error scalpel-planner-error) e))))
             (ert-info ((format "Error: %S" err))
               (should err))
             ;; The refused action names the pair it was built from, so
@@ -2086,10 +2087,11 @@ directly."
                        pattern
                        ";; Package-Requires: ((emacs \"28.1\"))")
                       nil)
-                  (user-error e))))
+                  (scalpel-planner-error e))))
       (ert-info ((format "Error: %S" err))
         (should err)
-        (let ((message (error-message-string err)))
+        (should (eq (plist-get (cdr err) :type) 'pattern-no-match))
+        (let ((message (plist-get (cdr err) :message)))
           (ert-info ((format "Message:\n%S" message))
             (should (string-match-p "matched nothing" message))
             ;; The file's own line, quoted: the entry the pattern was
@@ -2116,7 +2118,7 @@ as the text the pattern was aiming at."
                       (scalpel-agent-file-substitute
                        (list resolved) "zzz-absent-identifier" "x")
                       nil)
-                  (user-error e))))
+                  ((user-error scalpel-planner-error) e))))
       (ert-info ((format "Error: %S" err))
         (should err)
         (should-not (string-match-p "closest lines"
@@ -2144,7 +2146,7 @@ planner to compare against."
                        "llm-pick-source-register 'artificial-analysis :kind 'other"
                        "x")
                       nil)
-                  (user-error e))))
+                  ((user-error scalpel-planner-error) e))))
       (ert-info ((format "Error: %S" err))
         (should err)
         (let ((message (error-message-string err)))
@@ -2171,7 +2173,7 @@ difference that is not there."
                       (scalpel-agent-file-substitute
                        (list resolved) "zzz&zzz" "x")
                       nil)
-                  (user-error e))))
+                  ((user-error scalpel-planner-error) e))))
       (ert-info ((format "Error: %S" err))
         (should err)
         (let ((message (error-message-string err)))
@@ -2210,7 +2212,7 @@ refusal still carries for that."
                       (scalpel-agent-file-substitute
                        (list resolved) pattern replacement)
                       nil)
-                  (user-error e))))
+                  ((user-error scalpel-planner-error) e))))
       (ert-info ((format "Error: %S" err))
         (should err)
         (let ((message (error-message-string err)))
@@ -2332,7 +2334,7 @@ file holds is then the one thing the message never shows."
                                    (car scalpel-agent--context-files)
                                    "target-spec")
                                   nil)
-                         (user-error e))))
+                         ((user-error scalpel-planner-error) e))))
               (ert-info ((format "Error: %S" err))
                 (should err)
                 (let ((message (error-message-string err)))
@@ -2370,7 +2372,7 @@ the definition list below the header."
                      (progn (scalpel-agent--resolve-symbol
                              (car scalpel-agent--context-files) "thing")
                             nil)
-                   (user-error e))))
+                   ((user-error scalpel-planner-error) e))))
         (ert-info ((format "Error: %S" err))
           (should err)
           (let ((message (error-message-string err)))

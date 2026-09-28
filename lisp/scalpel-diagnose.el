@@ -57,13 +57,16 @@ did not follow the action contract."
 
 (defconst scalpel-diagnose-self-heal-types
   '(parse malformed no-replacement no-such-symbol pattern-no-match
-          bad-path unbalanced no-validation)
+          bad-path unbalanced no-validation missing-field)
   "Planner error types the console may retry automatically.
 Their failure reports carry enough context (near-miss lines, closest
 symbols) for the model to correct its own reply next round.
 NO-VALIDATION is the capability gate's refusal -- its message already
 names the remedy (block-edit), so the retried round can plan the
 right command from it.
+MISSING-FIELD is retriable because the error names the omitted field,
+so a retry with the error text in the conversation can re-emit the
+document with the field filled.
 PROSE is deliberately excluded: an output-contract violation where
 the planner replied with prose instead of the TOML action document.
 Retrying the identical prompt only repeats the prose and burns
