@@ -1568,10 +1568,9 @@ holds the real paths the user typed."
                            ;; round failure that says something about the planner
                            ;; -- malformed TOML, for one -- stays in the history.
                            (scalpel-console--append
-                            (format "Scalpel error: %s"
+                            (concat "Scalpel error: "
                                     (scalpel-redact-restore (or (plist-get err :message) ""))))
-                         (let* ((text-quoting-style 'straight)
-                                (inhibit-read-only t)
+                         (let* ((inhibit-read-only t)
                                 (err-beg (point))
                                 ;; Planner errors may quote the raw reply,
                                 ;; which was sent redacted: restore before
@@ -1583,9 +1582,11 @@ holds the real paths the user typed."
                                 (header
                                  (cond
                                   ((eq category 'planner)
-                                   (format "Scalpel [planner error]: %s\n%s\n\n"
+                                   (concat "Scalpel [planner error]: "
                                            err-message
-                                           (scalpel-diagnose-advice-plist err)))
+                                           "\n"
+                                           (scalpel-diagnose-advice-plist err)
+                                           "\n\n"))
                                   ((eq category 'context)
                                    ;; Retry advice is useless here: the
                                    ;; instruction will fail again until the
@@ -1593,12 +1594,15 @@ holds the real paths the user typed."
                                    ;; remedy must still be stated, so the
                                    ;; category-advice table is no longer dead
                                    ;; code on the render path.
-                                   (format "Scalpel [context error]: %s\n%s\n\n"
+                                   (concat "Scalpel [context error]: "
                                            err-message
-                                           (scalpel-diagnose-advice-plist err)))
+                                           "\n"
+                                           (scalpel-diagnose-advice-plist err)
+                                           "\n\n"))
                                   (t
-                                   (format "Scalpel [bug]: %s\n\n"
-                                           err-message)))))
+                                   (concat "Scalpel [bug]: "
+                                           err-message
+                                           "\n\n")))))
                            (scalpel-console--insert-tagged
                             header
                             'assistant)

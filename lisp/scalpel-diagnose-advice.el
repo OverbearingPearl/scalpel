@@ -107,7 +107,9 @@ types fall to the executor entry, which that table always holds."
 
 The string contains a mechanically repaired version of the failed input,
 or nil when no deterministic fix is possible.
-Applies `scalpel-redact-apply` before returning."
+In the parse branch, advice blocks the model echoed back are
+disinfected before repair.
+Applies `scalpel-redact-apply' before returning."
   (let* ((type (plist-get error-plist :type))
          (message (plist-get error-plist :message))
          (input (plist-get error-plist :input))
@@ -127,12 +129,40 @@ Applies `scalpel-redact-apply` before returning."
                           lines)))
         (setq content (mapconcat #'identity toml-lines "\n"))))
      ((eq type 'parse)
-      (let ((lines (split-string input "\n")))
+      (let* ((lines (split-string input "\n"))
+             (fence-open-rx
+              (rx bol (0+ blank)
+                  (or "```" "'''" "‘‘‘" "’’’")
+                  (0+ blank) "scalpel suggestion"))
+             (fence-close-rx
+              (rx bol (0+ blank)
+                  (or "```" "'''" "‘‘‘" "’’’")
+                  (0+ blank) eol)))
         (while (and lines (not (string-match-p "^\\[\\[" (car lines))))
           (setq lines (cdr lines)))
         (while (and lines
-                    (string-match (rx bol (0+ blank) "]]" (0+ blank) eol)
-                                  (car (last lines))))
+                    (string-match-p (rx bol (0+ blank) "]]" (0+ blank) eol)
+                                    (car (last lines))))
+          (setq lines (butlast lines)))
+        ;; Strip any echoed-back advice block: from a fence opener line
+        ;; labelled "scalpel suggestion" through the next closing fence.
+        (let ((kept nil)
+              (skipping nil))
+          (dolist (line lines)
+            (cond
+             ((and (not skipping)
+                   (string-match-p fence-open-rx line))
+              (setq skipping t))
+             ((and skipping
+                   (string-match-p fence-close-rx line))
+              (setq skipping nil))
+             ((not skipping)
+              (push line kept))))
+          (setq lines (nreverse kept)))
+        ;; Strip dangling closing fence lines left by the echoed error
+        ;; wrapper at the end of the input.
+        (while (and lines
+                    (string-match-p fence-close-rx (car (last lines))))
           (setq lines (butlast lines)))
         (setq content (mapconcat #'identity lines "\n"))))
      ((eq type 'no-such-symbol)
@@ -161,7 +191,7 @@ Applies `scalpel-redact-apply` before returning."
      (t nil))
     (when (and content (not (string-empty-p content)))
       (scalpel-redact-apply
-       (format "```scalpel suggestion\n%s\n```" content)))))
+       (concat "```scalpel suggestion\n" content "\n```")))))
 
 (provide 'scalpel-diagnose-advice)
 

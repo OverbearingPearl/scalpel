@@ -1956,12 +1956,16 @@ whole match, and prints a SCALPEL-COUNT line followed by the rewritten
 text on stdout.")
 
 (defun scalpel-agent--perl-invocation (pattern replacement)
-  "Return a one-string description of the complete perl command.
+  "Return a one-string, pasteable description of the complete perl command.
 The command consists of the two environment assignments
 SCALPEL_PATTERN=... and SCALPEL_REPLACEMENT=..., with the values
 formatted the same way `scalpel-agent--perl-substitute' builds its
 process environment, followed by \"perl -e\" and the script text from
-`scalpel-agent--perl-script'.
+`scalpel-agent--perl-script'.  All three pieces are passed through
+`shell-quote-argument', so the result can be pasted as-is into a
+shell: no Emacs-side escaping or %S quoting is applied, and quotes,
+spaces, newlines and backslashes in the pattern, replacement and
+script survive verbatim.
 
 A refusal that shows the whole command lets the next attempt replay
 it directly, without re-deriving the quoting or the environment
@@ -1970,9 +1974,9 @@ assignments.
 PATTERN and REPLACEMENT may be anything the action carried,
 including nil."
   (format "%s %s perl -e %s"
-          (format "SCALPEL_PATTERN=%s" pattern)
-          (format "SCALPEL_REPLACEMENT=%s" replacement)
-          scalpel-agent--perl-script))
+          (format "SCALPEL_PATTERN=%s" (shell-quote-argument (format "%s" pattern)))
+          (format "SCALPEL_REPLACEMENT=%s" (shell-quote-argument (format "%s" replacement)))
+          (shell-quote-argument scalpel-agent--perl-script)))
 
 (defun scalpel-agent--perl-substitute (pattern replacement text)
   "Apply PATTERN -> REPLACEMENT over TEXT with perl 5.x.

@@ -374,14 +374,21 @@ Never emit code or diff text in this response."
   "Block instructions are plain prose; code travels in the reply.")
 
 (defconst scalpel-prompt-rule--reply-brevity
-  "Keep a reply action's text short: at most a few sentences
-stating the conclusion the user asked for.  Analysis, file
-summaries and restatements of the code belong nowhere in it,
-because the user already sees every report you do.  A long reply
-is also a broken one: a response that runs past the backend's
-output budget is cut off mid-document, and every action in it --
-including the ones already complete -- is thrown away."
-  "Reply text is a few sentences; length risks truncation.")
+  "Every reply, wrap-up included, is a reply action in the TOML
+document.  Bare prose is discarded.  Writing the conclusion as bare
+prose outside any action violates the contract and is discarded as
+unparseable, so a wrap-up rounded off in free prose never reaches
+the user and the turn ends with nothing.  Keep a reply action's
+text short: at most a few sentences stating the conclusion the
+user asked for.  Analysis, file summaries and restatements of the
+code belong nowhere in it, because the user already sees every
+report you do.  A long reply is also a broken one: a response that
+runs past the backend's output budget is cut off mid-document, and
+every action in it -- including the ones already complete -- is
+thrown away."
+  "Every reply, wrap-up included, is a reply action in the TOML document.
+Bare prose is discarded; text is a few sentences, and length risks
+truncation.")
 
 (defconst scalpel-prompt-rule--no-tail
   "End the response immediately once the TOML document is complete.
