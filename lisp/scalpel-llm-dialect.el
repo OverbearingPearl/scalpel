@@ -184,24 +184,15 @@ multi-paragraph reply into a single line of escaped newline and
 unicode escapes.  Newlines and tabs are kept, because they are the
 reply's own shape.  Every other control character is dropped: the
 console would ring its bell for one, and a C1 byte would hide the
-text after it.  XML/HTML-style tags, i.e. any text between angle
-brackets including the brackets themselves, are stripped as well, so
-wrapper markup some backends emit around the TOML document never
-reaches the conversation history and gets imitated on retry.  The
-filter mirrors `scalpel-agent--printable-output', which cannot be
-reused here -- `scalpel-agent' requires this module, so the
-dependency runs the other way."
-  (replace-regexp-in-string
-   "<[^>]*>"
-   ""
-   (mapconcat #'char-to-string
-              (cl-remove-if-not
-               (lambda (char)
-                 (or (memq char '(?\n ?\t))
-                     (and (<= 32 char)
-                          (not (<= 127 char 159)))))
-               (string-to-list raw))
-              "")))
+text after it."
+  (mapconcat #'char-to-string
+             (cl-remove-if-not
+              (lambda (char)
+                (or (memq char '(?\n ?\t))
+                    (and (<= 32 char)
+                         (not (<= 127 char 159)))))
+              (string-to-list raw))
+             ""))
 
 (defun scalpel-llm-dialect--count-fences (text)
   "Count non-overlapping occurrences of the ''' fence in TEXT."
