@@ -732,6 +732,13 @@ answered in another convention, `prose' when the reply is pure
 prose -- the conditions `scalpel-diagnose-dialect-error-types' names,
 whose messages are read through `scalpel-llm-dialect-error-message'
 -- otherwise the type forwarded by `scalpel-llm-request-async'.
+Among the non-dialect conditions, the contract failures raised by
+`scalpel-agent--validate-action' are named by matching the message
+text: `unknown-tool' for a message containing \"unknown action
+tool\" and `missing-field' for a message containing \"missing
+required field\" (format \"Scalpel: action %s missing
+required field %s\"), so the advice table can give targeted
+corrections; anything else falls back to `parse'.
 Forwarding a prose reply to ON-ERROR instead of delivering it keeps
 the loop honest: the console can self-heal-retry it like any other
 planner error and only reports failure once the retry budget is
@@ -757,9 +764,20 @@ planner error."
                              ;; re-escape the reply.
                              (text (if dialect
                                        (scalpel-llm-dialect-error-message err)
-                                     (error-message-string err))))
+                                     (error-message-string err)))
+                             ;; Distinguish the contract failures
+                             ;; `scalpel-agent--validate-action' raises
+                             ;; by matching the message text; other
+                             ;; non-dialect errors stay generic.
+                             (type (cond
+                                    (dialect (cdr dialect))
+                                    ((string-match-p "unknown action tool" text)
+                                     'unknown-tool)
+                                    ((string-match-p "missing required field" text)
+                                     'missing-field)
+                                    (t 'parse))))
                         (funcall on-error
-                                 (list :type (or (cdr dialect) 'parse)
+                                 (list :type type
                                        :message text))
                         nil)))))
          (when parsed

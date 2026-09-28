@@ -21,7 +21,21 @@
 (require 'scalpel-diagnose)
 
 (defconst scalpel-diagnose-advice-table
-  '((no-validation
+  '((unknown-tool
+     . "the planner named a tool the action contract does not define,
+so nothing was executed.  The tool vocabulary is fixed: use one of
+reply, file-peek, block-edit, block-insert, block-delete,
+file-create, file-rename, file-delete, file-substitute, shell,
+confirm, and re-emit the whole document with the corrected tool
+name.  A second try may come back whole.  Press C-c C-e or M-x
+scalpel-console-repeat to retry")
+    (missing-field
+     . "the planner's action omitted a required field named in the
+error, so nothing was executed.  Re-emit the same action with
+every required field filled, checking the field list for that
+tool in the system prompt.  A second try may come back whole.
+Press C-c C-e or M-x scalpel-console-repeat to retry")
+    (no-validation
      . "file-substitute was refused because this file's language has no
 structural check (:balanced-p), so a batch rewrite there cannot be
 validated.  Redo the edit as one block-edit per named definition

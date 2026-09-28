@@ -1837,7 +1837,9 @@ while the planner already saw the error as the newest turn."
   "A planner-output failure is headed so a retry is the obvious step.
 Regression: a malformed action arrived as a generic \"Scalpel
 error:\", indistinguishable from a Scalpel bug, so the user could
-not tell that resending the instruction was the whole fix."
+not tell that resending the instruction was the whole fix.
+Contract failures are now classified by type so the advice is
+targeted rather than generic."
   (let ((scalpel-agent--context-files nil)
         (buf (scalpel-console-test--new-console-buffer)))
     (unwind-protect
@@ -1858,7 +1860,7 @@ command = 'ls'"))))
               (should (string-match-p "Scalpel \\[planner error\\]" (buffer-string)))
               (should (string-match-p "missing required field" (buffer-string)))
               (should (string-match-p
-                       (regexp-quote (scalpel-diagnose-advice-for 'parse))
+                       (regexp-quote (scalpel-diagnose-advice-for 'missing-field))
                        (buffer-string)))
               ;; The failure header is dimmed for reading, while the
               ;; turn still joins the conversation.

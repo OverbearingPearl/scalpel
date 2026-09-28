@@ -18,7 +18,7 @@
 ;;; Code:
 
 (defconst scalpel-diagnose-planner-types
-  '(parse tool-call prose malformed unknown-tool no-replacement
+  '(parse tool-call prose unknown-tool missing-field malformed no-replacement
           no-such-symbol pattern-no-match bad-path unbalanced no-validation)
   "Error types caused by the planner's reply, not by Scalpel or the user.
 A round that fails with one of these did not run anything: the
@@ -26,7 +26,11 @@ model's output broke the action contract.  Retry advice differs
 type by type, so see the variable `scalpel-diagnose-advice-category-table'.
 NO-VALIDATION means the planner picked file-substitute for a structured
 language whose provider cannot validate a rewrite; the remedy is
-block-edit, which the retry round can plan directly.")
+block-edit, which the retry round can plan directly.
+UNKNOWN-TOOL means the planner named a tool the action contract
+does not define, and MISSING-FIELD means an action omitted a
+required field; each is corrected by re-emitting the document with
+the tool name or field fixed.")
 
 (defconst scalpel-diagnose-context-types
   '(file-outside-context)
