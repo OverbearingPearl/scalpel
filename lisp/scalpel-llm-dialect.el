@@ -226,96 +226,97 @@ none -- is the model's own habit and was observed to repeat on one
 backend.  `scalpel-agent-plan' maps each condition to its own
 planner error type for that reason.  The other branches signal
 plain `user-error'."
-  (let ((fences (scalpel-llm-dialect--count-fences raw)))
-    (cond
-     ((string-match-p scalpel-llm-dialect--tool-call-regexp raw)
-      (let ((msg (concat
-                  "Scalpel: planner wrongly used tool-call syntax "
-                  "-- XML-style wrapper markup tags around the reply "
-                  "-- instead of the TOML action document, which "
-                  "Scalpel forbids and does not parse; nothing was "
-                  "executed.  The reply must be a plain TOML "
-                  "action document with no wrapper markup of any "
-                  "kind.  Reply was:\n\n```scalpel error\n"
-                  (scalpel-redact-apply raw)
-                  "\n```"))
-            (suggestion (when-let ((repair (scalpel-diagnose-advice-mechanical-repair (list :type (quote tool-call) :input raw))))
-                          (concat "\n" repair))))
-        (signal 'scalpel-llm-dialect-tool-call-error
-                (list (concat msg (or suggestion ""))))))
-     ((or (cl-oddp fences)
-          (and (zerop fences)
-               (string-match-p "^\\[\\[action\\]\\]" raw)))
-      (if (and (>= fences 3)
-               (string-match-p
-                "[\r\n]?[ \t]*'''[ \t\r\n]*\\'"
-                (string-trim raw)))
-          (let ((msg (concat
-                      "Scalpel: planner wrongly returned a TOML document holding "
-                      "three consecutive single quotes, which a TOML literal "
-                      "string cannot carry; they closed the literal string early "
-                      "and broke the document -- nothing was executed.  "
-                      "Rephrase the text without them, or write that "
-                      "value as a TOML double-quoted string.  Reply "
-                      "was:\n\n```scalpel error\n"
-                      (scalpel-redact-apply raw)
-                      "\n```"))
-                (suggestion (when-let ((repair (scalpel-diagnose-advice-mechanical-repair (list :type (quote parse) :input raw))))
-                              (concat "\n" repair))))
-            (user-error (concat msg (or suggestion ""))))
-        (let ((msg (concat
-                    "Scalpel: planner wrongly sent a reply cut off before its TOML "
-                    "document closed (likely the backend's output limit); nothing "
-                    "was executed.  The reply shown below was itself the broken "
-                    "attempt and must not be copied -- the retry must follow "
-                    "the format shown in the system prompt instead.  Reply "
-                    "was:\n\n```scalpel error\n"
-                    (scalpel-redact-apply raw)
-                    "\n```"))
-              (suggestion (when-let ((repair (scalpel-diagnose-advice-mechanical-repair (list :type (quote parse) :input raw))))
-                            (concat "\n" repair))))
-          (user-error (concat msg (or suggestion ""))))))
-     ((and (zerop fences)
-           (not (string-match-p
-                 "\\(\\`\\|[\r\n]\\)[ \t]*[A-Za-z_][A-Za-z0-9_.-]*[ \t]*="
-                 raw)))
-      (let ((msg (concat
-                  "Scalpel: planner wrongly answered in free prose "
-                  "instead of the required TOML action document; "
-                  "nothing was executed.  The echoed text is shown "
-                  "only so the answer it holds can still be read.  "
-                  "Reply was:\n\n```scalpel error\n"
-                  (scalpel-redact-apply raw)
-                  "\n```"))
-            (suggestion (when-let ((repair (scalpel-diagnose-advice-mechanical-repair (list :type (quote prose) :input raw))))
-                          (concat "\n" repair))))
-        (signal 'scalpel-llm-dialect-prose-reply-error
-                (list (concat msg (or suggestion ""))))))
-     ((string-match-p "\\\\'" raw)
-      (let ((msg (concat
-                  "Scalpel: planner wrongly returned invalid TOML: it wrote a "
-                  "backslash-escaped single quote, which closed a single-quoted "
-                  "literal string early, because TOML literal strings take no "
-                  "escapes at all -- nothing was executed.  A value "
-                  "holding a single quote must be written as a "
-                  "triple-quoted literal instead.  Reply was:\n\n```scalpel error\n"
-                  (scalpel-redact-apply raw)
-                  "\n```"))
-            (suggestion (when-let ((repair (scalpel-diagnose-advice-mechanical-repair (list :type (quote parse) :input raw))))
-                          (concat "\n" repair))))
-        (user-error (concat msg (or suggestion "")))))
-     (t
-      (let ((msg (concat
-                  "Scalpel: planner wrongly returned invalid TOML.  The reply "
-                  "shown below was itself the broken attempt and must "
-                  "not be copied -- the retry must follow the format "
-                  "shown in the system prompt instead.  Reply "
-                  "was:\n\n```scalpel error\n"
-                  (scalpel-redact-apply raw)
-                  "\n```"))
-            (suggestion (when-let ((repair (scalpel-diagnose-advice-mechanical-repair (list :type (quote parse) :input raw))))
-                          (concat "\n" repair))))
-        (user-error (concat msg (or suggestion ""))))))))
+  (let ((text-quoting-style 'straight))
+    (let ((fences (scalpel-llm-dialect--count-fences raw)))
+      (cond
+       ((string-match-p scalpel-llm-dialect--tool-call-regexp raw)
+	(let ((msg (concat
+		    "Scalpel: planner wrongly used tool-call syntax "
+		    "-- XML-style wrapper markup tags around the reply "
+		    "-- instead of the TOML action document, which "
+		    "Scalpel forbids and does not parse; nothing was "
+		    "executed.  The reply must be a plain TOML "
+		    "action document with no wrapper markup of any "
+		    "kind.  Reply was:\n\n```scalpel error\n"
+		    (scalpel-redact-apply raw)
+		    "\n```"))
+	      (suggestion (when-let ((repair (scalpel-diagnose-advice-mechanical-repair (list :type (quote tool-call) :input raw))))
+			    (concat "\n" repair))))
+	  (signal 'scalpel-llm-dialect-tool-call-error
+		  (list (concat msg (or suggestion ""))))))
+       ((or (cl-oddp fences)
+	    (and (zerop fences)
+		 (string-match-p "^\\[\\[action\\]\\]" raw)))
+	(if (and (>= fences 3)
+		 (string-match-p
+		  "[\r\n]?[ \t]*'''[ \t\r\n]*\\'"
+		  (string-trim raw)))
+	    (let ((msg (concat
+			"Scalpel: planner wrongly returned a TOML document holding "
+			"three consecutive single quotes, which a TOML literal "
+			"string cannot carry; they closed the literal string early "
+			"and broke the document -- nothing was executed.  "
+			"Rephrase the text without them, or write that "
+			"value as a TOML double-quoted string.  Reply "
+			"was:\n\n```scalpel error\n"
+			(scalpel-redact-apply raw)
+			"\n```"))
+		  (suggestion (when-let ((repair (scalpel-diagnose-advice-mechanical-repair (list :type (quote parse) :input raw))))
+				(concat "\n" repair))))
+	      (user-error (concat msg (or suggestion ""))))
+	  (let ((msg (concat
+		      "Scalpel: planner wrongly sent a reply cut off before its TOML "
+		      "document closed (likely the backend's output limit); nothing "
+		      "was executed.  The reply shown below was itself the broken "
+		      "attempt and must not be copied -- the retry must follow "
+		      "the format shown in the system prompt instead.  Reply "
+		      "was:\n\n```scalpel error\n"
+		      (scalpel-redact-apply raw)
+		      "\n```"))
+		(suggestion (when-let ((repair (scalpel-diagnose-advice-mechanical-repair (list :type (quote parse) :input raw))))
+			      (concat "\n" repair))))
+	    (user-error (concat msg (or suggestion ""))))))
+       ((and (zerop fences)
+	     (not (string-match-p
+		   "\\(\\`\\|[\r\n]\\)[ \t]*[A-Za-z_][A-Za-z0-9_.-]*[ \t]*="
+		   raw)))
+	(let ((msg (concat
+		    "Scalpel: planner wrongly answered in free prose "
+		    "instead of the required TOML action document; "
+		    "nothing was executed.  The echoed text is shown "
+		    "only so the answer it holds can still be read.  "
+		    "Reply was:\n\n```scalpel error\n"
+		    (scalpel-redact-apply raw)
+		    "\n```"))
+	      (suggestion (when-let ((repair (scalpel-diagnose-advice-mechanical-repair (list :type (quote prose) :input raw))))
+			    (concat "\n" repair))))
+	  (signal 'scalpel-llm-dialect-prose-reply-error
+		  (list (concat msg (or suggestion ""))))))
+       ((string-match-p "\\\\'" raw)
+	(let ((msg (concat
+		    "Scalpel: planner wrongly returned invalid TOML: it wrote a "
+		    "backslash-escaped single quote, which closed a single-quoted "
+		    "literal string early, because TOML literal strings take no "
+		    "escapes at all -- nothing was executed.  A value "
+		    "holding a single quote must be written as a "
+		    "triple-quoted literal instead.  Reply was:\n\n```scalpel error\n"
+		    (scalpel-redact-apply raw)
+		    "\n```"))
+	      (suggestion (when-let ((repair (scalpel-diagnose-advice-mechanical-repair (list :type (quote parse) :input raw))))
+			    (concat "\n" repair))))
+	  (user-error (concat msg (or suggestion "")))))
+       (t
+	(let ((msg (concat
+		    "Scalpel: planner wrongly returned invalid TOML.  The reply "
+		    "shown below was itself the broken attempt and must "
+		    "not be copied -- the retry must follow the format "
+		    "shown in the system prompt instead.  Reply "
+		    "was:\n\n```scalpel error\n"
+		    (scalpel-redact-apply raw)
+		    "\n```"))
+	      (suggestion (when-let ((repair (scalpel-diagnose-advice-mechanical-repair (list :type (quote parse) :input raw))))
+			    (concat "\n" repair))))
+	  (user-error (concat msg (or suggestion "")))))))))
 
 (defun scalpel-llm-dialect--default-parse (raw)
   "Parse RAW to a list of action plists with the default dialect.

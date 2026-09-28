@@ -746,46 +746,45 @@ spent, instead of the round looking complete and ending silently.
 Only the parse step is guarded, so an error raised inside
 ON-SUCCESS escapes to the caller rather than being re-framed as a
 planner error."
-  (let ((text-quoting-style 'straight))
-    (scalpel-llm-request-async
-     (scalpel-agent--prompt instruction history)
-     (lambda (raw)
-       (let ((parsed (condition-case err
-                       (cons t (scalpel-agent--project-actions
-                                (mapcar #'scalpel-agent--validate-action
-                                        (scalpel-llm-dialect-parse raw))))
-                     (error
-                      (let* ((dialect (assq (car err)
-                                            scalpel-diagnose-dialect-error-types))
-                             ;; A dialect condition carries its whole
-                             ;; message as its data, so it is read
-                             ;; verbatim: `error-message-string' would
-                             ;; prefix the condition's class sentence and
-                             ;; re-escape the reply.
-                             (text (if dialect
-                                       (scalpel-llm-dialect-error-message err)
-                                     (error-message-string err)))
-                             ;; Distinguish the contract failures
-                             ;; `scalpel-agent--validate-action' raises
-                             ;; by matching the message text; other
-                             ;; non-dialect errors stay generic.
-                             (type (cond
-                                    (dialect (cdr dialect))
-                                    ((string-match-p "unknown action tool" text)
-                                     'unknown-tool)
-                                    ((string-match-p "missing required field" text)
-                                     'missing-field)
-                                    (t 'parse))))
-                        (funcall on-error
-                                 (list :type type
-                                       :message text))
-                        nil)))))
-         (when parsed
-           (funcall on-success (cdr parsed)))))
-     on-error
-     (if scalpel-agent-cod-enabled
-         (concat scalpel-prompt-system-prompt "\n\n" scalpel-prompt-cod-prompt)
-       scalpel-prompt-system-prompt))))
+  (scalpel-llm-request-async
+   (scalpel-agent--prompt instruction history)
+   (lambda (raw)
+     (let ((parsed (condition-case err
+                     (cons t (scalpel-agent--project-actions
+                              (mapcar #'scalpel-agent--validate-action
+                                      (scalpel-llm-dialect-parse raw))))
+                   (error
+                    (let* ((dialect (assq (car err)
+                                          scalpel-diagnose-dialect-error-types))
+                           ;; A dialect condition carries its whole
+                           ;; message as its data, so it is read
+                           ;; verbatim: `error-message-string' would
+                           ;; prefix the condition's class sentence and
+                           ;; re-escape the reply.
+                           (text (if dialect
+                                     (scalpel-llm-dialect-error-message err)
+                                   (error-message-string err)))
+                           ;; Distinguish the contract failures
+                           ;; `scalpel-agent--validate-action' raises
+                           ;; by matching the message text; other
+                           ;; non-dialect errors stay generic.
+                           (type (cond
+                                  (dialect (cdr dialect))
+                                  ((string-match-p "unknown action tool" text)
+                                   'unknown-tool)
+                                  ((string-match-p "missing required field" text)
+                                   'missing-field)
+                                  (t 'parse))))
+                      (funcall on-error
+                               (list :type type
+                                     :message text))
+                      nil)))))
+       (when parsed
+         (funcall on-success (cdr parsed)))))
+   on-error
+   (if scalpel-agent-cod-enabled
+       (concat scalpel-prompt-system-prompt "\n\n" scalpel-prompt-cod-prompt)
+     scalpel-prompt-system-prompt)))
 
 (defun scalpel-agent--locate-candidates (symbol)
   "Return one (FILE . RANGE) per context file that define SYMBOL.
