@@ -292,7 +292,10 @@ plain `user-error'."
         (user-error
          (concat "Scalpel: planner reply was cut off before its TOML document "
                  "closed (likely the backend's output limit); nothing was "
-                 "executed.  Reply was:\n%s")
+                 "executed.  The reply shown below was itself the broken "
+                 "attempt and must not be copied -- the retry must follow "
+                 "the format shown in the system prompt instead.  Reply "
+                 "was:\n%s")
          (concat "\n" (scalpel-llm-dialect--readable-raw raw) "\n"))))
      ;; No fence opened anywhere in the reply and no `key = ' assignment
      ;; either, so there is no document that could be invalid: the
@@ -332,8 +335,12 @@ plain `user-error'."
                "triple-quoted literal instead.  Reply was:\n%s")
        (concat "\n" (scalpel-llm-dialect--readable-raw raw) "\n")))
      (t
-      (user-error "Scalpel: planner returned invalid TOML:\n%s"
-                  (concat "\n" (scalpel-llm-dialect--readable-raw raw) "\n"))))))
+      (user-error
+       (concat "Scalpel: planner returned invalid TOML.  The reply "
+               "shown below was itself the broken attempt and must "
+               "not be copied -- the retry must follow the format "
+               "shown in the system prompt instead.  Reply was:\n%s")
+       (concat "\n" (scalpel-llm-dialect--readable-raw raw) "\n"))))))
 
 (defun scalpel-llm-dialect--default-parse (raw)
   "Parse RAW to a list of action plists with the default dialect.
@@ -461,11 +468,21 @@ API key, quota and network, then retry"))
   "Parse the raw planner reply RAW through the active backend's dialect.
 Return a list of action plists.  A provider registered for the
 active gptel backend handles the reply; with no provider, the
-default parser applies."
-  (let ((provider (scalpel-llm-dialect--provider)))
-    (if provider
-        (funcall (plist-get provider :parse-reply) raw)
-      (scalpel-llm-dialect--default-parse raw))))
+default parser applies.  As a self-heal, a trailing run of closing
+brackets left by models that mistake the [[action]] table header
+for the opening half of an array literal is stripped from RAW
+before dispatching."
+  (let* ((raw (save-match-data
+                (if (and (string-match
+                          "[ \t\r\n]*\\]\\(?:[ \t\r\n]*\\]+\\)*\\'" raw)
+                         (or (= (match-beginning 0) 0)
+                             (/= (aref raw (1- (match-beginning 0))) ?\[)))
+                    (substring raw 0 (match-beginning 0))
+                  raw))))
+    (let ((provider (scalpel-llm-dialect--provider)))
+      (if provider
+          (funcall (plist-get provider :parse-reply) raw)
+        (scalpel-llm-dialect--default-parse raw)))))
 
 (provide 'scalpel-llm-dialect)
 

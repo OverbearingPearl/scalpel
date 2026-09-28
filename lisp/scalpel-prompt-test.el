@@ -52,6 +52,18 @@ cannot be reproduced here; we only guard that the rule text is present."
     (should (string-match-p (regexp-quote scalpel-prompt-rules--no-tail)
                             scalpel-prompt-system-prompt))))
 
+(ert-deftest scalpel-prompt-test-system-prompt-ends-with-table-no-closing-bracket-rule ()
+"The system prompt must state that the document ends with its last table.
+This guards the rule against the array-literal misreading: any closing
+bracket makes the document invalid."
+(ert-info ("Assert single-line phrases \"any closing ] or ]] anywhere makes the document\" and \"opening bracket of an array literal\", because the system prompt hard-wraps its prose so multi-word phrases can span line breaks")
+(should (string-match-p
+(regexp-quote "any closing ] or ]] anywhere makes the document")
+scalpel-prompt-system-prompt))
+(should (string-match-p
+(regexp-quote "opening bracket of an array literal")
+scalpel-prompt-system-prompt))))
+
 (ert-deftest scalpel-prompt-test-prompt-example-parses ()
   "The example the system prompt shows is one the parser accepts.
 Regression: the prompt presented prose before the array as an

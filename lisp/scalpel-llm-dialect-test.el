@@ -260,6 +260,32 @@ dialects some test happened to spell out."
       (setq gptel-backend saved-backend)
       (scalpel-utils-test-delete-backend "OpenRouter"))))
 
+(ert-deftest scalpel-llm-dialect-test-parse-error-does-not-echo-broken-reply-as-retry-template ()
+  "Regression test for the echo-disinfection in `scalpel-llm-dialect--parse-error'.
+Guards against the feedback loop where the error message echoes the
+broken raw reply verbatim: on retry the model then treats the echoed
+broken reply as a template and copies its malformation instead of
+following the format prescribed by the system prompt.  The message must
+say that the shown reply is the broken sample and that a retry must
+follow the system prompt's format, not imitate the sample."
+  (let* ((raw "[last-table]\nkey = \"value\"\n]]\n")
+         (err (should-error
+               (scalpel-llm-dialect--parse-error raw)
+               :type 'user-error))
+         (msg (error-message-string err)))
+    (ert-info ("Expect the error message to label the shown reply as a broken sample shown for diagnosis only.")
+      (should (string-match-p
+               (regexp-quote
+                "was itself the broken attempt and must not be copied")
+               msg)))
+    (ert-info ("Expect the error message to require that a retry follow the format given in the system prompt, not imitate the broken sample.")
+      (should (string-match-p
+               (regexp-quote
+                "the retry must follow the format shown in the system prompt instead")
+               msg)))
+    (ert-info ("Expect the error message to contain the raw broken reply text verbatim.")
+      (should (string-match-p (regexp-quote raw) msg)))))
+
 (provide 'scalpel-llm-dialect-test)
 
 ;;; scalpel-llm-dialect-test.el ends here

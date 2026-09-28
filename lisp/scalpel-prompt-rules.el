@@ -28,6 +28,16 @@ text outside the document is discarded unread, so a greeting, a
 narration, or an announcement of the plan costs tokens and changes
 nothing.
 
+Each [[action]] line is a standalone TOML table header, not the
+opening bracket of an array literal, so the document is only a
+sequence of table headers and key-value pairs: it ends with its
+last table, and any closing ] or ]] anywhere makes the document
+invalid and the whole round fails parsing.
+
+On a parse failure the raw reply is shown back for a retry, so a
+retry must copy the format shown in this prompt, never mimic a
+previously emitted broken attempt.
+
 You have no tools and no function to call: nothing you emit is
 dispatched as a tool call, and markup written in a tool-calling
 format is not parsed, not translated and not executed.  The
