@@ -184,17 +184,24 @@ multi-paragraph reply into a single line of escaped newline and
 unicode escapes.  Newlines and tabs are kept, because they are the
 reply's own shape.  Every other control character is dropped: the
 console would ring its bell for one, and a C1 byte would hide the
-text after it.  The filter mirrors `scalpel-agent--printable-output',
-which cannot be reused here -- `scalpel-agent' requires this module,
-so the dependency runs the other way."
-  (mapconcat #'char-to-string
-             (cl-remove-if-not
-              (lambda (char)
-                (or (memq char '(?\n ?\t))
-                    (and (<= 32 char)
-                         (not (<= 127 char 159)))))
-              (string-to-list raw))
-             ""))
+text after it.  XML/HTML-style tags, i.e. any text between angle
+brackets including the brackets themselves, are stripped as well, so
+wrapper markup some backends emit around the TOML document never
+reaches the conversation history and gets imitated on retry.  The
+filter mirrors `scalpel-agent--printable-output', which cannot be
+reused here -- `scalpel-agent' requires this module, so the
+dependency runs the other way."
+  (replace-regexp-in-string
+   "<[^>]*>"
+   ""
+   (mapconcat #'char-to-string
+              (cl-remove-if-not
+               (lambda (char)
+                 (or (memq char '(?\n ?\t))
+                     (and (<= 32 char)
+                          (not (<= 127 char 159)))))
+               (string-to-list raw))
+              "")))
 
 (defun scalpel-llm-dialect--count-fences (text)
   "Count non-overlapping occurrences of the ''' fence in TEXT."
@@ -262,9 +269,13 @@ plain `user-error'."
      ((string-match-p scalpel-llm-dialect--tool-call-regexp raw)
       (signal 'scalpel-llm-dialect-tool-call-error
               (list
-               (format (concat "Scalpel: planner used tool-call syntax "
-                               "instead of the TOML action document; nothing "
-                               "was executed.  Reply was:\n%s")
+               (format (concat "Scalpel: planner wrongly used tool-call syntax "
+                               "-- XML-style wrapper markup tags around the reply "
+                               "-- instead of the TOML action document, which "
+                               "Scalpel forbids and does not parse; nothing was "
+                               "executed.  The reply must be a plain TOML "
+                               "action document with no wrapper markup of any "
+                               "kind.  Reply was:\n%s")
                        (concat "\n" (scalpel-llm-dialect--readable-raw raw) "\n")))))
      ((or (cl-oddp fences)
           (and (zerop fences)
@@ -281,18 +292,18 @@ plain `user-error'."
                 "[\r\n]?[ \t]*'''[ \t\r\n]*\\'"
                 (string-trim raw)))
           (user-error
-           (concat "Scalpel: planner reply holds three consecutive "
-                   "single quotes, which a TOML literal string cannot "
-                   "carry; they closed the literal string early and "
-                   "broke the document -- nothing was executed.  "
+           (concat "Scalpel: planner wrongly returned a TOML document holding "
+                   "three consecutive single quotes, which a TOML literal "
+                   "string cannot carry; they closed the literal string early "
+                   "and broke the document -- nothing was executed.  "
                    "Rephrase the text without them, or write that "
                    "value as a TOML double-quoted string.  Reply "
                    "was:\n%s")
            (concat "\n" (scalpel-llm-dialect--readable-raw raw) "\n"))
         (user-error
-         (concat "Scalpel: planner reply was cut off before its TOML document "
-                 "closed (likely the backend's output limit); nothing was "
-                 "executed.  The reply shown below was itself the broken "
+         (concat "Scalpel: planner wrongly sent a reply cut off before its TOML "
+                 "document closed (likely the backend's output limit); nothing "
+                 "was executed.  The reply shown below was itself the broken "
                  "attempt and must not be copied -- the retry must follow "
                  "the format shown in the system prompt instead.  Reply "
                  "was:\n%s")
@@ -311,32 +322,32 @@ plain `user-error'."
                  raw)))
       (signal 'scalpel-llm-dialect-prose-reply-error
               (list
-               (format (concat "Scalpel: planner replied in prose and sent no "
-                               "TOML action document; nothing was executed.  "
-                               "The reply is shown below as it was written, so "
-                               "the answer it holds can still be read.  "
+               (format (concat "Scalpel: planner wrongly answered in free prose "
+                               "instead of the required TOML action document; "
+                               "nothing was executed.  The echoed text is shown "
+                               "only so the answer it holds can still be read.  "
                                "Reply was:\n%s")
-                       (scalpel-llm-dialect--readable-raw raw))
+                       (concat "\n" (scalpel-llm-dialect--readable-raw raw)))
                ;; The prose rides along as a second data element, so a
                ;; caller that degrades prose into a reply action delivers
                ;; the answer itself, not the error narrative above.
-               (scalpel-llm-dialect--readable-raw raw))))
+               (concat "\n" (scalpel-llm-dialect--readable-raw raw)))))
      ;; A backslash before a single quote is the real failure: TOML
      ;; literal strings take no escapes at all, so the quote closed its
      ;; literal string early and the document broke there.  Keep the
      ;; generic message when no such sequence appears.
      ((string-match-p "\\\\'" raw)
       (user-error
-       (concat "Scalpel: planner returned invalid TOML: a backslash-"
-               "escaped single quote closed a single-quoted literal "
-               "string early, because TOML literal strings take no "
+       (concat "Scalpel: planner wrongly returned invalid TOML: it wrote a "
+               "backslash-escaped single quote, which closed a single-quoted "
+               "literal string early, because TOML literal strings take no "
                "escapes at all -- nothing was executed.  A value "
                "holding a single quote must be written as a "
                "triple-quoted literal instead.  Reply was:\n%s")
        (concat "\n" (scalpel-llm-dialect--readable-raw raw) "\n")))
      (t
       (user-error
-       (concat "Scalpel: planner returned invalid TOML.  The reply "
+       (concat "Scalpel: planner wrongly returned invalid TOML.  The reply "
                "shown below was itself the broken attempt and must "
                "not be copied -- the retry must follow the format "
                "shown in the system prompt instead.  Reply was:\n%s")

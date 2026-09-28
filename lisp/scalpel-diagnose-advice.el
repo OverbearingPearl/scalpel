@@ -28,10 +28,12 @@ validated.  Redo the edit as one block-edit per named definition
 next round; the refusal is what frees the retry, so nothing is
 broken.  To try again anyway: C-c C-e")
     (tool-call
-     . "the model answered in a tool-calling convention Scalpel does not
-parse, so nothing was executed.  A backend that answers this way
-tends to answer this way again, so retrying the same request
-rarely helps: switch the backend with C-c C-b, or rephrase.  To
+     . "the planner violated the output contract by wrapping its answer
+in XML-style tags instead of writing the TOML action document
+directly; that convention is forbidden here, so nothing was
+executed.  A backend that answers this way tends to answer this
+way again, so retrying the same request on it rarely helps:
+switch the backend with C-c C-b, or rephrase the instruction.  To
 try again anyway, C-c C-t analyzes the failure deeply first")
     (prose
      . "the model followed no parseable convention at all, so nothing was
