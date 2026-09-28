@@ -1570,7 +1570,8 @@ holds the real paths the user typed."
                            (scalpel-console--append
                             (format "Scalpel error: %s"
                                     (scalpel-redact-restore (or (plist-get err :message) ""))))
-                         (let* ((inhibit-read-only t)
+                         (let* ((text-quoting-style 'straight)
+                                (inhibit-read-only t)
                                 (err-beg (point))
                                 ;; Planner errors may quote the raw reply,
                                 ;; which was sent redacted: restore before
