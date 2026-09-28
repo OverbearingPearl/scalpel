@@ -739,10 +739,11 @@ spent, instead of the round looking complete and ending silently.
 Only the parse step is guarded, so an error raised inside
 ON-SUCCESS escapes to the caller rather than being re-framed as a
 planner error."
-  (scalpel-llm-request-async
-   (scalpel-agent--prompt instruction history)
-   (lambda (raw)
-     (let ((parsed (condition-case err
+  (let ((text-quoting-style 'straight))
+    (scalpel-llm-request-async
+     (scalpel-agent--prompt instruction history)
+     (lambda (raw)
+       (let ((parsed (condition-case err
                        (cons t (scalpel-agent--project-actions
                                 (mapcar #'scalpel-agent--validate-action
                                         (scalpel-llm-dialect-parse raw))))
@@ -761,12 +762,12 @@ planner error."
                                  (list :type (or (cdr dialect) 'parse)
                                        :message text))
                         nil)))))
-       (when parsed
-         (funcall on-success (cdr parsed)))))
-   on-error
-   (if scalpel-agent-cod-enabled
-       (concat scalpel-prompt-system-prompt "\n\n" scalpel-prompt-cod-prompt)
-     scalpel-prompt-system-prompt)))
+         (when parsed
+           (funcall on-success (cdr parsed)))))
+     on-error
+     (if scalpel-agent-cod-enabled
+         (concat scalpel-prompt-system-prompt "\n\n" scalpel-prompt-cod-prompt)
+       scalpel-prompt-system-prompt))))
 
 (defun scalpel-agent--locate-candidates (symbol)
   "Return one (FILE . RANGE) per context file that define SYMBOL.
