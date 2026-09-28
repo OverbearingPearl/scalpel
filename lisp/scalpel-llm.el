@@ -24,7 +24,7 @@
 (require 'gptel)
 (require 'gptel-transient)
 
-(defcustom scalpel-llm-timeout 45
+(defcustom scalpel-llm-timeout 60
   "Seconds of total callback silence before a request is abandoned.
 This is an *idle* budget, not a wall-clock deadline: every gptel
 callback -- content chunk, reasoning chunk, or completion -- resets the
@@ -38,7 +38,7 @@ token arrives, which is why the default leaves room above the older
   :type 'integer
   :group 'scalpel-llm)
 
-(defcustom scalpel-llm-deadline 1800
+(defcustom scalpel-llm-deadline 900
   "Seconds from the moment a request is sent until it is abandoned.
 It is independent of `scalpel-llm-timeout'.  Unlike the idle
 budget, this deadline is never reset by callbacks, so a backend
