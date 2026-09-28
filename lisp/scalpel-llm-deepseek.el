@@ -20,6 +20,7 @@
 ;;; Code:
 
 (require 'scalpel-llm-dialect)
+(require 'scalpel-redact)
 
 (defconst scalpel-llm-deepseek--dsml-regexp
   (concat "<" (string #xFF5C) "DSML" (string #xFF5C))
@@ -41,7 +42,7 @@ Otherwise delegate to the default parser."
              (format (concat "Scalpel: DeepSeek planner emitted DSML "
                              "tool-call syntax instead of the TOML action "
                              "array; nothing was executed.  Reply was:\n%s")
-                     (concat "\n" (scalpel-llm-dialect--readable-raw raw) "\n")))))
+                     (concat "\n" (scalpel-redact-apply raw) "\n")))))
   (scalpel-llm-dialect--default-parse raw))
 
 (scalpel-llm-dialect-register

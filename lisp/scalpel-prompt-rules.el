@@ -190,6 +190,18 @@ one, ask the user to add it with a confirm action instead of
 reaching for it with a different command."
   "Reading contract: file-peek for code, shell for finding.")
 
+(defconst scalpel-prompt-rules--feedback-fence
+  "Runtime feedback fence rules: a scalpel error fence in the conversation
+history holds the verbatim redacted text of the previous rejected reply,
+shown only to understand why it failed, never to be copied back unchanged.
+A scalpel suggestion fence, when present, holds the client-side diagnostic
+module's mechanically repaired version of that reply; the next round should
+prefer to copy it but must self-check first, because it is a guess, not a
+guarantee. A missing suggestion fence means no mechanical fix was found, so
+rewrite from the error description alone. Both fences appear only in the
+conversation history and must never be imitated in the planner's own reply."
+  "Runtime feedback fence prompt rule, matching sibling rules' tone and wrapping.")
+
 (defconst scalpel-prompt-rules--shell-hygiene
   "Keep every command's output small and bounded: pass -m or -l
 limits to grep, use head or tail, and never dump a whole file or

@@ -81,6 +81,67 @@ types fall to the executor entry, which that table always holds."
   "Extract :type from ERROR-PLIST and delegate to `scalpel-diagnose-advice-for'."
   (scalpel-diagnose-advice-for (plist-get error-plist :type)))
 
+(defun scalpel-diagnose-advice-mechanical-repair (error-plist)
+  "Return a scalpel suggestion fence string for ERROR-PLIST.
+
+The string contains a mechanically repaired version of the failed input,
+or nil when no deterministic fix is possible.
+Applies `scalpel-redact-apply` before returning."
+  (let* ((type (plist-get error-plist :type))
+         (message (plist-get error-plist :message))
+         (input (plist-get error-plist :input))
+         (content nil))
+    (cond
+     ((eq type 'tool-call)
+      (let* ((no-xml (replace-regexp-in-string
+                      (rx (or "<invoke>" "</invoke>" "<tool_call>" "</tool_call>"))
+                      "" input t t))
+             (lines (split-string no-xml "\n" t))
+             (toml-lines (seq-filter
+                          (lambda (l)
+                            (or (string-match
+                                 (rx bol "[[" (literal "action") "]]") l)
+                                (string-match
+                                 (rx bol "tool" (one-or-more blank) "=") l)))
+                          lines)))
+        (setq content (mapconcat #'identity toml-lines "\n"))))
+     ((eq type 'parse)
+      (let ((lines (split-string input "\n")))
+        (while (and lines (not (string-match-p "^\\[\\[" (car lines))))
+          (setq lines (cdr lines)))
+        (while (and lines
+                    (string-match (rx bol (0+ blank) "]]" (0+ blank) eol)
+                                  (car (last lines))))
+          (setq lines (butlast lines)))
+        (setq content (mapconcat #'identity lines "\n"))))
+     ((eq type 'no-such-symbol)
+      (when (string-match
+             (rx "No such symbol:" (one-or-more blank)
+                 (group (one-or-more (not (any "." ","))))
+                 ", did you mean:" (one-or-more blank)
+                 (group (one-or-more (not (any ".")))))
+             message)
+        (let ((bad-symbol (match-string 1 message))
+              (good-symbol (match-string 2 message)))
+          (setq content (replace-regexp-in-string
+                         (concat "\\b" (regexp-quote bad-symbol) "\\b")
+                         good-symbol input t t)))))
+     ((eq type 'pattern-no-match)
+      (when (string-match
+             (rx "near-miss line:" (one-or-more blank)
+                 (group (one-or-more any)))
+             message)
+        (let ((line (match-string 1 message)))
+          (setq content (concat "; Hint: near-miss line: " line)))))
+     ((eq type 'prose)
+      (let ((idx (string-match "\\[\\[" input)))
+        (when idx
+          (setq content (substring input idx)))))
+     (t nil))
+    (when (and content (not (string-empty-p content)))
+      (scalpel-redact-apply
+       (format "```scalpel suggestion\n%s\n```" content)))))
+
 (provide 'scalpel-diagnose-advice)
 
 ;;; scalpel-diagnose-advice.el ends here

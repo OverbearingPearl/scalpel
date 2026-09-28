@@ -218,6 +218,7 @@ exactly of that token signals that nothing should be created.")
    scalpel-prompt-rules--symbol-name "\n"
    scalpel-prompt-rules--shell "\n"
    scalpel-prompt-rules--reading "\n"
+   scalpel-prompt-rules--feedback-fence "\n"
    scalpel-prompt-rules--shell-hygiene "\n"
    scalpel-prompt-rules--file-actions "\n"
    scalpel-prompt-rules--substitute "\n"
