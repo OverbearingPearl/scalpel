@@ -711,16 +711,16 @@ own: everything the LLM may rely on arrives here."
    (concat (scalpel-agent-context)
            "\n\n"
            (when (and history (not (string-empty-p history)))
-             (format "Conversation so far:\n%s\n\n" history))
+             (format scalpel-prompt--history-header history))
            (let ((rules (scalpel-user-prompt-for-files
                          scalpel-agent--context-files)))
              (when (and rules (not (string-empty-p rules)))
-               (format "Project user prompt rules:\n%s\n\n" rules)))
+               (format scalpel-prompt--project-rules-header rules)))
            (let ((rules (scalpel-tool--prompt-rules)))
              (when (and rules (not (string-empty-p rules)))
-               (format "Tool prompt rules:\n%s\n\n" rules)))
-           "User instruction:\n"
-           instruction)))
+               (format scalpel-prompt--tool-rules-header rules)))
+           (format scalpel-prompt--instruction-header
+                   instruction))))
 
 (defun scalpel-agent-plan (instruction history on-success on-error)
   "Ask the LLM for a structured plan for INSTRUCTION, without blocking.

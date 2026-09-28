@@ -41,23 +41,17 @@ planning and code untouched."
                  (const :tag "Let the model choose" nil))
   :group 'scalpel)
 
-(defconst scalpel-prompt--reply-language-rule-header
-  "Write the \"text\" of every reply action in %s.  This bounds the
-user-facing reply only: reasoning, planning, code, comments and
-prompt wording stay in the language best suited to them.\n")
-
 (defun scalpel-prompt--reply-language-rule ()
   "Return the natural-language reply-language rule for the system prompt.
 The result is appended by `scalpel-prompt-system-prompt'.  Returns
 nil when `scalpel-prompt-reply-language' is unset, so the model
 chooses freely; otherwise returns a paragraph stating the chosen
-language as a constraint on reply text only.  The rule text is
-formatted through the constant
-`scalpel-prompt-rule--reply-language-format' from
-scalpel-prompt-rule.el."
+language as a constraint on reply text only.  The rule text itself
+is owned by `scalpel-prompt-rule'; this function only reads the
+user option `scalpel-prompt-reply-language'."
   (when scalpel-prompt-reply-language
-    (format scalpel-prompt-rule--reply-language-format
-            scalpel-prompt-reply-language)))
+    (scalpel-prompt-rule--reply-language-rule
+     scalpel-prompt-reply-language)))
 
 (defconst scalpel-prompt--decide-for-me
   "The choice is yours: if you've reached a conclusion and judge
@@ -145,6 +139,28 @@ this same text.
 
 This is a structural contract shared with `scalpel-console--run-rounds';
 changing the wording here requires checking that caller.")
+
+(defconst scalpel-prompt--history-header
+  "Conversation so far:\n%s\n\n"
+  "This format string embeds the conversation history.
+It supplies the label, a newline, the %s placeholder for the
+history, and a trailing blank line in the assembled user prompt.")
+
+(defconst scalpel-prompt--project-rules-header
+  "Project user prompt rules:\n%s\n\n"
+  "Header introducing the project user prompt rules.
+Contains a %s placeholder for the rules text, followed by a
+blank line.")
+
+(defconst scalpel-prompt--tool-rules-header
+  "Tool prompt rules:\n%s\n"
+  "Label introducing the tool prompt rules.")
+
+(defconst scalpel-prompt--instruction-header
+  "User instruction:\n%s"
+  "Format string introducing the user instruction in the assembled user prompt.
+Formatted by the caller with the instruction text as its only argument; the
+%s placeholder guarantees the instruction text is included in the prompt.")
 
 (defvar scalpel-prompt-programming-language-rules nil
   "Store language-specific prompt rules as filename regexp entries.
