@@ -272,7 +272,10 @@ Regression: the planner's reply was one closing bracket short, and the
 refusal said only that no usable replacement had been returned -- so
 nothing told the planner what to change, and the same broken reply came
 back on the next round.  The cause is decidable here, unlike the intent
-behind a bad pattern, so the refusal states it."
+behind a bad pattern, so the refusal states it.  The refusal also names
+the place to look: a reply that simply ends with an unclosed bracket
+must still point at the last bracket left open rather than only
+describing the defect in general."
   (scalpel-utils-test-with-temp-file ".el"
     (with-temp-file this-file
       (insert "(defun foo (x)\n  (+ x 1))\n"))
@@ -291,6 +294,8 @@ behind a bad pattern, so the refusal states it."
         (ert-info ((format "Error: %S" error))
           (should (eq (plist-get error :type) 'no-replacement))
           (should (string-match-p "brackets do not balance"
+                                  (plist-get error :message)))
+          (should (string-match-p "offset [0-9]+"
                                   (plist-get error :message))))))))
 
 (ert-deftest scalpel-agent-test-edit-names-a-reply-with-no-definition ()

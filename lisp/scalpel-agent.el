@@ -1131,8 +1131,9 @@ text to be compared against it."
      ;; offset and excerpt are stated here, the way
      ;; `scalpel-agent-file-substitute' states them for a rewritten text,
      ;; so the planner can look at the place instead of guessing; an
-     ;; offset past the end is the reader's report of a bracket opened
-     ;; and never closed, which is what the sentence then says.
+     ;; offset at the end of the text points at nothing to look at, so
+     ;; the count of brackets still open and the position of the last of
+     ;; them are given instead, with an excerpt around that position.
      ((and (null forms)
            (not (scalpel-locate-balanced-p file text)))
       (let ((offset (scalpel-agent--first-unbalance-offset text)))
@@ -1144,9 +1145,21 @@ text to be compared against it."
                       "cannot reach the end of it: the first unbalance is at "
                       "offset " (number-to-string offset) ", around \""
                       excerpt "\"."))
-          (concat "Its brackets do not balance, so the Emacs Lisp reader "
-                  "cannot reach the end of it: the text left an unclosed "
-                  "bracket."))))
+          (let ((unclosed (scalpel-agent--open-stack-report text)))
+            (if unclosed
+                (let* ((count (car unclosed))
+                       (pos (cdr unclosed))
+                       (pos (max 0 (min pos (length text))))
+                       (excerpt-start (max 0 (- pos 20)))
+                       (excerpt-end (min (length text) (+ pos 20)))
+                       (excerpt (substring text excerpt-start excerpt-end)))
+                  (concat "Its brackets do not balance, so the Emacs Lisp reader "
+                          "cannot reach the end of it: " (number-to-string count)
+                          " brackets are still open, the last at offset "
+                          (number-to-string pos) ", around \"" excerpt "\"."))
+              (concat "Its brackets do not balance, so the Emacs Lisp reader "
+                      "cannot reach the end of it: the text left an unclosed "
+                      "bracket."))))))
      ;; A reply that reads as several complete forms, every one of them
      ;; finished, is refused for its count.  The bracket walk used to be
      ;; asked first, and answered such a reply -- two balanced forms,
@@ -2094,6 +2107,24 @@ that never finds its close."
                     (when (< depth 0)
                       (throw 'result i))))
                finally (throw 'result (length text))))))
+
+(defun scalpel-agent--open-stack-report (text)
+  "Scan TEXT over `(' `[' `{' and `)' `]' `}' keeping a stack of opener positions.
+A closer pops the top position when the stack is non-empty.  Return a
+cons (DEPTH . POSITION) when some brackets are still open, where DEPTH
+is the number of brackets left open and POSITION is the offset at which
+the last of them was opened, or nil when the stack is empty.  This is
+read by `scalpel-agent--unusable-replacement-reason'."
+  (let ((openers '(?\( ?\[ ?\{))
+        (closers '(?\) ?\] ?\}))
+        (stack nil))
+    (cl-loop for i from 0 below (length text)
+             for ch = (aref text i)
+             do (cond
+                 ((memq ch openers) (push i stack))
+                 ((memq ch closers) (when stack (pop stack))))
+             finally return (when stack
+                              (cons (length stack) (car stack))))))
 
 (defun scalpel-agent-file-substitute (files pattern replacement)
   "Apply the mechanical replacement PATTERN -> REPLACEMENT across FILES.
