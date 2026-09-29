@@ -1127,11 +1127,26 @@ text to be compared against it."
      ;; Lisp reader in the sentence below is a fact about the one
      ;; language that gets this far, not a guess about the file.  A
      ;; language with no bracket answer refuses with the general sentence
-     ;; instead, rather than being handed a cause it never gave.
+     ;; instead, rather than being handed a cause it never gave.  The
+     ;; offset and excerpt are stated here, the way
+     ;; `scalpel-agent-file-substitute' states them for a rewritten text,
+     ;; so the planner can look at the place instead of guessing; an
+     ;; offset past the end is the reader's report of a bracket opened
+     ;; and never closed, which is what the sentence then says.
      ((and (null forms)
            (not (scalpel-locate-balanced-p file text)))
-      (concat "Its brackets do not balance, so the Emacs Lisp reader "
-              "cannot reach the end of it."))
+      (let ((offset (scalpel-agent--first-unbalance-offset text)))
+        (if (and (numberp offset) (< offset (length text)))
+            (let* ((excerpt-start (max 0 (- offset 20)))
+                   (excerpt-end (min (length text) (+ offset 20)))
+                   (excerpt (substring text excerpt-start excerpt-end)))
+              (concat "Its brackets do not balance, so the Emacs Lisp reader "
+                      "cannot reach the end of it: the first unbalance is at "
+                      "offset " (number-to-string offset) ", around \""
+                      excerpt "\"."))
+          (concat "Its brackets do not balance, so the Emacs Lisp reader "
+                  "cannot reach the end of it: the text left an unclosed "
+                  "bracket."))))
      ;; A reply that reads as several complete forms, every one of them
      ;; finished, is refused for its count.  The bracket walk used to be
      ;; asked first, and answered such a reply -- two balanced forms,
@@ -2114,8 +2129,9 @@ unbalanced brackets refuses the whole rewrite, and zero occurrences
 anywhere refuses it too -- a rewrite that matched nothing is a planner
 mistake, not a success.  An unbalanced refusal names the first offset
 where the rewritten text goes wrong, through
-`scalpel-agent--first-unbalance-offset', with a short excerpt, so the
-next attempt corrects the replacement instead of re-deriving it from
+`scalpel-agent--first-unbalance-offset', with a short excerpt, and the
+complete perl command line through `scalpel-agent--perl-invocation', so
+the next attempt corrects the replacement instead of re-deriving it from
 memory.  The report also names the definitions the rewrite changed in
 each file, because a bulk rename leaves the old name in the planner's
 hands and the next round's locate failure explains nothing on its own.
@@ -2179,9 +2195,10 @@ can offer block-edit as the retry."
         (when (not (scalpel-locate-balanced-p resolved new))
           (let ((offset (scalpel-agent--first-unbalance-offset new)))
             (user-error (concat "Scalpel: file-substitute of %s would leave unbalanced "
-                                "brackets; refused whole\n%s%s")
+                                "brackets; refused whole\n%s%s%s")
                         resolved
                         (scalpel-agent--substitute-invocation pattern replacement)
+                        (scalpel-agent--perl-invocation pattern replacement)
                         (if (< offset (length new))
                             (format "\nThe rewritten text first goes wrong at character %d: %S"
                                     offset
