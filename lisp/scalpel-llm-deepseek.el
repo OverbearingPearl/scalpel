@@ -41,7 +41,7 @@ Otherwise delegate to the default parser."
             (list
              (format (concat "Scalpel: DeepSeek planner emitted DSML "
                              "tool-call syntax instead of the TOML action "
-                             "array; nothing was executed.  Reply was:\n%s")
+                             "array; nothing was executed.  Reply was:%s")
                      (concat "\n" (scalpel-redact-apply raw) "\n")))))
   (scalpel-llm-dialect--default-parse raw))
 

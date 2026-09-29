@@ -107,6 +107,8 @@ types fall to the executor entry, which that table always holds."
 
 The string contains a mechanically repaired version of the failed input,
 or nil when no deterministic fix is possible.
+A repair that is identical to the failed input yields nil, so a missing
+suggestion fence means no mechanical fix was possible.
 In the parse branch, advice blocks the model echoed back are
 disinfected before repair.
 Applies `scalpel-redact-apply' before returning."
@@ -116,12 +118,10 @@ Applies `scalpel-redact-apply' before returning."
          (content nil)
          (fence-open-rx
           (rx bol (0+ blank)
-              (or "```" (seq "'" "'" "'") "‘‘‘" "’’’")
-              (0+ blank) "scalpel suggestion"))
+              "@scalpel@" (0+ blank) "suggestion"))
          (fence-close-rx
           (rx bol (0+ blank)
-              (or "```" (seq "'" "'" "'") "‘‘‘" "’’’")
-              (0+ blank) eol)))
+              "@scalpel@" (0+ blank) "end" (0+ blank) eol)))
     (cond
      ((eq type 'tool-call)
       (let* ((no-xml (replace-regexp-in-string
@@ -143,7 +143,7 @@ Applies `scalpel-redact-apply' before returning."
                                     (car (last lines))))
           (setq lines (butlast lines)))
         ;; Strip any echoed-back advice block: from a fence opener line
-        ;; labelled "scalpel suggestion" through the next closing fence.
+        ;; holding "@scalpel@ suggestion" through the next closing fence.
         (let ((kept nil)
               (skipping nil))
           (dolist (line lines)
@@ -187,9 +187,11 @@ Applies `scalpel-redact-apply' before returning."
         (when idx
           (setq content (substring input idx)))))
      (t nil))
-    (when (and content (not (string-empty-p content)))
+    (when (and content (not (string-empty-p content))
+               (not (string-equal (string-trim content)
+                                  (string-trim (or input "")))))
       (scalpel-redact-apply
-       (concat "```scalpel suggestion\n" content "\n```")))))
+       (concat "@scalpel@ suggestion\n" content "\n@scalpel@ end")))))
 
 (provide 'scalpel-diagnose-advice)
 

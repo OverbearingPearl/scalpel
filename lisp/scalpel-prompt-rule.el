@@ -203,14 +203,21 @@ reaching for it with a different command."
 
 (defconst scalpel-prompt-rule--feedback-fence
   "Runtime feedback fence rules: a scalpel error fence in the conversation
-history holds the verbatim redacted text of the previous rejected reply,
-shown only to understand why it failed, never to be copied back unchanged.
-A scalpel suggestion fence, when present, holds the client-side diagnostic
-module's mechanically repaired version of that reply; the next round should
-prefer to copy it but must self-check first, because it is a guess, not a
-guarantee. A missing suggestion fence means no mechanical fix was found, so
-rewrite from the error description alone. Both fences appear only in the
-conversation history and must never be imitated in the planner's own reply."
+history opens on a line holding @scalpel@ error and closes on a line
+holding @scalpel@ end. It holds the verbatim redacted text of the
+previous rejected reply, shown only to understand why it failed,
+never to be copied back unchanged.
+A scalpel suggestion fence, when present, opens on a line holding
+@scalpel@ suggestion and closes on that same @scalpel@ end line. It
+holds the client-side diagnostic module's mechanically repaired
+version of that reply, and the next round must copy such a fence back
+character for character, because it is a guess, not a guarantee, so
+self-check first. The markers contain neither backticks nor any run of
+three single quotes, so they cannot collide with Markdown code fences
+or TOML literal-string delimiters. A missing suggestion fence means no
+mechanical fix was found, so rewrite from the error description alone.
+Both fences appear only in the conversation history and must never be
+imitated in the planner's own reply."
   "Runtime feedback fence prompt rule, matching sibling rules' tone and wrapping.")
 
 (defconst scalpel-prompt-rule--shell-hygiene

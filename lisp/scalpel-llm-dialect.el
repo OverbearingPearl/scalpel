@@ -237,9 +237,9 @@ plain `user-error'."
 		  "Scalpel forbids and does not parse; nothing was "
 		  "executed.  The reply must be a plain TOML "
 		  "action document with no wrapper markup of any "
-		  "kind.  Reply was:\n\n```scalpel error\n"
+		  "kind.  Reply was:\n@scalpel@ error\n"
 		  (scalpel-redact-apply raw)
-		  "\n```"))
+		  "\n@scalpel@ end"))
 	    (suggestion (when-let ((repair (scalpel-diagnose-advice-mechanical-repair (list :type (quote tool-call) :input raw))))
 			  (concat "\n" repair))))
 	(signal 'scalpel-llm-dialect-tool-call-error
@@ -258,9 +258,9 @@ plain `user-error'."
 		      "and broke the document -- nothing was executed.  "
 		      "Rephrase the text without them, or write that "
 		      "value as a TOML double-quoted string.  Reply "
-		      "was:\n\n```scalpel error\n"
+		      "was:\n\n@scalpel@ error\n"
 		      (scalpel-redact-apply raw)
-		      "\n```"))
+		      "\n@scalpel@ end"))
 		(suggestion (when-let ((repair (scalpel-diagnose-advice-mechanical-repair (list :type (quote parse) :input raw))))
 			      (concat "\n" repair))))
 	    (user-error (concat msg (or suggestion ""))))
@@ -270,9 +270,9 @@ plain `user-error'."
 		    "was executed.  The reply shown below was itself the broken "
 		    "attempt and must not be copied -- the retry must follow "
 		    "the format shown in the system prompt instead.  Reply "
-		    "was:\n\n```scalpel error\n"
+		    "was:\n\n@scalpel@ error\n"
 		    (scalpel-redact-apply raw)
-		    "\n```"))
+		    "\n@scalpel@ end"))
 	      (suggestion (when-let ((repair (scalpel-diagnose-advice-mechanical-repair (list :type (quote parse) :input raw))))
 			    (concat "\n" repair))))
 	  (user-error (concat msg (or suggestion ""))))))
@@ -285,9 +285,9 @@ plain `user-error'."
 		  "instead of the required TOML action document; "
 		  "nothing was executed.  The echoed text is shown "
 		  "only so the answer it holds can still be read.  "
-		  "Reply was:\n\n```scalpel error\n"
+		  "Reply was:\n@scalpel@ error\n"
 		  (scalpel-redact-apply raw)
-		  "\n```"))
+		  "\n@scalpel@ end"))
 	    (suggestion (when-let ((repair (scalpel-diagnose-advice-mechanical-repair (list :type (quote prose) :input raw))))
 			  (concat "\n" repair))))
 	(signal 'scalpel-llm-dialect-prose-reply-error
@@ -299,9 +299,9 @@ plain `user-error'."
 		  "literal string early, because TOML literal strings take no "
 		  "escapes at all -- nothing was executed.  A value "
 		  "holding a single quote must be written as a "
-		  "triple-quoted literal instead.  Reply was:\n\n```scalpel error\n"
+		  "triple-quoted literal instead.  Reply was:\n@scalpel@ error\n"
 		  (scalpel-redact-apply raw)
-		  "\n```"))
+		  "\n@scalpel@ end"))
 	    (suggestion (when-let ((repair (scalpel-diagnose-advice-mechanical-repair (list :type (quote parse) :input raw))))
 			  (concat "\n" repair))))
 	(user-error (concat msg (or suggestion "")))))
@@ -311,9 +311,9 @@ plain `user-error'."
 		  "shown below was itself the broken attempt and must "
 		  "not be copied -- the retry must follow the format "
 		  "shown in the system prompt instead.  Reply "
-		  "was:\n\n```scalpel error\n"
+		  "was:\n\n@scalpel@ error\n"
 		  (scalpel-redact-apply raw)
-		  "\n```"))
+		  "\n@scalpel@ end"))
 	    (suggestion (when-let ((repair (scalpel-diagnose-advice-mechanical-repair (list :type (quote parse) :input raw))))
 			  (concat "\n" repair))))
 	(user-error (concat msg (or suggestion ""))))))))
