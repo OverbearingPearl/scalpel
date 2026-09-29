@@ -226,7 +226,8 @@ none -- is the model's own habit and was observed to repeat on one
 backend.  `scalpel-agent-plan' maps each condition to its own
 planner error type for that reason.  The other branches signal
 plain `user-error'."
-  (let ((fences (scalpel-llm-dialect--count-fences raw)))
+  (let ((fences (scalpel-llm-dialect--count-fences raw))
+      (text-quoting-style 'straight))
     (cond
      ((string-match-p scalpel-llm-dialect--tool-call-regexp raw)
       (let ((msg (concat

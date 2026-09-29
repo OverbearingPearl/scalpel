@@ -295,8 +295,7 @@ not exist."
     scalpel-console--last-instruction
     scalpel-agent--context-files
     scalpel-commit--style
-    scalpel-commit--language
-    scalpel-tool--selected)
+    scalpel-commit--language)
   "Buffer-local variables that together hold one console session.
 `scalpel-console--session-snapshot' captures exactly these and
 `scalpel-console--session-restore' puts them back, so a module reload
@@ -311,9 +310,7 @@ only risk resurrecting a dead round.
 `scalpel-agent--shell-output' is reset before and read within a
 single action, so its value belongs to no session.
 The commit style and language defaults chosen from a console are
-carried here so they survive a module reload.
-`scalpel-tool--selected' is carried here so a console keeps its
-chosen tools across a module reload.")
+carried here so they survive a module reload.")
 
 (defconst scalpel-console--session-globals
   '(scalpel-token--console-totals
@@ -694,12 +691,7 @@ also anchors the buffer to a root directory."
             #'scalpel-console--confirm-kill nil t)
   ;; Buffer-local: the console's reasoning buffer dies with the console,
   ;; so it cannot accumulate.
-  (add-hook 'kill-buffer-hook #'scalpel-console--kill-reasoning-buffer nil t)
-  ;; One-time tool probe: a restored session keeps its existing choice,
-  ;; a fresh console gets one.
-  (require 'scalpel-tool)
-  (unless scalpel-tool--selected
-    (scalpel-tool-probe)))
+  (add-hook 'kill-buffer-hook #'scalpel-console--kill-reasoning-buffer nil t))
 
 (defun scalpel-console--insert-tagged (text role)
   "Insert TEXT at point tagged with ROLE in `scalpel-console-role'.
@@ -1342,7 +1334,6 @@ that path."
     (setq-local scalpel-console--root root)
     (setq-local default-directory root)
     (setq-local scalpel-console--context-baseline 'none-yet)
-    (scalpel-tool-probe)
     (let ((inhibit-read-only t))
       (erase-buffer)
       (goto-char (point-min))

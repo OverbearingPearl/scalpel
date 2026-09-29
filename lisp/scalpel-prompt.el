@@ -226,6 +226,7 @@ exactly of that token signals that nothing should be created.")
 
 (defcustom scalpel-prompt-system-prompt
   (concat
+   scalpel-prompt-rule--no-wrapper "\n"
    scalpel-prompt-rule--document "\n"
    scalpel-prompt-rule--example "\n"
    scalpel-prompt-rule--actions "\n"
@@ -248,7 +249,9 @@ exactly of that token signals that nothing should be created.")
    scalpel-prompt-rule--action-budget
    (if scalpel-prompt-reply-language
        (concat "\n" (scalpel-prompt--reply-language-rule))
-     ""))
+     "")
+   "\n"
+   scalpel-prompt-rule--no-wrapper)
   "System prompt for the Scalpel agent planner.
 This controls only the wording sent to the LLM; the action schema
 is fixed by `scalpel-agent--tool-fields' and

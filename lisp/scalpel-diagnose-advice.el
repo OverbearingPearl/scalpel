@@ -113,31 +113,29 @@ Applies `scalpel-redact-apply' before returning."
   (let* ((type (plist-get error-plist :type))
          (message (plist-get error-plist :message))
          (input (plist-get error-plist :input))
-         (content nil))
+         (content nil)
+         (fence-open-rx
+          (rx bol (0+ blank)
+              (or "```" (seq "'" "'" "'") "‘‘‘" "’’’")
+              (0+ blank) "scalpel suggestion"))
+         (fence-close-rx
+          (rx bol (0+ blank)
+              (or "```" (seq "'" "'" "'") "‘‘‘" "’’’")
+              (0+ blank) eol)))
     (cond
      ((eq type 'tool-call)
       (let* ((no-xml (replace-regexp-in-string
-                      (rx (or "<invoke>" "</invoke>" "<tool_call>" "</tool_call>"))
+                      (rx (or "<invoke>" "</invoke>" ""))
                       "" input t t))
-             (lines (split-string no-xml "\n" t))
-             (toml-lines (seq-filter
-                          (lambda (l)
-                            (or (string-match
-                                 (rx bol "[[" (literal "action") "]]") l)
-                                (string-match
-                                 (rx bol "tool" (one-or-more blank) "=") l)))
-                          lines)))
-        (setq content (mapconcat #'identity toml-lines "\n"))))
+             (lines (split-string no-xml "\n" t)))
+        (while (and lines (not (string-match-p "^\\[\\[" (car lines))))
+          (setq lines (cdr lines)))
+        (while (and lines
+                    (string-match-p fence-close-rx (car (last lines))))
+          (setq lines (butlast lines)))
+        (setq content (mapconcat #'identity lines "\n"))))
      ((eq type 'parse)
-      (let* ((lines (split-string input "\n"))
-             (fence-open-rx
-              (rx bol (0+ blank)
-                  (or "```" "'''" "‘‘‘" "’’’")
-                  (0+ blank) "scalpel suggestion"))
-             (fence-close-rx
-              (rx bol (0+ blank)
-                  (or "```" "'''" "‘‘‘" "’’’")
-                  (0+ blank) eol)))
+      (let* ((lines (split-string input "\n")))
         (while (and lines (not (string-match-p "^\\[\\[" (car lines))))
           (setq lines (cdr lines)))
         (while (and lines

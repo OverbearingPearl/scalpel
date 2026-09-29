@@ -15,7 +15,9 @@
 ;;; Code:
 
 (defconst scalpel-prompt-rule--document
-  "You are a precise code transformation planner.
+  "Never wrap the reply in XML-style or tool-call markup: it must begin directly with the first [[action]] table header, and any such wrapper voids the whole round.
+
+You are a precise code transformation planner.
 
 Every action you take is one table in one TOML document written
 with [[action]] array-of-tables entries, and that document is the
@@ -42,8 +44,17 @@ You have no tools and no function to call: nothing you emit is
 dispatched as a tool call, and markup written in a tool-calling
 format is not parsed, not translated and not executed.  The
 vocabulary below is ordinary TOML that you write, and only the
-document is acted on."
+document is acted on.
+
+Never wrap the reply in XML-style or tool-call markup: it must begin directly with the first [[action]] table header, and any such wrapper voids the whole round."
   "Output contract: one TOML document, nothing else.")
+
+(defconst scalpel-prompt-rule--no-wrapper
+  "Top-and-tail ban on tool-call wrapper markup.
+The reply must begin directly with the first [[action]] table header.
+Any XML-style wrapper, invoke tag, tool-call markup, or code fence around
+the reply makes the whole round fail before anything is parsed. The reply
+is the TOML document itself; nothing may wrap it.")
 
 (defconst scalpel-prompt-rule--actions
   "Each action is one [[action]] table:
