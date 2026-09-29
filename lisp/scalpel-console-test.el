@@ -64,7 +64,7 @@ which copies the text properties of the preceding character.  Console
 output carried `scalpel-console-output' but nothing marked it
 rear-nonsticky, so the first character the user typed inherited the
 tag; `--pending-input-regions' then skipped the whole instruction and
-RET answered \"nothing to send\"."
+RET sent nothing at all."
   (let ((scalpel-agent--context-files nil)
         (buf (scalpel-console-test--new-console-buffer))
         (prompt-sent nil))
@@ -987,8 +987,8 @@ long-running = false")))
   "Input typed before the buffer end is sent, not treated as absent.
 Regression: the pending instruction was located by a position
 snapshot, so text typed above that snapshot was invisible to RET
-and the user got \"nothing to send\" (or a byte-shifted
-instruction) after the round-limit notice."
+and nothing was sent (or a byte-shifted instruction was sent)
+after the round-limit notice."
   (let ((scalpel-agent--context-files nil)
         (buf (scalpel-console-test--new-console-buffer))
         (prompt-sent nil))

@@ -2085,8 +2085,7 @@ is killed releases its hold with no separate lock cleanup."
                              (car region) (cdr region)))
                           regions
                           ""))))
-            (if (string-empty-p instr)
-                (message "Scalpel: nothing to send.")
+            (unless (string-empty-p instr)
               ;; Read the conversation before this instruction joins it.
               (let ((history (scalpel-console--history)))
                 ;; Remember the instruction so `scalpel-console-repeat' can
