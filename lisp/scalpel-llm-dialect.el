@@ -258,7 +258,7 @@ plain `user-error'."
 		      "and broke the document -- nothing was executed.  "
 		      "Rephrase the text without them, or write that "
 		      "value as a TOML double-quoted string.  Reply "
-		      "was:\n\n@scalpel@ error\n"
+		      "was:\n@scalpel@ error\n"
 		      (scalpel-redact-apply raw)
 		      "\n@scalpel@ end"))
 		(suggestion (when-let ((repair (scalpel-diagnose-advice-mechanical-repair (list :type (quote parse) :input raw))))
@@ -270,7 +270,7 @@ plain `user-error'."
 		    "was executed.  The reply shown below was itself the broken "
 		    "attempt and must not be copied -- the retry must follow "
 		    "the format shown in the system prompt instead.  Reply "
-		    "was:\n\n@scalpel@ error\n"
+		    "was:\n@scalpel@ error\n"
 		    (scalpel-redact-apply raw)
 		    "\n@scalpel@ end"))
 	      (suggestion (when-let ((repair (scalpel-diagnose-advice-mechanical-repair (list :type (quote parse) :input raw))))
@@ -311,7 +311,7 @@ plain `user-error'."
 		  "shown below was itself the broken attempt and must "
 		  "not be copied -- the retry must follow the format "
 		  "shown in the system prompt instead.  Reply "
-		  "was:\n\n@scalpel@ error\n"
+		  "was:\n@scalpel@ error\n"
 		  (scalpel-redact-apply raw)
 		  "\n@scalpel@ end"))
 	    (suggestion (when-let ((repair (scalpel-diagnose-advice-mechanical-repair (list :type (quote parse) :input raw))))
