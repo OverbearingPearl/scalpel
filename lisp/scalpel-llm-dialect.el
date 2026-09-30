@@ -2,7 +2,7 @@
 
 ;; Copyright (C) 2026 OverbearingPearl
 ;; Author: OverbearingPearl <OverbearingPearl@outlook.com>
-;; Assisted-by: DeepSeek:deepseek-v4-flash, GLM:glm-5.3-flash, Laguna:laguna-s-2.1
+;; Assisted-by: GPT:gpt-6-luna, GLM:glm-5.3-flash
 ;; URL: https://github.com/OverbearingPearl/scalpel
 ;; SPDX-License-Identifier: Apache-2.0
 
