@@ -318,24 +318,105 @@ plain `user-error'."
 			  (concat "\n" repair))))
 	(user-error (concat msg (or suggestion ""))))))))
 
+(defun scalpel-llm-dialect--validate-string-delimiters (raw)
+  "Validate string delimiters in the raw TOML document RAW."
+  (let ((position 0)
+        (key-regexp
+         "\\(?:[A-Za-z0-9_-]+\\|\"\\(?:\\\\.\\|[^\"\\\\\n]\\)*\"\\|'[^'\n]*'\\)")
+        assignment-regexp)
+    (setq assignment-regexp
+          (concat "^[ \t]*" key-regexp
+                  "\\(?:[ \t]*\\.[ \t]*" key-regexp "\\)*[ \t]*="))
+    (while (string-match assignment-regexp raw position)
+      (let* ((value-start (match-end 0))
+             (scan-start value-start)
+             (length (length raw)))
+        (while (and (< scan-start length)
+                    (memq (aref raw scan-start) '(?\s ?\t)))
+          (setq scan-start (1+ scan-start)))
+        (setq position (match-end 0))
+        (when (and (< scan-start length)
+                   (memq (aref raw scan-start) '(?\" ?')))
+          (let* ((quote-char (aref raw scan-start))
+                 (triple (and (<= (+ scan-start 3) length)
+                              (= (aref raw (1+ scan-start)) quote-char)
+                              (= (aref raw (+ scan-start 2)) quote-char)))
+                 (delimiter (if triple
+                                (make-string 3 quote-char)
+                              (char-to-string quote-char)))
+                 (content-start (+ scan-start (length delimiter)))
+                 (close-start (string-match (regexp-quote delimiter)
+                                            raw content-start)))
+            (unless close-start
+              (if triple
+                  (user-error "Unterminated TOML string beginning at character %d"
+                              scan-start)
+                (user-error "Unterminated TOML string beginning at character %d"
+                            scan-start)))
+            (let* ((contents (substring raw content-start close-start))
+                   (single-triple
+                    (string-match-p (regexp-quote "'''") contents))
+                   (double-triple
+                    (string-match-p (regexp-quote "\"\"\"") contents))
+                   (both-triples (and single-triple double-triple))
+                   (violation
+                    (or both-triples
+                        (and (= quote-char ?\")
+                             (not triple)))))
+              (setq position (+ close-start (length delimiter)))
+              (when violation
+                (let* ((candidate
+                        (unless both-triples
+                          (if single-triple
+                              "\"\"\""
+                            "'''")))
+                       (safe
+                        (and candidate
+                             (not (string-match-p
+                                   (regexp-quote candidate) contents))))
+                       (diagnostic
+                        (if both-triples
+                            (format "Invalid TOML string at character %d: single-quoted strings may use single or triple delimiters, but double-quoted strings must use triple delimiters; contents containing both ''' and \"\"\" cannot be represented."
+                                    scan-start)
+                          (format "Invalid TOML string delimiter at character %d: single-quoted strings may use single or triple delimiters, while double-quoted strings must use triple delimiters. Use triple-single delimiters by default, or triple-double delimiters when the contents contain '''."
+                                  scan-start))))
+                  (when safe
+                    (let ((repaired
+                           (concat
+                            (substring raw 0 scan-start)
+                            candidate
+                            contents
+                            candidate
+                            (substring raw (+ close-start
+                                              (length delimiter))))))
+                      (setq diagnostic
+                            (concat diagnostic
+                                    "\nSuggested repair:\n```suggestion\n"
+                                    repaired
+                                    (unless (string-suffix-p "\n" repaired)
+                                      "\n")
+                                    "```"))))
+                  (error "%s" diagnostic)))))))))
+  nil)
+
 (defun scalpel-llm-dialect--default-parse (raw)
   "Parse RAW to a list of action plists with the default dialect.
 RAW is the planner's whole TOML reply.  It is written verbatim to
 a temp file and parsed with `toml:read-from-file' in one round
 trip, and mirrored verbatim into a raw-TOML echo buffer named
 after the thinking buffer so the reader sees exactly what the
-planner wrote.  The contract is TOML: the parsed document is an
-alist of pairs (STRING-KEY . VALUE).  The `'''` fences must
-balance; a double quote inside '...' or '''...''' is content, not
-a delimiter, and the TOML parser itself rejects a malformed
-double-quoted string.  Either an [[action]] table array or a
-single top-level table carrying a `tool' key is accepted; each
-table's fields become the action plist keys.  TOML booleans
-arrive as t and, for false, the symbol :false; in particular
-`long-running' is checked for presence on the assoc entry itself,
-since a TOML false parses to nil and would otherwise be
-indistinguishable from an absent key.  Every failure is routed
-through `scalpel-llm-dialect--parse-error'."
+planner wrote.  The string-delimiter validator runs before TOML
+parsing and reports delimiter violations with a useful diagnostic
+and, when safe, a mechanically repaired suggestion fence.  The
+contract is TOML: the parsed document is an alist of pairs
+\\(STRING-KEY . VALUE).  Either an [[action]] table array or a single
+top-level table carrying a `tool' key is accepted; each table's
+fields become the action plist keys.  TOML booleans arrive as t and,
+for false, the symbol :false; in particular `long-running' is
+checked for presence on the assoc entry itself, since a TOML false
+parses to nil and would otherwise be indistinguishable from an
+absent key.  Every unrelated TOML failure is routed through
+`scalpel-llm-dialect--parse-error'."
   (when (string-empty-p (string-trim raw))
     ;; An empty reply is a backend failure, not a TOML syntax problem:
     ;; naming TOML here would send the user hunting for a syntax error
@@ -365,15 +446,10 @@ API key, quota and network, then retry"))
         (insert raw-text)))
     (unwind-protect
         (progn
-          ;; Single-quote literal contract: only check that ''' fences
-          ;; balance.  A double quote inside '...' or '''...''' is
-          ;; content, not a delimiter, so scanning the raw text for
-          ;; '"' cannot tell delimiter from content.  The TOML parser
-          ;; itself rejects a malformed double-quoted string, so
-          ;; nothing more is enforced here.
-          (let ((pieces (split-string raw "'''")))
-            (unless (cl-evenp (1- (length pieces)))
-              (scalpel-llm-dialect--parse-error raw)))
+          ;; Reject malformed string delimiters before TOML parsing.
+          ;; The validator supplies a useful diagnostic and, when safe,
+          ;; a mechanically repaired suggestion fence.
+          (scalpel-llm-dialect--validate-string-delimiters raw)
           ;; Write RAW verbatim and parse in a single round trip.
           (setq temp-file (make-temp-file "scalpel-toml"))
           (with-temp-file temp-file

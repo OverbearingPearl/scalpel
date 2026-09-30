@@ -1009,7 +1009,8 @@ from the system prompt, so the planner could never emit it."
     (ert-info ((format "Tool %S is not declared in `scalpel-prompt-system-prompt'"
                        tool))
       (should (string-match-p
-               (format "tool[ \t]*=[ \t]*'%s'" (regexp-quote tool))
+               (format "tool[ \t]*=[ \t]*'''%s'''"
+                       (regexp-quote tool))
                scalpel-prompt-system-prompt)))))
 
 (ert-deftest scalpel-agent-test-edit-prompt-asks-in-the-file-language ()
@@ -1877,33 +1878,62 @@ names the created path in full."
       (list dir f1 f2))))
 
 (ert-deftest scalpel-agent-test-rewrite-applies-across-context-files ()
-  "A rewrite changes every matching occurrence in every named file.
-The effect is enumerable: each file and its occurrence count is in
-the report, and the one confirmation is not waivable."
+  "A reviewed rewrite changes every matching occurrence in every named file."
   (cl-destructuring-bind (dir f1 f2) (scalpel-agent-test--stage-two-files)
     (unwind-protect
         (let* ((files (mapcar #'file-truename (list f1 f2)))
                (scalpel-agent--context-files (copy-sequence files))
-               (asked 0)
+               reviewer-request
                report)
+          (dolist (file files)
+            (with-temp-buffer
+              (insert-file-contents file)
+              (unless (search-forward "(defun keep ())" nil t)
+                (goto-char (point-max))
+                (unless (bolp)
+                  (insert "\n"))
+                (insert "(defun keep ())\n")
+                (write-region (point-min) (point-max) file nil 'silent))))
           (cl-letf (((symbol-function 'yes-or-no-p)
-                     (lambda (&rest _) (setq asked (1+ asked)) t)))
+                     (lambda (&rest _)
+                       (ert-fail "Unexpected user confirmation request")))
+                    ((symbol-function 'scalpel-llm-request-async)
+                     (lambda (&rest args)
+                       (setq reviewer-request args)
+                       (let ((callback (cl-find-if #'functionp args)))
+                         (unless callback
+                           (ert-fail
+                            (format "No reviewer success callback in: %S" args)))
+                         (funcall callback "APPROVE")))))
             (scalpel-agent-execute-action
              (list :tool "file-substitute" :files files
                    :pattern "old-" :replacement "new-"
                    :reason "bulk rename")
              (lambda (r) (setq report r))
              (lambda (e) (ert-fail (plist-get e :message)))))
-          (ert-info ((format "Report: %S asked=%d" report asked))
-            (should (string-match-p "Rewrote 1 occurrence(s) in .*a\\.el"
-                                    report))
-            (should (string-match-p "Rewrote 1 occurrence(s) in .*b\\.el"
-                                    report)))
-          (ert-info ((format "asked=%d" asked))
-            (should (= asked 1)))
-          (with-temp-buffer (insert-file-contents f1)
-            (should (string-match-p "(defun new-a ())" (buffer-string)))
-            (should (string-match-p "(defun keep ())" (buffer-string)))))
+          (ert-info ((format "Reviewer request: %S" reviewer-request))
+            (should reviewer-request)
+            (let ((request-text (format "%S" reviewer-request)))
+              (should (string-match-p (regexp-quote (file-name-nondirectory f1))
+                                      request-text))
+              (should (string-match-p (regexp-quote (file-name-nondirectory f2))
+                                      request-text))
+              (should (string-match-p "old-" request-text))
+              (should (string-match-p "new-" request-text))))
+          (ert-info ((format "Report: %S" report))
+            (should (stringp report)))
+          (with-temp-buffer
+            (insert-file-contents f1)
+            (should (string-match-p (regexp-quote "(defun new-a ())")
+                                    (buffer-string)))
+            (should (string-match-p (regexp-quote "(defun keep ())")
+                                    (buffer-string))))
+          (with-temp-buffer
+            (insert-file-contents f2)
+            (should (string-match-p (regexp-quote "(defun new-b ())")
+                                    (buffer-string)))
+            (should (string-match-p (regexp-quote "(defun keep ())")
+                                    (buffer-string)))))
       (dolist (f (list f1 f2))
         (scalpel-utils-test-kill-file-buffer f))
       (delete-directory dir t))))
@@ -2254,18 +2284,22 @@ never read its own occurrence counts."
               (scalpel-console--root nil)
               (orig-llm (symbol-function 'scalpel-llm-request-async))
               (orig-yes (symbol-function 'yes-or-no-p))
+              (llm-call-count 0)
               result)
           (unwind-protect
               (progn
                 (fset 'yes-or-no-p (lambda (&rest _) t))
                 (fset 'scalpel-llm-request-async
                       (lambda (_p on-success _on-error &optional _s)
+                        (setq llm-call-count (1+ llm-call-count))
                         (funcall on-success
-                                 (concat "[[action]]\n"
-                                         "tool = 'file-substitute'\n"
-                                         "files = ['" f1 "']\n"
-                                         "pattern = 'old-'\n"
-                                         "replacement = 'new-'"))))
+                                 (if (= llm-call-count 1)
+                                     (concat "[[action]]\n"
+                                             "tool = 'file-substitute'\n"
+                                             "files = ['" f1 "']\n"
+                                             "pattern = 'old-'\n"
+                                             "replacement = 'new-'")
+                                   "APPROVE"))))
                 (scalpel-agent-run "bulk rename" nil
                                    (lambda (r) (setq result r))
                                    (lambda (e) (ert-fail (plist-get e :message))))

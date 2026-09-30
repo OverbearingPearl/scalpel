@@ -37,7 +37,7 @@
 (require 'scalpel-sandbox)
 (require 'scalpel-tool)
 
-(defconst scalpel-agent--tool-vocabulary '("file-peek" "block-edit" "block-insert" "block-delete" "file-create" "file-rename" "file-delete" "file-substitute" "shell" "reply" "confirm")
+(defconst scalpel-agent--tool-vocabulary '("file-peek" "block-edit" "block-insert" "block-delete" "file-create" "file-rename" "file-delete" "file-substitute-dry-run" "file-substitute" "shell" "reply" "confirm")
   "Tool names the planner may emit.
 Structural contract, not user configuration: dispatch in
 `scalpel-agent-execute-action' must stay in sync with it.")
@@ -57,6 +57,7 @@ Structural contract, not user configuration: dispatch in
     ("file-rename" . (:tool :file :to))
     ("file-delete" . (:tool :file))
     ("file-substitute" . (:tool :files :pattern :replacement))
+    ("file-substitute-dry-run" . (:tool :files :pattern :replacement))
     ("shell" . (:tool :command :reason :long-running))
     ("reply" . (:tool :text))
     ("confirm" . (:tool :text)))
@@ -703,10 +704,10 @@ instruction stays the last thing the LLM reads.  The project user
 prompt rules are appended every turn, between the conversation
 history and the user instruction.  The agent holds no state of its
 own: everything the LLM may rely on arrives here."
-  ;; Outbound redaction: the assembled prompt (context, history, project
-  ;; user prompt rules, tool prompt rules and instruction) is passed
-  ;; through scalpel-redact-apply so secrets are scrubbed before
-  ;; anything leaves the agent.
+  ;; Outbound redaction: the assembled prompt (context, history,
+  ;; project user prompt rules and instruction) is passed through
+  ;; scalpel-redact-apply so secrets are scrubbed before anything
+  ;; leaves the agent.
   (scalpel-redact-apply
    (concat (scalpel-agent-context)
            "\n\n"
@@ -716,9 +717,6 @@ own: everything the LLM may rely on arrives here."
                          scalpel-agent--context-files)))
              (when (and rules (not (string-empty-p rules)))
                (format scalpel-prompt--project-rules-header rules)))
-           (let ((rules (scalpel-tool--prompt-rules)))
-             (when (and rules (not (string-empty-p rules)))
-               (format scalpel-prompt--tool-rules-header rules)))
            (format scalpel-prompt--instruction-header
                    instruction))))
 
@@ -1555,10 +1553,12 @@ exactly the current context files and which binds each of them
 read-only: a shell command may inspect the context but never write to
 it, so file changes always pass through block-edit, block-insert,
 block-delete, file-create, file-rename, file-delete and
-file-substitute.  The
-confirmation gate is driven by `scalpel-agent-confirm-tools'.
-COMMAND may use pipes, redirection and quoting.  The report names
-the command, always states the exit status, and wraps the output in
+file-substitute.  Commands invoking sed, awk or grep are rejected
+with a self-healable planner error recommending Perl 5 for text
+transformations and rg for searches, so the console can retry.
+The confirmation gate is driven by `scalpel-agent-confirm-tools'.
+COMMAND may use pipes, redirection and quoting.  The report names the
+command, always states the exit status, and wraps the output in
 explicit markers, so a reader (human or LLM) can tell which command
 produced what.  Output is truncated to
 `scalpel-agent-shell-max-bytes' bytes, and control characters other
@@ -1572,6 +1572,11 @@ Signal `user-error' when the sandbox is unavailable or fails its
 probe, so a command is never run outside the sandbox."
   (unless (and command reason)
     (user-error "Scalpel: malformed shell action"))
+  (when (string-match
+         "\\(?:\\`\\|[;&|()\n]\\)[ \t\n]*\\(?:\\(?:sudo\\|command\\|exec\\|env\\)[ \t]+\\)*\\(?:\\(?:if\\|then\\|elif\\|while\\|until\\|do\\|!\\)[ \t]+\\)*\\(?:[^ \t\n;&|()<>]*/\\)?\\(sed\\|awk\\|grep\\)\\(?:[ \t\n;&|()<>]\\|\\'\\)"
+         command)
+    (user-error "Scalpel planner error: shell commands may not invoke %s; use Perl 5 for text transformations and rg for searches, then retry"
+                (match-string 1 command)))
   (let* ((root (or (and (bound-and-true-p scalpel-console--root)
                         scalpel-console--root)
                    default-directory))
@@ -2008,21 +2013,17 @@ including nil."
 
 (defun scalpel-agent--perl-substitute (pattern replacement text)
   "Apply PATTERN -> REPLACEMENT over TEXT with perl 5.x.
-The substitute engine is perl by design, per `scalpel-tool-preferences';
-there is no probe or selection state involved.
-`scalpel-tool--argv' supplies its command line for the :substitute key,
-with (\"perl\" \"-e\") used as fallback when no tool was probed.  The
-script body is the perl script constant `scalpel-agent--perl-script'
-and this function only feeds it PATTERN, REPLACEMENT and TEXT.  The
-pattern is compiled by perl's own qr//, so a pattern perl refuses
-comes back as a concrete error the next attempt repairs.  TEXT is
-piped on stdin and perl prints a \"SCALPEL-COUNT n\" line followed by
-the rewritten text, both on stdout, so no stderr channel is involved.
-On a compile failure perl prints a \"SCALPEL-ERROR ...\" line and
-exits 2, surfacing perl's concrete message.  In REPLACEMENT, \\N
-means the Nth capture group and \\& the whole match.  Every refusal
-\(compile failure, nonzero exit, or missing count report) ends with
-the complete perl command produced by
+The substitute engine is fixed to the perl executable.  The script body
+is the perl script constant `scalpel-agent--perl-script' and this
+function feeds it PATTERN, REPLACEMENT and TEXT.  The pattern is
+compiled by perl's own qr//, so a pattern perl refuses comes back as a
+concrete error the next attempt repairs.  TEXT is piped on stdin and
+perl prints a \"SCALPEL-COUNT n\" line followed by the rewritten text,
+both on stdout, so no stderr channel is involved.  On a compile failure
+perl prints a \"SCALPEL-ERROR ...\" line and exits 2, surfacing perl's
+concrete message.  In REPLACEMENT, \\N means the Nth capture group and
+\\& the whole match.  Every refusal \(compile failure, nonzero exit, or
+missing count report) ends with the complete perl command produced by
 `scalpel-agent--perl-invocation', so the next attempt can replay it
 directly.  Signal `user-error' when perl refuses to compile the
 pattern."
@@ -2033,13 +2034,10 @@ pattern."
                   (cons (format "SCALPEL_REPLACEMENT=%s" replacement)
                         process-environment)))
            (script scalpel-agent--perl-script)
-           (argv (or (scalpel-tool--argv :substitute) (list "perl" "-e")))
            (command (scalpel-agent--perl-invocation pattern replacement))
            (exit
-            (apply #'call-process-region
-                   (point-min) (point-max)
-                   (car argv) t t nil
-                   (append (cdr argv) (list script))))
+            (call-process-region
+             (point-min) (point-max) "perl" t t nil "-e" script))
            (first-line-start (point-min))
            (first-line-end (progn (goto-char (point-min))
                                   (line-end-position)))
@@ -2076,6 +2074,125 @@ pattern."
         (cons (string-to-number (match-string 1 first-line))
               new-text)))))
 
+(defun scalpel-agent--perl-substitute-preview (pattern replacement files)
+  "Preview PATTERN replaced by REPLACEMENT in each file in FILES.
+Return a bounded string containing each file's proposed content and match
+count.  Files are never modified."
+  (unless (and (stringp pattern)
+               (stringp replacement)
+               (consp files)
+               (proper-list-p files))
+    (error "Invalid Perl substitution preview arguments"))
+  (dolist (file files)
+    (unless (and (stringp file)
+                 (scalpel-agent--context-file-p file))
+      (error "Preview file is outside the session context: %S" file)))
+  (let ((sections nil)
+        (max-report-length 20000))
+    (dolist (file files)
+      (unless (and (stringp file)
+                   (file-regular-p file)
+                   (file-readable-p file))
+        (error "Preview file is not a readable regular file: %S" file))
+      (let* ((source (with-temp-buffer
+                       (insert-file-contents file)
+                       (buffer-string)))
+             (result (scalpel-agent--perl-substitute
+                      pattern replacement source))
+             (content nil)
+             (count nil))
+        (cond
+         ((and (consp result)
+               (stringp (car result))
+               (integerp (cdr result)))
+          (setq content (car result)
+                count (cdr result)))
+         ((and (consp result)
+               (integerp (car result))
+               (stringp (cdr result)))
+          (setq content (cdr result)
+                count (car result)))
+         ((and (listp result)
+               (stringp (car result))
+               (integerp (cadr result)))
+          (setq content (car result)
+                count (cadr result)))
+         ((and (vectorp result)
+               (= (length result) 2)
+               (stringp (aref result 0))
+               (integerp (aref result 1)))
+          (setq content (aref result 0)
+                count (aref result 1)))
+         ((and (stringp result)
+               (integerp (get-text-property 0 'match-count result)))
+          (setq content result
+                count (get-text-property 0 'match-count result)))
+         ((and (listp result)
+               (keywordp (car result)))
+          (setq content (or (plist-get result :content)
+                            (plist-get result :text)
+                            (plist-get result :output)
+                            (plist-get result :result))
+                count (or (plist-get result :match-count)
+                          (plist-get result :matches)
+                          (plist-get result :count))))
+         ((listp result)
+          (let ((content-cell (or (assq 'content result)
+                                  (assq 'text result)
+                                  (assq 'output result)
+                                  (assoc "content" result)
+                                  (assoc "text" result)
+                                  (assoc "output" result)))
+                (count-cell (or (assq 'match-count result)
+                                (assq 'matches result)
+                                (assq 'count result)
+                                (assoc "match-count" result)
+                                (assoc "matches" result)
+                                (assoc "count" result))))
+            (setq content (cdr content-cell)
+                  count (cdr count-cell)))))
+        (unless (and (stringp content)
+                     (integerp count)
+                     (>= count 0))
+          (error "Perl substitution returned an unusable preview for %s"
+                 file))
+        (push (format "File: %s\nMatch count: %d\nProposed content:\n%s\n"
+                      file count content)
+              sections)))
+    (let* ((report (mapconcat #'identity (nreverse sections) "\n"))
+           (marker "\n[Preview truncated to the report size limit]\n"))
+      (if (> (length report) max-report-length)
+          (concat (substring report 0 (- max-report-length (length marker)))
+                  marker)
+        report))))
+
+(defun scalpel-agent-review-file-substitute (action preview callback)
+  "Ask the LLM to review ACTION and PREVIEW, then report its decision via CALLBACK."
+  (let* ((files (plist-get action :files))
+         (pattern (plist-get action :pattern))
+         (replacement (plist-get action :replacement))
+         (reason (plist-get action :reason))
+         (guidance
+          "Review the proposed file substitution for safety and consistency with the intended change. Reply with exactly APPROVE only if the change is appropriate; otherwise explain your concerns.")
+         (prompt
+          (concat guidance
+                  "\n\nIntended change:\n" (format "%S" reason)
+                  "\n\nFiles:\n" (format "%S" files)
+                  "\n\nPattern:\n" (format "%S" pattern)
+                  "\n\nReplacement:\n" (format "%S" replacement)
+                  "\n\nPreview:\n" (format "%S" preview))))
+    (scalpel-llm-request-async
+     prompt
+     (lambda (response)
+       (if (and (stringp response)
+                (equal (string-trim response) "APPROVE"))
+           (funcall callback t response)
+         (funcall callback nil response)))
+     (lambda (error)
+       (funcall callback nil
+                (format "LLM request failed: %s"
+                        (if (stringp error) error (error-message-string error))))))))
+
 (define-error 'scalpel-planner-error
   "Scalpel planner reply was unusable (plist :type :message)")
 
@@ -2109,12 +2226,14 @@ that never finds its close."
                finally (throw 'result (length text))))))
 
 (defun scalpel-agent--open-stack-report (text)
-  "Scan TEXT over `(' `[' `{' and `)' `]' `}' keeping a stack of opener positions.
-A closer pops the top position when the stack is non-empty.  Return a
-cons (DEPTH . POSITION) when some brackets are still open, where DEPTH
-is the number of brackets left open and POSITION is the offset at which
-the last of them was opened, or nil when the stack is empty.  This is
-read by `scalpel-agent--unusable-replacement-reason'."
+  "Return a report describing unmatched opening delimiters in TEXT.
+The function tracks opening round parentheses, square brackets, and braces,
+along with their positions.  A closing delimiter removes the most recent
+position from the stack when the stack is non-empty.  The return value is a
+cons whose car is the number of delimiters left open and whose cdr is the
+offset where the most recent one was opened.  Return nil when the stack is
+empty.  This result is read by
+`scalpel-agent--unusable-replacement-reason'."
   (let ((openers '(?\( ?\[ ?\{))
         (closers '(?\) ?\] ?\}))
         (stack nil))
@@ -2378,37 +2497,31 @@ no target."
 (defun scalpel-agent-execute-action (action on-success on-error)
   "Execute a single ACTION plist, without blocking.
 ON-SUCCESS receives the report string.  ON-ERROR receives a plist
-\(:type SYMBOL :message STRING); the type is `sandbox' when a shell
-action was refused by the sandbox, so a caller can keep the
-boundary out of the conversation.  A declined confirmation is a
+\(:type SYMBOL :message STRING).  A declined confirmation is a
 successful outcome: ON-SUCCESS receives a report stating that the
-action was declined by the user and did not run, so the caller's
-loop continues; ON-ERROR is not used for user declines.  Actions
-that issue no LLM request (`reply', `confirm', `file-create',
-`block-delete', `file-rename', `file-delete', `file-peek',
-`shell') settle synchronously; `block-edit' and `block-insert'
-settle from their LLM's callback.  For `file-substitute', a
-malformed pattern signals `scalpel-planner-error', which surfaces
-as a planner error plist (the condition's data, carrying the
-:type set by the signal) rather than a plain user-error re-wrapped
-with :type `action'.  ON-SUCCESS and ON-ERROR run outside the
-internal error guard, so an error they raise escapes instead of
-being re-framed as an action failure."
+action was declined by the user and did not run.  File-substitute
+actions bypass confirmation: a no-write preview is reviewed by the
+LLM, and the substitution is applied only after explicit approval.
+File-substitute-dry-run reports a no-write preview without confirmation.
+A rejected or unclear review is reported as a planner error so the
+action can be revised.  Callbacks run outside internal error guards."
   (cl-block scalpel-agent-execute-action
     (let ((tool (plist-get action :tool)))
-      (unless (member tool scalpel-agent--tool-vocabulary)
+      (unless (and (member tool scalpel-agent--tool-vocabulary)
+                   (not (equal tool "dry-run")))
         (funcall on-error
                  (list :type 'unknown-tool
                        :message (format "Scalpel: unknown action tool %S" tool)))
         (cl-return-from scalpel-agent-execute-action))
-      (when (scalpel-agent--confirm-needed-p action)
-        (unless (yes-or-no-p (format "Execute %s action: %s?"
-                                     tool
-                                     (scalpel-agent--action-summary action)))
-          (funcall on-success
-                   (format "The %s action was declined by the user and did not run; continue without it or find another way."
-                           tool))
-          (cl-return-from scalpel-agent-execute-action)))
+      (unless (or (member tool '("file-substitute" "file-substitute-dry-run"))
+                  (not (scalpel-agent--confirm-needed-p action))
+                  (yes-or-no-p (format "Execute %s action: %s?"
+                                       tool
+                                       (scalpel-agent--action-summary action))))
+        (funcall on-success
+                 (format "The %s action was declined by the user and did not run; continue without it or find another way."
+                         tool))
+        (cl-return-from scalpel-agent-execute-action))
       (pcase tool
         ("block-edit"
          (scalpel-agent-block-edit
@@ -2425,14 +2538,14 @@ being re-framed as an action failure."
           on-success on-error))
         ("file-create"
          (let ((report (condition-case err
-                         (scalpel-agent-file-create
-                          (plist-get action :file)
-                          (plist-get action :text))
-                       (error
-                        (funcall on-error
-                                 (list :type 'action
-                                       :message (error-message-string err)))
-                        nil))))
+                           (scalpel-agent-file-create
+                            (plist-get action :file)
+                            (plist-get action :text))
+                         (error
+                          (funcall on-error
+                                   (list :type 'action
+                                         :message (error-message-string err)))
+                          nil))))
            (when report (funcall on-success report))))
         ("block-delete"
          (let ((report (condition-case err
@@ -2477,25 +2590,79 @@ being re-framed as an action failure."
                                          :message (error-message-string err)))
                           nil))))
            (when report (funcall on-success report))))
+        ("file-substitute-dry-run"
+         (let ((preview
+                (condition-case err
+                    (scalpel-agent--perl-substitute-preview
+                     (plist-get action :pattern)
+                     (plist-get action :replacement)
+                     (plist-get action :files))
+                  (scalpel-no-validation
+                   (funcall on-error
+                            (list :type 'no-validation
+                                  :message (error-message-string err)))
+                   nil)
+                  (scalpel-planner-error
+                   (funcall on-error (cdr err))
+                   nil)
+                  (error
+                   (funcall on-error
+                            (list :type 'action
+                                  :message (error-message-string err)))
+                   nil))))
+           (when preview (funcall on-success preview))))
         ("file-substitute"
-         (let ((report (condition-case err
-                          (scalpel-agent-file-substitute
-                           (plist-get action :files)
-                           (plist-get action :pattern)
-                           (plist-get action :replacement))
-                        (scalpel-no-validation
-                         (funcall on-error
-                                  (list :type 'no-validation
-                                        :message (error-message-string err)))
-                         nil)
-                        (scalpel-planner-error
-                         (funcall on-error (cdr err)) nil)
-                        (error
-                         (funcall on-error
-                                  (list :type 'action
-                                        :message (error-message-string err)))
-                         nil))))
-          (when report (funcall on-success report))))
+         (let ((preview
+                (condition-case err
+                    (scalpel-agent--perl-substitute-preview
+                     (plist-get action :pattern)
+                     (plist-get action :replacement)
+                     (plist-get action :files))
+                  (scalpel-no-validation
+                   (funcall on-error
+                            (list :type 'no-validation
+                                  :message (error-message-string err)))
+                   nil)
+                  (scalpel-planner-error
+                   (funcall on-error (cdr err))
+                   nil)
+                  (error
+                   (funcall on-error
+                            (list :type 'action
+                                  :message (error-message-string err)))
+                   nil))))
+           (when preview
+             (scalpel-agent-review-file-substitute
+              action preview
+              (lambda (approved review)
+                (if (eq approved t)
+                    (let ((report
+                           (condition-case err
+                               (scalpel-agent-file-substitute
+                                (plist-get action :files)
+                                (plist-get action :pattern)
+                                (plist-get action :replacement))
+                             (scalpel-no-validation
+                              (funcall on-error
+                                       (list :type 'no-validation
+                                             :message (error-message-string err)))
+                              nil)
+                             (scalpel-planner-error
+                              (funcall on-error (cdr err))
+                              nil)
+                             (error
+                              (funcall on-error
+                                       (list :type 'action
+                                             :message (error-message-string err)))
+                              nil))))
+                      (when report (funcall on-success report)))
+                  (funcall on-error
+                           (list :type 'planner-error
+                                 :message
+                                 (format
+                                  "Substitution preview:\n%s\n\nLLM review did not explicitly approve this change. Revise the pattern or replacement, or clarify the intended change, then retry.\nReview: %s"
+                                  preview
+                                  (or review "No clear approval was given."))))))))))
         ("shell"
          (let ((report (condition-case err
                            (scalpel-agent-shell

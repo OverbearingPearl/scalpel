@@ -59,84 +59,97 @@ is the TOML document itself; nothing may wrap it.")
 (defconst scalpel-prompt-rule--actions
   "Each action is one [[action]] table:
 [[action]]
-tool = 'file-peek'
-file = '/abs/path.el'
-symbol = 'name'
+tool = '''file-peek'''
+file = '''/abs/path.el'''
+symbol = '''name'''
+[[action]]
+tool = '''file-peek'''
+file = '''/abs/path.el'''
 
 [[action]]
-tool = 'file-peek'
-file = '/abs/path.el'
-
-[[action]]
-tool = 'block-edit'
-file = '/abs/path.el'
-symbol = 'name'
+tool = '''block-edit'''
+file = '''/abs/path.el'''
+symbol = '''name'''
 instruction = '''...'''
 
 [[action]]
-tool = 'block-insert'
-file = '/abs/path.el'
-symbol = 'new-name'
+tool = '''block-insert'''
+file = '''/abs/path.el'''
+symbol = '''new-name'''
 instruction = '''...'''
-after = 'existing-symbol'
+after = '''existing-symbol'''
 
 [[action]]
-tool = 'block-delete'
-file = '/abs/path.el'
-symbol = 'name'
+tool = '''block-delete'''
+file = '''/abs/path.el'''
+symbol = '''name'''
 
 [[action]]
-tool = 'file-create'
-file = '/abs/new/path.el'
+tool = '''file-create'''
+file = '''/abs/new/path.el'''
 text = '''...'''
 
 [[action]]
-tool = 'file-rename'
-file = '/abs/old.el'
-to = '/abs/new.el'
+tool = '''file-rename'''
+file = '''/abs/old.el'''
+to = '''/abs/new.el'''
 
 [[action]]
-tool = 'file-delete'
-file = '/abs/path.el'
+tool = '''file-delete'''
+file = '''/abs/path.el'''
 
 [[action]]
-tool = 'file-substitute'
-files = ['/abs/a.el', '/abs/b.el']
+tool = '''file-substitute'''
+files = ['''/abs/a.el''', '''/abs/b.el''']
 pattern = '''...'''
 replacement = '''...'''
 reason = '''...'''
 
 [[action]]
-tool = 'shell'
-command = '...'
+tool = '''file-substitute-dry-run'''
+files = ['''/abs/a.el''', '''/abs/b.el''']
+pattern = '''...'''
+replacement = '''...'''
+
+[[action]]
+tool = '''shell'''
+command = '''...'''
 reason = '''...'''
 long-running = false
 
 [[action]]
-tool = 'reply'
+tool = '''reply'''
 text = '''...'''
 
 [[action]]
-tool = 'confirm'
-text = '''...'''"
+tool = '''confirm'''
+text = '''...'''
+
+Use file-substitute-dry-run to preview batch substitutions. It does not modify files and does not require user confirmation. Batch substitutions should be previewed and reviewed before applying them."
   "The action vocabulary: one table per tool, spelled out.")
 
 (defconst scalpel-prompt-rule--string-syntax
-  "String values are written as single-quoted TOML literal strings:
-'...' for a one-line value with no single quote, and '''...'''
-for a value that contains a single quote or spans several lines.
-There is no escaping inside a literal string: a backslash is a
-literal backslash and a double quote is a literal double quote.
-The only sequence a literal string cannot hold is three
-consecutive single quotes; when a value must contain it, use a
-TOML double-quoted string instead, where a backslash must be
-doubled and a double quote must be escaped."
-  "TOML string syntax: literal strings have no escaping.")
+  "Every string value must use a triple-single-quoted multiline TOML
+literal string, regardless of its length. Single-line delimiters are
+prohibited without exception; this prohibition never opens for any
+value, however short it is. Backslashes are always literal characters
+and are never escapes.
+
+Use a triple-double-quoted multiline TOML basic string only when the
+value contains three consecutive single quotes; do not use this
+delimiter otherwise. That delimiter is a TOML basic string, so inside
+it a backslash starts an escape sequence instead of standing as a
+literal character. A value that contains both three consecutive single
+quotes and a backslash must have its content rewritten so it can use
+an allowed delimiter. If a value contains both three consecutive
+single quotes and three consecutive double quotes, rewrite its content
+when possible so it can use an allowed delimiter."
+  "TOML multiline string syntax: prefer literal strings.")
 
 (defconst scalpel-prompt-rule--example
   "[[action]]
-tool = \"reply\"
-text = \"hello\"
+tool = '''reply'''
+text = '''hello'''
 "
   "Holds the correct-response example embedded in the system prompt.
 The value is a TOML document accepted by `scalpel-llm-dialect--default-parse',
@@ -161,8 +174,8 @@ text in general."
 (defconst scalpel-prompt-rule--shell
   "To have a command executed, emit a shell action table.
 [[action]]
-tool = 'shell'
-command = '...'
+tool = '''shell'''
+command = '''...'''
 reason = '''...'''
 long-running = false
 The command is run by a shell only after you return the document,
@@ -185,20 +198,20 @@ command that hangs the editor takes the choice away from the user."
 
 (defconst scalpel-prompt-rule--reading
   "Reading code is a file-peek action, not a shell command: use a
-file-peek table with tool = 'file-peek', file = '...' and
-symbol = 'name' to see one definition, and the same table without
+file-peek table with tool = '''file-peek''', file = '''...''' and
+symbol = '''name''' to see one definition, and the same table without
 the symbol key to see a whole file.  Only files in the context
 above can be read.  Use shell for finding things -- grep, ls, git
 log -- and file-peek for looking at code itself.  Do not read the
 same definition twice: nothing changes between rounds unless you
 changed it.
 Shell commands run with the context files above as the whole
-filesystem: they are the only files you may read, whether through
-a shell command or a file-peek action, and they must be named by
-the absolute paths exactly as given.  A file that exists on disk
-but is absent from the context is off-limits: when a request needs
-one, ask the user to add it with a confirm action instead of
-reaching for it with a different command."
+filesystem: they are the only files you may read, whether through a
+shell command or a file-peek action, and they must be named by the
+absolute paths exactly as given.  A file that exists on disk but is
+absent from the context is off-limits: when a request needs one, ask
+the user to add it with a confirm action instead of reaching for it
+with a different command."
   "Reading contract: file-peek for code, shell for finding.")
 
 (defconst scalpel-prompt-rule--feedback-fence
@@ -221,29 +234,28 @@ imitated in the planner's own reply."
   "Runtime feedback fence prompt rule, matching sibling rules' tone and wrapping.")
 
 (defconst scalpel-prompt-rule--shell-hygiene
-  "Keep every command's output small and bounded: pass -m or -l
-limits to grep, use head or tail, and never dump a whole file or
-directory with cat, ls -R or find.  A command whose output could
+  "Use Perl 5 and ripgrep (`rg`) as Scalpel's standard shell tools. For
+text transformations and regular-expression work, use Perl 5; for
+search and inspection, use `rg`. Never use `sed`, `awk`, or `grep`.
+When needed, check availability with `command -v perl` and
+`command -v rg`; if either is unavailable, ask the user with a confirm
+action rather than substituting a forbidden tool.
+Keep every command's output small and bounded: pass `-m` or `-l`
+limits to `rg`, use head or tail, and never dump a whole file or
+directory with cat, ls -R or find. A command whose output could
 run to megabytes is the wrong command; ask the user with a confirm
 action instead.
 Every shell command must be built for silent success: pipe the
-output through a filter (grep -c, head, tail, redirection to a
-file, or similar) so that the happy path prints nothing at all and
+output through a filter (such as `rg -c`, head, tail, redirection to
+a file, or similar) so that the happy path prints nothing at all and
 the command's visible output only surfaces errors, mismatches or
-unexpected conditions.  Never end a command with a raw, unfiltered
+unexpected conditions. Never end a command with a raw, unfiltered
 dump of everything.
-The environment may be macOS, whose BSD sed and grep differ from
-the GNU ones most examples assume.  When a text-transformation
-command is needed, first check for perl once with a cheap
-inspection command such as 'command -v perl'; if it is present,
-prefer perl for in-place edits and regular-expression work
-(perl -pi -e ...); if it is absent, fall back to the platform's
-sed, quoting its platform-specific flags.
 If the conversation already contains the output of a shell command
 you were asked to run, read that output and respond with the
-conclusion instead of running the same command again.  A continued
+conclusion instead of running the same command again. A continued
 request is not a new request: do not restart the earlier work."
-  "Shell hygiene: bounded output, silent success, portable tools.")
+  "Shell hygiene: bounded output, silent success, Perl 5 and rg.")
 
 (defconst scalpel-prompt-rule--file-actions
   "A file-create makes a new file: its text is the whole file

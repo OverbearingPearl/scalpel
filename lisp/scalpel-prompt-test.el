@@ -131,16 +131,13 @@ still carries it, the way the dialect and brevity rules are guarded."
                             scalpel-prompt-rule--symbol-name))))
 
 (ert-deftest scalpel-prompt-test-system-prompt-prefers-perl ()
-  "The prompt steers text-transformation commands toward perl.
-Nothing in the code can make the planner pick a portable tool, so
-the preference has to be stated in the prompt; this guards only
-that the live prompt still carries the rule, so a rewrite that
-drops it fails here instead of in a session against BSD sed."
-  (ert-info ((format "Prompt excerpt:\n%S"
-                     (substring scalpel-prompt-system-prompt 0 0)))
-    (should (string-match-p "command -v perl"
+  "The prompt requires Perl 5 for text transformations and checks availability."
+  (ert-info ((format "Prompt:\n%S" scalpel-prompt-system-prompt))
+    (should (string-match-p "Perl 5"
                             scalpel-prompt-system-prompt))
-    (should (string-match-p "perl -pi -e"
+    (should (string-match-p "text transformation"
+                            scalpel-prompt-system-prompt))
+    (should (string-match-p "command -v perl"
                             scalpel-prompt-system-prompt))))
 
 (provide 'scalpel-prompt-test)

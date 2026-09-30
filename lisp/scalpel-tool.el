@@ -25,27 +25,6 @@
 
 (require 'cl-lib)
 
-(defcustom scalpel-tool-preferences
-  '((substitute
-     :argv ("perl" "-e")
-     :prompt-rule scalpel-tool--perl-substitute-rule)
-    (search
-     :argv ("rg")
-     :prompt-rule scalpel-tool--rg-search-rule))
-  "Preference table from behaviour category to its one designated tool.
-Each category maps to exactly one tool; there is no candidate list
-and no priority ordering.  Each entry is a plist with keys :argv
-\(list of strings, the executor's command prefix) and :prompt-rule
-\(symbol naming a defconst holding the prompt wording, optional).
-The contract is one tool per category: when the executable named
-by :argv is missing, that category's prompt rule is simply
-suppressed and the category stays silent; there is no fallback to
-any other tool.  No other reader enumerates the keys; a new
-category is just a new key.  The wording of every :prompt-rule
-describes only the single selected tool."
-  :type 'sexp
-  :group 'scalpel)
-
 (defconst scalpel-tool--perl-substitute-rule
   "The target engine for a file-substitute pattern is Perl 5.x:
 write a Perl-compatible regular expression and do not use
@@ -77,9 +56,12 @@ and -m to bound per-file match counts.  A pattern is a plain
 regexp string, no quotes, no delimiters, no prose."
   "Prompt wording for rg as the search tool.")
 
+(defvar scalpel-tool--preferences nil
+  "Per-category tool preferences.")
+
 (defun scalpel-tool--entry (category)
-  "Return CATEGORY's plist entry from `scalpel-tool-preferences'."
-  (plist-get scalpel-tool-preferences category))
+  "Return CATEGORY's plist entry from `scalpel-tool--preferences'."
+  (plist-get scalpel-tool--preferences category))
 
 (defun scalpel-tool--argv (category)
   "Return the CATEGORY tool's argv prefix straight from its table entry.
@@ -89,10 +71,10 @@ Nil when the category has no table entry."
 
 (defun scalpel-tool--prompt-rule (category)
   "Return the prompt wording for CATEGORY's preferred tool, or nil.
-Look up CATEGORY in `scalpel-tool-preferences'; return nil when there
+Look up CATEGORY in `scalpel-tool--preferences'; return nil when there
 is no entry, the entry has no :prompt-rule, or the entry's :argv
 executable is not installed, leaving the choice to the planner."
-  (let* ((entry (plist-get scalpel-tool-preferences category))
+  (let* ((entry (plist-get scalpel-tool--preferences category))
          (argv (and entry (plist-get entry :argv)))
          (exec (and argv (car argv)))
          (rule (and exec
@@ -106,7 +88,7 @@ Rules appear in table order, one per selected tool that carries a
 :prompt-rule, separated by blank lines.  A tool with no rule
 contributes nothing."
   (let ((rules))
-    (dolist (category scalpel-tool-preferences)
+    (dolist (category scalpel-tool--preferences)
       (let ((rule (scalpel-tool--prompt-rule (car category))))
         (when rule
           (push rule rules))))

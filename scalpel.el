@@ -58,9 +58,26 @@ Prompt for the directory, defaulting to the current
   (interactive
    (list (read-directory-name "Scalpel console root: "
                               default-directory nil t)))
-  (let ((default-directory (file-name-as-directory
-                            (expand-file-name root))))
-    (scalpel-console-open)))
+  (let* ((perl (executable-find "perl"))
+         (missing
+          (delq nil
+                (list (unless (executable-find "git") "git")
+                      (unless (executable-find "curl") "curl")
+                      (unless (executable-find "rg") "rg")
+                      (unless (and perl
+                                   (condition-case nil
+                                       (with-temp-buffer
+                                         (eq 0 (call-process
+                                                perl nil nil nil
+                                                "-e" "exit($] >= 5 ? 0 : 1)")))
+                                     (error nil)))
+                        "Perl 5 interpreter")))))
+    (when missing
+      (user-error "Cannot open Scalpel console; missing requirement(s): %s"
+                  (mapconcat #'identity missing ", ")))
+    (let ((default-directory (file-name-as-directory
+                              (expand-file-name root))))
+      (scalpel-console-open))))
 
 (defalias 'scalpel-set-backend #'scalpel-llm-select-backend
   "Interactively switch the gptel backend used for future Scalpel requests.")
