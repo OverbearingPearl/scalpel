@@ -2631,9 +2631,12 @@ successful outcome: ON-SUCCESS receives a report stating that the
 action was declined by the user and did not run.  File-substitute
 actions bypass confirmation: a no-write preview is reviewed by the
 LLM, and the substitution is applied only after explicit approval.
-File-substitute-dry-run reports a no-write preview without confirmation.
-A rejected or unclear review is reported as a planner error so the
-action can be revised.  Callbacks run outside internal error guards."
+File-substitute-dry-run reports a no-write preview through the same
+LLM review without writing; a report with no nonzero Match count is
+a self-healable pattern-no-match planner error.  A rejected or
+unclear review is reported as a self-healable
+substitution-preview-mismatch planner error so the action can be
+revised.  Callbacks run outside internal error guards."
   (cl-block scalpel-agent-execute-action
     (let ((tool (plist-get action :tool)))
       (unless (and (member tool scalpel-agent--tool-vocabulary)
@@ -2739,7 +2742,37 @@ action can be revised.  Callbacks run outside internal error guards."
                             (list :type 'action
                                   :message (error-message-string err)))
                    nil))))
-           (when preview (funcall on-success preview))))
+           (when preview
+             (if (not (let ((pos 0) (found nil))
+                        (while (and (not found)
+                                    (string-match
+                                     "Match count: \\([1-9][0-9]*\\)"
+                                     preview pos))
+                          (setq found t)
+                          (setq pos (match-end 0)))
+                        found))
+                 (funcall on-error
+                          (list :type 'planner-error
+                                :message
+                                (format "No matches found in any file.\nPreview:\n%s" preview)
+                                :preview preview))
+               (scalpel-agent-review-file-substitute
+                action preview
+                (lambda (approved review)
+                  (if (eq approved t)
+                      (funcall on-success
+                               (format
+                                "Substitution preview approved by review; no files were modified (dry run only).\nPreview:\n%s"
+                                preview))
+                    (funcall on-error
+                             (list :type 'substitution-preview-mismatch
+                                   :message
+                                   (format
+                                    "Substitution preview:\n%s\n\nLLM review did not explicitly approve this change. Revise the pattern or replacement, or clarify the intended change, then retry.\nReview: %s"
+                                    preview
+                                    (or review "No clear approval was given."))
+                                   :preview preview
+                                   :review review)))))))))
         ("file-substitute"
          (let ((preview
                 (condition-case err
@@ -2786,12 +2819,14 @@ action can be revised.  Callbacks run outside internal error guards."
                               nil))))
                       (when report (funcall on-success report)))
                   (funcall on-error
-                           (list :type 'planner-error
+                           (list :type 'substitution-preview-mismatch
                                  :message
                                  (format
                                   "Substitution preview:\n%s\n\nLLM review did not explicitly approve this change. Revise the pattern or replacement, or clarify the intended change, then retry.\nReview: %s"
                                   preview
-                                  (or review "No clear approval was given."))))))))))
+                                  (or review "No clear approval was given."))
+                                 :preview preview
+                                 :review review))))))))
         ("shell"
          (let ((report (condition-case err
                            (scalpel-agent-shell

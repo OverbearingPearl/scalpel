@@ -57,6 +57,7 @@ did not follow the action contract."
 
 (defconst scalpel-diagnose-self-heal-types
   '(parse malformed no-replacement no-such-symbol pattern-no-match
+          substitution-preview-mismatch
           bad-path unbalanced no-validation missing-field tool-call)
   "Planner error types the console may retry automatically.
 Their failure reports carry enough context (near-miss lines, closest
@@ -72,6 +73,9 @@ offending reply text, so the next round sees what it did wrong and
 can re-emit the document without the XML-style markup; the console's
 retry budget caps how often the same prompt is repeated before the
 error is surfaced to the user.
+SUBSTITUTION-PREVIEW-MISMATCH is retriable because the preview and
+review feedback show how the proposed change differs from the
+intended change, letting the planner revise the substitution.
 PROSE is deliberately excluded: an output-contract violation where
 the planner replied with prose instead of the TOML action document.
 Retrying the identical prompt only repeats the prose and burns
