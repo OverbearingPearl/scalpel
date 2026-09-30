@@ -121,6 +121,12 @@ silently."
   :type 'integer
   :group 'scalpel)
 
+(defcustom scalpel-agent-file-substitute-max-matches 5
+  "Maximum number of file-substitute matches allowed without confirmation.
+Substitutions with more matches require confirmation."
+  :type 'integer
+  :group 'scalpel-agent)
+
 (defcustom scalpel-agent-context-max-files 200
   "Maximum number of files the session context may hold.
 Each context file costs a line in the planner prompt, a read-only
@@ -1337,7 +1343,7 @@ the edit."
                                 :message
                                 (format (concat "Scalpel: planner returned no usable "
                                                 "replacement for %s. "
-                                                "Refusing to edit. %s Reply was: %S")
+                                                "Refusing to edit. %s Reply was:\n%s")
                                         symbol
                                         (scalpel-agent--unusable-replacement-reason
                                          file new-text)
@@ -1410,7 +1416,7 @@ ON-ERROR receives a plist (:type SYMBOL :message STRING)."
                                 :message
                                 (format (concat "Scalpel: planner returned no usable "
                                                 "top-level form for %s. "
-                                                "Refusing to create. %s Reply was: %S")
+                                                "Refusing to create. %s Reply was:\n%s")
                                         symbol
                                         (scalpel-agent--unusable-replacement-reason
                                          file new-text t)
@@ -2255,12 +2261,37 @@ never included in full."
           (substring report 0 max-report-length)
         report))))
 
+(defun scalpel-agent--perl-substitute-preview-counts (preview)
+  "Return per-file match counts and their total from PREVIEW.
+The result is a list of the form (COUNTS TOTAL), where COUNTS is an
+alist of file names and match counts."
+  (let ((lines (split-string preview "\n"))
+        pending-file
+        counts
+        total)
+    (dolist (line lines)
+      (cond
+       ((string-match "\\`File: \\(.*\\)\\'" line)
+        (setq pending-file (match-string 1 line)))
+       ((and pending-file
+             (string-match "\\`Match count: \\([0-9]+\\)\\'" line))
+        (let ((count (string-to-number (match-string 1 line))))
+          (push (cons pending-file count) counts)
+          (setq pending-file nil)))))
+    (setq counts (nreverse counts)
+          total (apply #'+ (mapcar #'cdr counts)))
+    (list counts total)))
+
 (defun scalpel-agent-review-file-substitute (action preview callback)
   "Ask the LLM to review ACTION and PREVIEW, then report its decision via CALLBACK."
   (let* ((files (plist-get action :files))
          (pattern (plist-get action :pattern))
          (replacement (plist-get action :replacement))
          (reason (plist-get action :reason))
+         (counts (scalpel-agent--perl-substitute-preview-counts preview))
+         (file-counts (car counts))
+         (total (cadr counts))
+         (threshold scalpel-agent-file-substitute-max-matches)
          (guidance
           "Review the proposed file substitution for safety and consistency with the intended change. Reply with exactly APPROVE only if the change is appropriate; otherwise explain your concerns.")
          (prompt
@@ -2269,18 +2300,34 @@ never included in full."
                   "\n\nFiles:\n" (format "%S" files)
                   "\n\nPattern:\n" (format "%S" pattern)
                   "\n\nReplacement:\n" (format "%S" replacement)
-                  "\n\nPreview:\n" (format "%S" preview))))
-    (scalpel-llm-request-async
-     prompt
-     (lambda (response)
-       (if (and (stringp response)
-                (equal (string-trim response) "APPROVE"))
-           (funcall callback t response)
-         (funcall callback nil response)))
-     (lambda (error)
-       (funcall callback nil
-                (format "LLM request failed: %s"
-                        (if (stringp error) error (error-message-string error))))))))
+                  "\n\nMatch counts:\nTotal: " (format "%s" total)
+                  "\nThreshold: " (format "%s" threshold)
+                  "\nPer-file counts:\n" (format "%S" file-counts)
+                  "\n\nPreview:\n" (format "%S" preview)))
+         (request-review
+          (lambda ()
+            (scalpel-llm-request-async
+             prompt
+             (lambda (response)
+               (if (and (stringp response)
+                        (equal (string-trim response) "APPROVE"))
+                   (funcall callback t response)
+                 (funcall callback nil response)))
+             (lambda (error)
+               (funcall callback nil
+                        (format "LLM request failed: %s"
+                                (if (stringp error)
+                                    error
+                                  (error-message-string error)))))))))
+    (if (and (> total threshold)
+             (scalpel-agent--confirm-needed-p action))
+        (if (yes-or-no-p
+             (format "This substitution matches %s times (threshold: %s).  Per-file counts: %S. Continue? "
+                     total threshold file-counts))
+            (funcall request-review)
+          (funcall callback nil
+                   "The file substitution action did not run because confirmation was declined."))
+      (funcall request-review))))
 
 (define-error 'scalpel-planner-error
   "Scalpel planner reply was unusable (plist :type :message)")
