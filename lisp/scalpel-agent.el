@@ -58,7 +58,7 @@ Structural contract, not user configuration: dispatch in
     ("file-delete" . (:tool :file))
     ("file-substitute" . (:tool :files :pattern :replacement))
     ("file-substitute-dry-run" . (:tool :files :pattern :replacement))
-    ("shell" . (:tool :command :reason :long-running))
+    ("shell" . (:tool :command :reason))
     ("reply" . (:tool :text))
     ("confirm" . (:tool :text)))
   "Per-tool field contracts.
@@ -2536,13 +2536,8 @@ decides which files exist, which no setting can waive.
 `file-create' is deliberately excluded here and from the confirm
 gate altogether: the creation is reported in full, so it never
 runs with a prompt, regardless of that list.  A tool in
-`scalpel-agent-confirm-tools' is confirmed, except a shell action
-the planner did not flag as long-running: the sandbox already
-bounds what a command may touch, so only the editor-freezing case
-needs an answer.  TOML booleans arrive as t and :false; only t
-counts as true, so a missing or false flag still asks.  The flag
-gates the prompt only: it never relaxes the working directory or
-the environment the command runs in."
+`scalpel-agent-confirm-tools' is confirmed, except for shell
+actions, which are never confirmed through that setting."
   (and (not scalpel-agent-unattended-confirm)
        (let ((tool (plist-get action :tool)))
          (and (not (equal tool "file-create"))
@@ -2552,10 +2547,8 @@ the environment the command runs in."
                   ;; confirmation is where the user sees the pattern
                   ;; and the file list together.
                   (equal tool "file-substitute")
-                  (and (member tool scalpel-agent-confirm-tools)
-                       (not (and (equal tool "shell")
-                                 (not (eq (plist-get action :long-running)
-                                          t))))))))))
+                  (and (not (equal tool "shell"))
+                       (member tool scalpel-agent-confirm-tools)))))))
 
 (defun scalpel-agent--action-summary (action)
   "Return a one-line description of ACTION for the confirmation prompt.

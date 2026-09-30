@@ -411,12 +411,8 @@ and, when safe, a mechanically repaired suggestion fence.  The
 contract is TOML: the parsed document is an alist of pairs
 \\(STRING-KEY . VALUE).  Either an [[action]] table array or a single
 top-level table carrying a `tool' key is accepted; each table's
-fields become the action plist keys.  TOML booleans arrive as t and,
-for false, the symbol :false; in particular `long-running' is
-checked for presence on the assoc entry itself, since a TOML false
-parses to nil and would otherwise be indistinguishable from an
-absent key.  Every unrelated TOML failure is routed through
-`scalpel-llm-dialect--parse-error'."
+fields become the action plist keys.  Every unrelated TOML failure
+is routed through `scalpel-llm-dialect--parse-error'."
   (when (string-empty-p (string-trim raw))
     ;; An empty reply is a backend failure, not a TOML syntax problem:
     ;; naming TOML here would send the user hunting for a syntax error
@@ -501,16 +497,6 @@ API key, quota and network, then retry"))
                    (setq pl (plist-put
                              pl :files
                              (append (plist-get pl :files) nil))))
-                 ;; `long-running' is looked up on the entry itself:
-                 ;; a TOML false parses to nil, indistinguishable
-                 ;; from absence through the helper.  When present,
-                 ;; always put :long-running -- using :false for a
-                 ;; TOML false -- so it keeps a non-nil representation.
-                 (let ((entry (assoc "long-running" item)))
-                   (when entry
-                     (setq pl (plist-put
-                               pl :long-running
-                               (or (cdr entry) :false)))))
                  pl))
              raw-actions)))
       (when (and temp-file (file-exists-p temp-file))

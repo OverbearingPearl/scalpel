@@ -177,24 +177,17 @@ text in general."
 tool = '''shell'''
 command = '''...'''
 reason = '''...'''
-long-running = false
 The command is run by a shell only after you return the document,
 so pipes, redirection and quoting work; the reason states why it
 is run.  Never invent commands the user did not ask for, and never
 use shell to change files: all file changes go through the file
-actions.  The long-running key is required on every shell action
-and is true for any command that may outlast a few seconds: a test
-suite, a build, a formatter, a download.  A shell action marked
-long-running is confirmed with the user first, because the editor
-is frozen until it returns; every other shell action runs
-immediately.  When the user declines a confirmed action, the next
+actions.  When the user declines a confirmed action, the next
 round's report says that the action was declined and did not run;
 a decline is feedback about one means, not a failure of the task,
 so continue planning another way -- or explain, with a confirm
 action, when no alternative exists -- and never re-emit the same
-declined action.  Declare it truthfully: leaving it false on a
-command that hangs the editor takes the choice away from the user."
-  "Shell contract: when a command may run, and what it costs.")
+declined action."
+  "Shell contract: what commands may run and why.")
 
 (defconst scalpel-prompt-rule--reading
   "Reading code is a file-peek action, not a shell command: use a

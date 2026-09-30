@@ -63,11 +63,8 @@ without saying so."
                      "first line\nsecond line")))))
 
 (ert-deftest scalpel-llm-laguna-test-shell-omission-is-filled-and-reported ()
-  "A shell call that states no `long-running' is filled in and reported.
-Every observed shell call gave command and reason and no
-`long-running'; the value filled in is t so the round asks before
-the command runs, and each fill is announced rather than applied
-quietly."
+  "A shell call without `long-running' preserves its command and reason.
+It does not gain a `long-running' field or emit a notice about that field."
   (let ((notices nil)
         actions)
     (cl-letf (((symbol-function 'message)
@@ -84,16 +81,13 @@ quietly."
       (ert-info ((format "Action: %S Notices: %S" action notices))
         (should (equal (plist-get action :command) "grep -rn gptel ."))
         (should (equal (plist-get action :reason) "find references"))
-        (should (eq (plist-get action :long-running) t))
-        (should (cl-some (lambda (notice)
-                           (string-match-p "long-running" notice))
-                         notices))))))
+        (should-not (plist-member action :long-running))
+        (should-not (cl-some (lambda (notice)
+                               (string-match-p "long-running" notice))
+                             notices))))))
 
-(ert-deftest scalpel-llm-laguna-test-assumed-field-makes-the-round-ask-first ()
-  "The value filled in for a missing field is what stops a quiet run.
-`scalpel-agent--confirm-needed-p' asks for a shell action whose
-`long-running' is true, so t is the value that brings the user into
-the decision; false would run the command without one."
+(ert-deftest scalpel-llm-laguna-test-shell-call-without-long-running-field-does-not-require-confirmation ()
+  "A Laguna shell call with command and reason needs no long-running field."
   (let ((scalpel-agent-confirm-tools '("shell"))
         (action
          (car (scalpel-llm-laguna-parse-reply
@@ -101,9 +95,10 @@ the decision; false would run the command without one."
                        "<arg_value>rm -rf build</arg_value>"
                        "<arg_key>reason</arg_key>"
                        "<arg_value>clean</arg_value></tool_call>")))))
-    (ert-info ((format "Action: %S" action))
-      (should (eq (plist-get action :long-running) t))
-      (should (scalpel-agent--confirm-needed-p action)))))
+    (ert-info ((format "Action: %S; expected no :long-running field and no confirmation"
+                       action))
+      (should-not (plist-member action :long-running))
+      (should-not (scalpel-agent--confirm-needed-p action)))))
 
 (ert-deftest scalpel-llm-laguna-test-parse-leaves-a-toml-reply-whole ()
   "A TOML action table keeps its TOML reading.

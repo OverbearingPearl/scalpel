@@ -55,16 +55,8 @@ Structural contract shared by the scanner and the tests.")
 Structural contract shared by the scanner and the tests.")
 
 (defconst scalpel-llm-laguna--assumed-fields
-  '(("shell" :long-running t))
-  "Fields this dialect leaves out, with the value assumed for them.
-Each entry is (TOOL . PLIST): a field in PLIST that the reply did not
-state is filled in.  Every observed reply gave \"command\" and
-\"reason\" for a shell call and no \"long-running\", and the value
-assumed here is t, which makes the round ask the user before the
-command runs.  Assuming false instead would let the model decide, by
-silence, that a command needs no confirmation, and that decision
-belongs to the user.  Each fill is reported through `message', so it
-never happens quietly.")
+  nil
+  "This dialect does not assume any omitted fields.")
 
 (defun scalpel-llm-laguna--marker (tag &optional closing)
   "Return the marker wrapping TAG, or its closing form when CLOSING.

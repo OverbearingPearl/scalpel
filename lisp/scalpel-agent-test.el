@@ -1133,65 +1133,58 @@ was confirmed without ever being displayed."
                    "confirm: need input")))
 
 (ert-deftest scalpel-agent-test-shell-confirm-gated-by-flags ()
-  "Only a long-running shell action asks; every other one runs unattended.
-Regression: confirmation was plain list membership, so every
-read-only command needed a prompt, and the planner's own
-\"read-only\" claim decided the gate even though nothing verified
-it."
+  "Shell actions do not ask for confirmation, even after a long execution."
   (let ((scalpel-agent-confirm-tools '("shell"))
         (asked 0)
-        (ran 0))
+        (ran 0)
+        (now 0)
+        (original-float-time (symbol-function 'float-time)))
     (cl-letf (((symbol-function 'yes-or-no-p)
                (lambda (&rest _) (setq asked (1+ asked)) t))
+              ((symbol-function 'current-time)
+               (lambda () (seconds-to-time now)))
+              ((symbol-function 'float-time)
+               (lambda (&optional time)
+                 (if time
+                     (funcall original-float-time time)
+                   now)))
               ((symbol-function 'scalpel-agent-shell)
-               (lambda (&rest _) (setq ran (1+ ran)) "report")))
-      ;; TOML booleans reach this code as `t' and `:false', so the
-      ;; test uses those symbols rather than nil to keep the
-      ;; `(eq ... t)' check honest.
-      (let ((quick '(:tool "shell" :command "rm -rf build"
-                           :reason "clean"
-                           :long-running :false))
-            (long '(:tool "shell" :command "make test" :reason "run"
-                          :long-running t))
+               (lambda (&rest _)
+                 (setq ran (1+ ran)
+                       now (+ now 3600))
+                 "report")))
+      (let ((action '(:tool "shell" :command "rm -rf build"
+                            :reason "clean"))
             report)
         (scalpel-agent-execute-action
-         quick
+         action
          (lambda (r) (setq report r))
          (lambda (err) (ert-fail (plist-get err :message))))
-        (should (string= report "report"))
-        (ert-info ((format "asked=%d after a quick action" asked))
-          (should (= asked 0)))
-        (scalpel-agent-execute-action
-         long
-         (lambda (r) (setq report r))
-         (lambda (err) (ert-fail (plist-get err :message))))
-        (should (string= report "report"))
-        (ert-info ((format "asked=%d after a long action" asked))
-          (should (= asked 1)))
-        (should (= ran 2))))))
+        (ert-info ((format "After a one-hour shell execution: report=%S, asked=%d, ran=%d"
+                           report asked ran))
+          (should (string= report "report"))
+          (should (= asked 0))
+          (should (= ran 1)))))))
 
-(ert-deftest scalpel-agent-test-shell-decline-is-successful-outcome ()
-  "A user decline of a confirmed action is a successful outcome.
-ON-SUCCESS is called with a report naming the decline, so the round continues
-instead of ending.  The shell function itself must never run."
+(ert-deftest scalpel-agent-test-shell-does-not-ask-for-duration-confirmation ()
+  "A shell action succeeds without asking for confirmation based on duration."
   (let* ((asks 0)
-         (ran-shell nil)
-         (success-report nil)
-         (error-called nil))
+         (success-called nil)
+         (error-called nil)
+         (scalpel-agent-confirm-tools nil))
     (cl-letf (((symbol-function 'yes-or-no-p)
                (lambda (_prompt) (setq asks (1+ asks)) nil))
               ((symbol-function 'scalpel-agent-shell)
-               (lambda (_command _callback) (setq ran-shell t) "report")))
+               (lambda (_command _reason) "report")))
       (scalpel-agent-execute-action
-       '(:tool "shell" :command "make test" :reason "run" :long-running t)
-       (lambda (report) (setq success-report report))
-       (lambda (err) (setq error-called t)
+       '(:tool "shell" :command "make test" :reason "run")
+       (lambda (_report) (setq success-called t))
+       (lambda (err)
+         (setq error-called t)
          (ert-fail (plist-get err :message))))
-      (should (= 1 asks))
-      (should-not ran-shell)
-      (should-not error-called)
-      (should (stringp success-report))
-      (should (string-match-p "declined by the user" success-report)))))
+      (should (= 0 asks))
+      (should success-called)
+      (should-not error-called))))
 
 (ert-deftest scalpel-agent-test-shell-contract-drops-read-only ()
   "The shell contract carries only fields the code still acts on.
@@ -1275,22 +1268,24 @@ so a follow-up such as \"the third point is wrong\" had no referent."
   "A round reports the raw size of every shell command it ran.
 The report preserves the raw output size for continuation decisions."
   (let ((scalpel-agent--context-files nil)
+        (scalpel-agent-confirm-tools nil)
         (scalpel-console--root nil)
         (default-directory (file-name-as-directory
                             (expand-file-name temporary-file-directory)))
         (orig-llm-request-async (symbol-function 'scalpel-llm-request-async))
         (orig-sandbox-run (symbol-function 'scalpel-sandbox-run))
-        (orig-agent-shell (symbol-function 'scalpel-agent-shell)))
+        (orig-agent-shell (symbol-function 'scalpel-agent-shell))
+        (orig-yes-or-no-p (symbol-function 'yes-or-no-p)))
     (unwind-protect
         (progn
+          (fset 'yes-or-no-p (lambda (&rest _ignore) t))
           (fset 'scalpel-llm-request-async
                 (lambda (_prompt on-success _on-error &optional _system)
                   (funcall on-success
                            (concat "[[action]]\n"
                                    "tool = 'shell'\n"
                                    "command = 'printf abc'\n"
-                                   "reason = 'size'\n"
-                                   "long-running = false\n"))))
+                                   "reason = 'size'\n"))))
           (fset 'scalpel-sandbox-run
                 (lambda (&rest _ignore) (cons 0 "abc")))
           (fset 'scalpel-agent-shell
@@ -1313,7 +1308,8 @@ The report preserves the raw output size for continuation decisions."
                 (should-not (plist-get shell :binary))))))
       (fset 'scalpel-llm-request-async orig-llm-request-async)
       (fset 'scalpel-sandbox-run orig-sandbox-run)
-      (fset 'scalpel-agent-shell orig-agent-shell))))
+      (fset 'scalpel-agent-shell orig-agent-shell)
+      (fset 'yes-or-no-p orig-yes-or-no-p))))
 
 (ert-deftest scalpel-agent-test-confirm-returns-text ()
   "A confirm action hands its text back as the confirmation request."

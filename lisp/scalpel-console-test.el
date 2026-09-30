@@ -1155,6 +1155,8 @@ request -- leaking the boundary the prompt deliberately omits."
                                         "command = 'ls'\n"
                                         "reason = 'look'\n"
                                         "long-running = false"))))
+                    ((symbol-function 'yes-or-no-p)
+                     (lambda (&rest _ignore) t))
                     ((symbol-function 'scalpel-sandbox-run)
                      (lambda (&rest _ignore)
                        (signal 'scalpel-sandbox-error

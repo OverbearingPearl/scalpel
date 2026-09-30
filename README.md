@@ -31,30 +31,30 @@ Scalpel is built around one chain of reasoning:
 
 1. **An edit must be exact.** A change that lands on the wrong code, or that
    spills outside the intended block, is a defect -- not something a reviewer is
-   expected to catch afterwards.  Exactness is the product, not a bonus.
+   expected to catch afterwards. Exactness is the product, not a bonus.
 2. **So application does not ask permission.** The locator resolves each target
    to a verified byte range, which makes applying a change a mechanical act.
    Stopping to confirm every hunk -- the diff-by-diff approval loop -- would tax
    every correct edit to guard against a failure the boundary lock already
-   prevents.  Scalpel applies edits as it plans them.
+   prevents. Scalpel applies edits as it plans them.
 3. **So the result must be visible.** A change made without asking must not
-   vanish quietly into the tree; it has to be readable afterwards.  Each
+   vanish quietly into the tree; it has to be readable afterwards. Each
    modification is reported as it lands, and the session can be diffed as a
    whole, so the agent's work is legible after the fact instead of gated before
    it.
 4. **So rollback must exist.** Visibility tells you what went wrong; it does not
-   take it back.  The same record that shows the change is what undoes it:
+   take it back. The same record that shows the change is what undoes it:
    session recording and one-shot rollback are load-bearing, not polish, and
    they are what buy the speed in (2).
 
-Read in reverse, the chain is the whole safety argument.  Because a session can
+Read in reverse, the chain is the whole safety argument. Because a session can
 be taken back, its changes can be reported rather than approved; because the
 report is enough to decide, application can run at full speed; and because every
 edit lands on a resolved byte range, all of it can rest on exactness.
 
-The single exception is a shell command the planner flagged `long-running`.  It
-asks first because it freezes Emacs until it returns: a cost the user has to
-agree to before it is paid, not after.
+Shell commands always ask for confirmation before running, since their effects
+are not constrained by the boundary lock. The user agrees to those effects
+before they occur.
 
 **Key differences from Aider and newer coding agents (Claude Code, OpenCode, etc.)**
 
@@ -70,7 +70,7 @@ agree to before it is paid, not after.
   byte range the locator resolved.
 - **Visible, then reversible**: Every modification is reported as it lands, and
   the whole session can be diffed afterwards and reverted in one shot -- no
-  hunting through scattered diffs.  These are the visibility and recovery halves
+  hunting through scattered diffs. These are the visibility and recovery halves
   of the design trade above, and they land with `scalpel-lineage`; see Status &
   Roadmap.
 - **Surgical precision, not bulk replace**: Multi-file refactoring is supported,
@@ -80,8 +80,6 @@ agree to before it is paid, not after.
 The user story is simple: **you talk to a coding assistant from inside Emacs,
 every actual edit lands on an exact, verified range, and whatever a session
 touched can be read back and unwound.**
-
----
 
 ## Design Principles
 
@@ -106,19 +104,17 @@ touched can be read back and unwound.**
    Each accepted modification is reported as it lands, and the session can be
    diffed as a whole, so what the agent did is legible before it is undoable.
    Visibility comes first because recovery depends on it: you cannot decide to
-   roll back a change you cannot see.  The same record is what rolls back --
+   roll back a change you cannot see. The same record is what rolls back --
    modifications are committed to an orphan Git branch (`scalpel/autosave`), and
    a session reverts as a unit.
 
 6. **Application is unconfirmed, recovery is not**  
    Because the boundary lock makes a replacement exact, applying it does not
    stop for approval: the diff-by-diff confirmation loop would tax every correct
-   edit to guard against a failure that resolution already prevents.  The safety
+   edit to guard against a failure that resolution already prevents. The safety
    net sits on the other side instead -- what principle 5 makes visible is what
-   makes this acceptable.  A shell command flagged `long-running` is the
-   exception: it asks first, because it freezes Emacs until it returns.
-
----
+   makes this acceptable. Shell-command confirmation is governed by its own
+   policy, not by execution duration.
 
 ## System Architecture
 
@@ -209,18 +205,17 @@ Scalpel is a **conversational editor**, not a one-shot command.
    ```
 
 5. Nothing stops for approval along the way, because the stream of edit reports
-   is the trace that replaces it: you read what happened rather than authorize it
-   beforehand. Exactness comes from step 4 being byte-range pinned, not from a
-   review loop, and a shell command flagged `long-running` is the only action
-   that asks first, because it freezes Emacs until it returns.
+   is the trace that replaces it. Shell actions do not ask for confirmation based
+   on execution duration. Exactness comes from step 4 being byte-range pinned,
+   not from a review loop.
 
 6. If a change is wrong, the session is there to inspect and undo: review the
    recorded edits as a diff, then `M-x scalpel-revert-session` takes the session
    back as one unit. `C-c C-k` stops a request in flight. This is the reason step 5
    can move without asking.
 
-Anonymous targets such as "the second if branch" are handled by first moving
-the Emacs point to that block; point is the strongest coordinate Scalpel knows.
+Anonymous targets such as "the second if branch" are handled by first moving the
+Emacs point to that block; point is the strongest coordinate Scalpel knows.
 
 ## Deterministic Location By Language
 
