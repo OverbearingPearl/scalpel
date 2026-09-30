@@ -2273,6 +2273,60 @@ confirmed a rewrite without seeing what it would match."
                     :files ("/a.el" "/b.el") :reason "bulk"))
            "file-substitute: replace old- in 2 file(s)")))
 
+(ert-deftest scalpel-agent-test-rewrite-preview-is-bounded-and-read-only ()
+  "Keep a multi-file rewrite preview bounded and leave its source files untouched."
+  (let* ((directory (make-temp-file "scalpel-rewrite-preview-" t))
+         (files nil)
+         (originals nil)
+         (large-content
+          (mapconcat #'identity (make-list 12000 "original changed\n") ""))
+         (limit 20000)
+         (report nil))
+    (unwind-protect
+        (progn
+          (dotimes (index 8)
+            (let ((file (expand-file-name (format "context-%d.txt" index)
+                                          directory))
+                  (contents (format "original context %d\n" index)))
+              (with-temp-file file
+                (insert contents))
+              (push (file-truename file) files)
+              (push contents originals)))
+          (setq files (nreverse files)
+                originals (nreverse originals))
+          (cl-letf (((symbol-function 'scalpel-agent--context-file-p)
+                     (lambda (file)
+                       (member (file-truename file) files)))
+                    ((symbol-function 'scalpel-agent--perl-substitute)
+                     (lambda (&rest _args)
+                       (list :content large-content
+                             :match-count 12000))))
+            (setq report
+                  (scalpel-agent--perl-substitute-preview
+                   "original" "changed" files)))
+          (setq report (if (stringp report) report (format "%s" report)))
+          (ert-info ((format "Expected the combined preview to be at most %d characters; got %d"
+                             limit (length report)))
+            (should (<= (length report) limit)))
+          (ert-info ((format "Expected the bounded report to explicitly note omitted content; report: %S"
+                             report))
+            (should (or (string-match-p "omitted" report)
+                        (string-match-p "not shown" report)
+                        (string-match-p "more previews" report))))
+          (ert-info ("The report must not contain the complete substituted output")
+            (should-not (cl-search large-content report)))
+          (ert-info ("Every temporary source file must retain its original contents")
+            (should
+             (cl-every
+              #'identity
+              (cl-mapcar
+               (lambda (file original)
+                 (with-temp-buffer
+                   (insert-file-contents file)
+                   (equal (buffer-string) original)))
+               files originals)))))
+      (delete-directory directory t))))
+
 (ert-deftest scalpel-agent-test-run-records-rewrites-for-continuation ()
   "A rewrite round carries its report in :changes, so the console continues.
 Regression: only `block-edit' and `block-insert' entered the round's
