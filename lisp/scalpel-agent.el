@@ -32,6 +32,7 @@
 (require 'scalpel-llm-deepseek)
 (require 'scalpel-llm-laguna)
 (require 'scalpel-diagnose)
+(require 'scalpel-diagnose-elisp)
 (require 'scalpel-locate)
 (require 'scalpel-execute)
 (require 'scalpel-sandbox)
@@ -1100,8 +1101,14 @@ this module knows: a text the reader cannot finish is the one case the
 bracket answer can state a cause for, while a text it reads as several
 complete forms has no bracket left open, and the bracket sentence would
 name a defect that is not there -- a two-form balanced reply was
-answered with it, which cost the round.  The definition count is left
-for the case it decides, a reply holding several of them.  The reply
+answered with it, which cost the round.  The bracket question itself is
+delegated to the language registry, which dispatches it to the file's
+language's provider; this module names no language and builds the
+sentence from whatever the registry's answer reports.  A language whose
+provider does not answer the question gets the generic sentence --
+brackets that do not balance so the reader cannot reach the end -- and
+no language is named anywhere in this function.  The definition count is
+left for the case it decides, a reply holding several of them.  The reply
 itself is quoted by the caller, so this names the cause and leaves the
 text to be compared against it."
   (let* ((defs (scalpel-agent--definitions-in-text file text))
@@ -1124,15 +1131,16 @@ text to be compared against it."
               "language."))
      ;; A reply the reader cannot finish at all is answered before the
      ;; count, because there is no count to give for it.  The bracket
-     ;; question -- the language provider's, the same one
-     ;; `scalpel-agent-file-substitute' asks of a rewritten text -- is
-     ;; asked only here, and only a language that counts forms can reach
-     ;; this line; only Emacs Lisp's provider does, so naming the Emacs
-     ;; Lisp reader in the sentence below is a fact about the one
-     ;; language that gets this far, not a guess about the file.  A
-     ;; language with no bracket answer refuses with the general sentence
-     ;; instead, rather than being handed a cause it never gave.  The
-     ;; offset and excerpt are stated here, the way
+     ;; question is delegated to the language registry through
+     ;; `scalpel-diagnose-paren-defects', the same dispatch
+     ;; `scalpel-agent-file-substitute' goes through for a rewritten
+     ;; text, and the sentence is built from the plist it returns: a
+     ;; :kind of `unbalance' carries the offset of the first unbalance,
+     ;; a :kind of `unclosed' carries the count of brackets still open
+     ;; and the position of the last of them.  A language whose provider
+     ;; answers nothing gets the generic sentence, rather than being
+     ;; handed a cause it never gave; no language is named here.
+     ;; The offset and excerpt are stated here, the way
      ;; `scalpel-agent-file-substitute' states them for a rewritten text,
      ;; so the planner can look at the place instead of guessing; an
      ;; offset at the end of the text points at nothing to look at, so
@@ -1140,30 +1148,30 @@ text to be compared against it."
      ;; them are given instead, with an excerpt around that position.
      ((and (null forms)
            (not (scalpel-locate-balanced-p file text)))
-      (let ((offset (scalpel-agent--first-unbalance-offset text)))
-        (if (and (numberp offset) (< offset (length text)))
-            (let* ((excerpt-start (max 0 (- offset 20)))
-                   (excerpt-end (min (length text) (+ offset 20)))
-                   (excerpt (substring text excerpt-start excerpt-end)))
-              (concat "Its brackets do not balance, so the Emacs Lisp reader "
-                      "cannot reach the end of it: the first unbalance is at "
-                      "offset " (number-to-string offset) ", around \""
-                      excerpt "\"."))
-          (let ((unclosed (scalpel-agent--open-stack-report text)))
-            (if unclosed
-                (let* ((count (car unclosed))
-                       (pos (cdr unclosed))
-                       (pos (max 0 (min pos (length text))))
-                       (excerpt-start (max 0 (- pos 20)))
-                       (excerpt-end (min (length text) (+ pos 20)))
-                       (excerpt (substring text excerpt-start excerpt-end)))
-                  (concat "Its brackets do not balance, so the Emacs Lisp reader "
-                          "cannot reach the end of it: " (number-to-string count)
-                          " brackets are still open, the last at offset "
-                          (number-to-string pos) ", around \"" excerpt "\"."))
-              (concat "Its brackets do not balance, so the Emacs Lisp reader "
-                      "cannot reach the end of it: the text left an unclosed "
-                      "bracket."))))))
+      (let ((diagnosis (scalpel-diagnose-paren-defects file text)))
+        (if (not diagnosis)
+            (concat "Its brackets do not balance, so the reader cannot "
+                    "reach the end of it.")
+          (let ((kind (plist-get diagnosis :kind)))
+            (if (eq kind 'unbalance)
+                (let ((offset (plist-get diagnosis :offset)))
+                  (if (and (numberp offset) (< offset (length text)))
+                      (let* ((excerpt-start (max 0 (- offset 20)))
+                             (excerpt-end (min (length text) (+ offset 20)))
+                             (excerpt (substring text excerpt-start excerpt-end)))
+                        (concat "Its brackets do not balance, so the reader "
+                                "cannot reach the end of it: the first "
+                                "unbalance is at offset "
+                                (number-to-string offset) ", around \""
+                                excerpt "\"."))
+                    (let ((report (scalpel-agent--unclosed-report-from
+                                   diagnosis text)))
+                      (concat "Its brackets do not balance, so the reader "
+                              "cannot reach the end of it: " report))))
+              (let ((report (scalpel-agent--unclosed-report-from
+                             diagnosis text)))
+                (concat "Its brackets do not balance, so the reader "
+                        "cannot reach the end of it: " report)))))))
      ;; A reply that reads as several complete forms, every one of them
      ;; finished, is refused for its count.  The bracket walk used to be
      ;; asked first, and answered such a reply -- two balanced forms,
@@ -2341,45 +2349,52 @@ path tag the failure as `no-validation', which the diagnose side
 offers a block-edit retry for."
   'error)
 
-(defun scalpel-agent--first-unbalance-offset (text)
-  "Return the offset in TEXT where it first becomes bracket-unbalanced.
-Scans the text as a plain character string, so the answer is the
-same one `scalpel-locate-balanced-p' would be asked about; returns
-the length of TEXT when the imbalance is only an unclosed bracket
-that never finds its close."
-  (let ((depth 0)
-        (openers '(?\( ?\[ ?\{))
-        (closers '(?\) ?\] ?\})))
-    (catch 'result
-      (cl-loop for i from 0 below (length text)
-               for ch = (aref text i)
-               do (cond
-                   ((memq ch openers) (setq depth (1+ depth)))
-                   ((memq ch closers)
-                    (setq depth (1- depth))
-                    (when (< depth 0)
-                      (throw 'result i))))
-               finally (throw 'result (length text))))))
+(defun scalpel-agent--unclosed-report-from (diag &optional _text)
+  "Return the clause text for an unclosed-bracket diagnosis DIAG.
+DIAG is a plist with :kind :unclosed, :count, :offset, :line and :col.
+TEXT is accepted for call-site compatibility and is unused."
+  (let ((count (plist-get diag :count))
+        (offset (plist-get diag :offset))
+        (line (plist-get diag :line))
+        (col (plist-get diag :col)))
+    (format
+     "%d bracket(s) are still open in this form; the form opening they belong to is at offset %d, line %d, column %d. The missing closing bracket belongs to that form and should usually be placed at the end of the text, directly after the last argument or on its own line aligned to column %d, matching the file's existing closing style."
+     count offset line col col)))
 
-(defun scalpel-agent--open-stack-report (text)
-  "Return a report describing unmatched opening delimiters in TEXT.
-The function tracks opening round parentheses, square brackets, and braces,
-along with their positions.  A closing delimiter removes the most recent
-position from the stack when the stack is non-empty.  The return value is a
-cons whose car is the number of delimiters left open and whose cdr is the
-offset where the most recent one was opened.  Return nil when the stack is
-empty.  This result is read by
-`scalpel-agent--unusable-replacement-reason'."
-  (let ((openers '(?\( ?\[ ?\{))
-        (closers '(?\) ?\] ?\}))
-        (stack nil))
-    (cl-loop for i from 0 below (length text)
-             for ch = (aref text i)
-             do (cond
-                 ((memq ch openers) (push i stack))
-                 ((memq ch closers) (when stack (pop stack))))
-             finally return (when stack
-                              (cons (length stack) (car stack))))))
+(defun scalpel-agent--open-stack-report (text diagnosis)
+  "Describe the still-open bracket stack reported by DIAGNOSIS against TEXT.
+DIAGNOSIS is the plist produced by the language registry for an
+unclosed-form refusal (:kind unclosed, with :count, :offset, :line,
+:col).  Return a sentence fragment naming how many closing brackets
+are still open, which form they belong to (offset, line, column, plus
+a short excerpt around the offset), and the neutral closing
+suggestion.  A missing or out-of-range :offset is guarded by clamping
+the excerpt bounds."
+  (let* ((count (or (plist-get diagnosis :count) 1))
+         (offset (plist-get diagnosis :offset))
+         (line (or (plist-get diagnosis :line) 1))
+         (col (or (plist-get diagnosis :col) 1))
+         (len (length text))
+         (radius 20)
+         (beg (if (numberp offset)
+                  (max 0 (- offset radius))
+                0))
+         (end (if (numberp offset)
+                  (min len (+ offset radius))
+                len))
+         (excerpt (if (< beg end)
+                      (replace-regexp-in-string
+                       "[\n\r]+" " "
+                       (substring text beg end))
+                    "")))
+    (format
+     "%d closing bracket%s still open: the unclosed form begins at offset %d (line %d, column %d), nearby text: %S. Neutral fix: place the missing closing bracket at the end of the text, either directly after the last argument or on its own line aligned to the opener's column, matching how the file's other closing brackets are written."
+     count
+     (if (= count 1) "is" "s are")
+     (if (numberp offset) offset 0)
+     line
+     col
+     excerpt)))
 
 (defun scalpel-agent-file-substitute (files pattern replacement)
   "Apply the mechanical replacement PATTERN -> REPLACEMENT across FILES.
@@ -2413,14 +2428,16 @@ reaches disk: new contents are built in memory through
 `scalpel-agent--perl-substitute', an `.el' file whose new content has
 unbalanced brackets refuses the whole rewrite, and zero occurrences
 anywhere refuses it too -- a rewrite that matched nothing is a planner
-mistake, not a success.  An unbalanced refusal names the first offset
-where the rewritten text goes wrong, through
-`scalpel-agent--first-unbalance-offset', with a short excerpt, and the
-complete perl command line through `scalpel-agent--perl-invocation', so
-the next attempt corrects the replacement instead of re-deriving it from
-memory.  The report also names the definitions the rewrite changed in
-each file, because a bulk rename leaves the old name in the planner's
-hands and the next round's locate failure explains nothing on its own.
+mistake, not a success.  The unbalance facts come from the file
+language's registered paren provider via `scalpel-diagnose-paren-defects':
+an unbalance names the first offset where the rewritten text goes wrong,
+with a short excerpt; an unclosed result is described through
+`scalpel-agent--unclosed-report-from'; and the complete perl command line
+comes through `scalpel-agent--perl-invocation', so the next attempt
+corrects the replacement instead of re-deriving it from memory.  The
+report also names the definitions the rewrite changed in each file,
+because a bulk rename leaves the old name in the planner's hands and the
+next round's locate failure explains nothing on its own.
 A zero-match refusal quotes the lines that begin like the pattern when
 Emacs can read it, so the planner can correct the pattern it wrote.  The
 report quotes before/after lines for the first occurrences, so a
@@ -2479,20 +2496,25 @@ can offer block-edit as the retry."
         ;; text: one answer for both this check and a refused reply, so a language
         ;; that says nothing about bracket shape is never reported as having one.
         (when (not (scalpel-locate-balanced-p resolved new))
-          (let ((offset (scalpel-agent--first-unbalance-offset new)))
+          (let ((diagnosis (scalpel-diagnose-paren-defects resolved new)))
             (user-error (concat "Scalpel: file-substitute of %s would leave unbalanced "
                                 "brackets; refused whole\n%s%s%s")
                         resolved
                         (scalpel-agent--substitute-invocation pattern replacement)
                         (scalpel-agent--perl-invocation pattern replacement)
-                        (if (< offset (length new))
-                            (format "\nThe rewritten text first goes wrong at character %d: %S"
-                                    offset
-                                    (replace-regexp-in-string
-                                     "\n" "\\\\n"
-                                     (substring new (max 0 (- offset 30))
-                                                (min (length new) (+ offset 30)))))
-                          "\nThe rewritten text left an unclosed bracket."))))
+                        (pcase (and (listp diagnosis) (plist-get diagnosis :kind))
+                          (`unbalance
+                           (let ((offset (plist-get diagnosis :offset)))
+                             (if (and (integerp offset) (< offset (length new)))
+                                 (format "\nThe rewritten text first goes wrong at character %d: %S"
+                                         offset
+                                         (replace-regexp-in-string
+                                          "\n" "\\\\n"
+                                          (substring new (max 0 (- offset 30))
+                                                     (min (length new) (+ offset 30)))))
+                               "\nThe rewritten text left an unclosed bracket.")))
+                          (`unclosed (scalpel-agent--unclosed-report-from diagnosis))
+                          (_ "\nThe rewritten text left an unclosed bracket.")))))
         (push (list resolved old new count) staged)))
     (setq staged (nreverse staged))
     ;; Zero matches overall is a planner mistake: refuse instead of reporting a

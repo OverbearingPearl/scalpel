@@ -100,6 +100,42 @@ which planner error type each one means.  `scalpel-agent-plan'
 consults this table instead of keeping its own private copy, so
 adding a new dialect condition means touching only this table.")
 
+(defvar scalpel-diagnose-paren-providers '()
+  "Register bracket defect diagnostic providers per language in an alist.
+The value is a list of \(EXTENSION . PROVIDER-FUNCTION) pairs where
+EXTENSION is a string like \"el\" without the leading dot, and
+PROVIDER-FUNCTION takes a buffer or file name and returns a list of
+bracket defect diagnostics \(plist with :type :line :col :message)
+for a rejected reply.  Order matters: earlier entries win when
+extensions collide.  Defined with defvar so that reloading this file
+does not reset registrations made by language modules loaded before it.")
+
+(defun scalpel-diagnose-register-paren-provider (extensions provider)
+  "Register PROVIDER for file EXTENSIONS (list of strings).
+The provider replaces any previous registration for the same
+extensions so that reloading definitions stays idempotent."
+  (dolist (ext extensions)
+    (setq scalpel-diagnose-paren-providers
+          (cons (cons ext provider)
+                (cl-remove-if
+                 (lambda (entry) (equal (car entry) ext))
+                 scalpel-diagnose-paren-providers))))
+  scalpel-diagnose-paren-providers)
+
+(defun scalpel-diagnose-paren-defects (file text)
+  "Ask the registered provider for bracket defects in TEXT.
+TEXT is a candidate replacement text for FILE.  Dispatch on FILE's
+extension without knowing the language; return nil when no provider is
+registered for that extension.  Diagnostics returned by the provider are
+passed through as-is."
+  (let* ((name (if (bufferp file) (buffer-file-name file) file))
+         (ext (and name
+                   (string-match "\\.\\([^../\\]+\\)\\'" name)
+                   (match-string 1 name)))
+         (entry (and ext (assoc ext scalpel-diagnose-paren-providers))))
+    (when entry
+      (funcall (cdr entry) text))))
+
 (provide 'scalpel-diagnose)
 
 ;;; scalpel-diagnose.el ends here
