@@ -115,7 +115,6 @@ replacement = '''...'''
 tool = '''shell'''
 command = '''...'''
 reason = '''...'''
-long-running = false
 
 [[action]]
 tool = '''reply'''

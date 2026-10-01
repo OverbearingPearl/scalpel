@@ -790,7 +790,7 @@ it asked for, so \"run the tests\" could not lead to a fix."
 tool = 'shell'
 command = 'echo hello'
 reason = 'check the loop'
-long-running = false"
+"
                                   "[[action]]
 tool = 'reply'
 text = 'done'"))))
@@ -832,7 +832,7 @@ the same command over and over."
 tool = 'shell'
 command = 'echo hello'
 reason = 'check'
-long-running = false"
+"
                                   "[[action]]
 tool = 'reply'
 text = 'done'"))))
@@ -950,7 +950,7 @@ away, and the console then stopped without saying why."
 tool = 'shell'
 command = 'echo hi'
 reason = 'check'
-long-running = false")))
+")))
                     ((symbol-function 'yes-or-no-p)
                      (lambda (&rest _) (setq asked (1+ asked)) t))
                     ((symbol-function 'message)
@@ -1076,7 +1076,7 @@ means the question was waived, so the large output goes back."
 tool = 'shell'
 command = 'seq 1 2000'
 reason = 'noise'
-long-running = false"
+"
                                   "[[action]]
 tool = 'reply'
 text = 'done'"))))
@@ -1118,7 +1118,7 @@ a keystroke and bought no information."
 tool = 'shell'
 command = 'ls'
 reason = 'look'
-long-running = false"
+"
                                   "[[action]]
 tool = 'reply'
 text = 'done'"))))
@@ -1154,7 +1154,7 @@ request -- leaking the boundary the prompt deliberately omits."
                                         "tool = 'shell'\n"
                                         "command = 'ls'\n"
                                         "reason = 'look'\n"
-                                        "long-running = false"))))
+                                        ""))))
                     ((symbol-function 'yes-or-no-p)
                      (lambda (&rest _ignore) t))
                     ((symbol-function 'scalpel-sandbox-run)
@@ -1733,7 +1733,7 @@ while the planner already saw the error as the newest turn."
                        (setq requests (1+ requests))
                        (if (= requests 1)
                            (funcall on-success
-                                    "[[action]]\ntool = 'shell'\ncommand = 'ls'\nreason = 'look'\nlong-running = false")
+                                    "[[action]]\ntool = 'shell'\ncommand = 'ls'\nreason = 'look'\n")
                          (funcall on-error
                                   (list :type 'parse
                                         :message "Bad TOML")))))

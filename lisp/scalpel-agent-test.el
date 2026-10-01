@@ -1189,9 +1189,9 @@ was confirmed without ever being displayed."
 (ert-deftest scalpel-agent-test-shell-contract-drops-read-only ()
   "The shell contract carries only fields the code still acts on.
 Regression: the planner declared \"read-only\", which gated the
-confirmation prompt even though nothing verified it; the prompt is
-now driven by \"long-running\" alone, so the field must not be
-requested from the planner."
+confirmation prompt even though nothing verified it. Shell actions now
+run inside the sandbox and need no planner-declared flag, so the field
+must not be requested from the planner."
   (should-not (memq :read-only (cdr (assoc "shell" scalpel-agent--tool-fields))))
   (should-not (string-match-p "read-only" scalpel-prompt-system-prompt)))
 

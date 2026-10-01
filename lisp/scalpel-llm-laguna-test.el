@@ -63,31 +63,22 @@ without saying so."
                      "first line\nsecond line")))))
 
 (ert-deftest scalpel-llm-laguna-test-shell-omission-is-filled-and-reported ()
-  "A shell call without `long-running' preserves its command and reason.
-It does not gain a `long-running' field or emit a notice about that field."
-  (let ((notices nil)
-        actions)
-    (cl-letf (((symbol-function 'message)
-               (lambda (format-string &rest args)
-                 (push (apply #'format format-string args) notices))))
-      (setq actions
-            (scalpel-llm-laguna-parse-reply
-             (concat "<tool_call>shell<arg_key>command</arg_key>"
-                     "<arg_value>grep -rn gptel .</arg_value>"
-                     "<arg_key>reason</arg_key>"
-                     "<arg_value>find references</arg_value>"
-                     "</tool_call>"))))
+  "A shell call preserves its command and reason and gains no extra fields."
+  (let (actions)
+    (setq actions
+          (scalpel-llm-laguna-parse-reply
+           (concat "<tool_call>shell<arg_key>command</arg_key>"
+                   "<arg_value>grep -rn gptel .</arg_value>"
+                   "<arg_key>reason</arg_key>"
+                   "<arg_value>find references</arg_value>"
+                   "</tool_call>")))
     (let ((action (car actions)))
-      (ert-info ((format "Action: %S Notices: %S" action notices))
+      (ert-info ((format "Action: %S" action))
         (should (equal (plist-get action :command) "grep -rn gptel ."))
-        (should (equal (plist-get action :reason) "find references"))
-        (should-not (plist-member action :long-running))
-        (should-not (cl-some (lambda (notice)
-                               (string-match-p "long-running" notice))
-                             notices))))))
+        (should (equal (plist-get action :reason) "find references"))))))
 
-(ert-deftest scalpel-llm-laguna-test-shell-call-without-long-running-field-does-not-require-confirmation ()
-  "A Laguna shell call with command and reason needs no long-running field."
+(ert-deftest scalpel-llm-laguna-test-shell-call-with-command-and-reason-does-not-require-confirmation ()
+  "A Laguna shell call with command and reason needs no confirmation."
   (let ((scalpel-agent-confirm-tools '("shell"))
         (action
          (car (scalpel-llm-laguna-parse-reply
@@ -95,9 +86,7 @@ It does not gain a `long-running' field or emit a notice about that field."
                        "<arg_value>rm -rf build</arg_value>"
                        "<arg_key>reason</arg_key>"
                        "<arg_value>clean</arg_value></tool_call>")))))
-    (ert-info ((format "Action: %S; expected no :long-running field and no confirmation"
-                       action))
-      (should-not (plist-member action :long-running))
+    (ert-info ((format "Action: %S; expected no confirmation" action))
       (should-not (scalpel-agent--confirm-needed-p action)))))
 
 (ert-deftest scalpel-llm-laguna-test-parse-leaves-a-toml-reply-whole ()
@@ -143,8 +132,7 @@ distinguished from it."
   (let ((raw
          (concat "<tool_call>file-peek<arg_key>file</arg_key>"
                  "<arg_value>/tmp/a.el</arg_value></tool_call>"
-                 "<tool_call>shell<arg_key>command</arg_key>"
-                 "<arg_value>grep -rn gptel .</arg_value>")))
+                 "<tool_call>shell")))
     (ert-info ((format "Raw:\n%S" raw))
       (should-error (scalpel-llm-laguna-parse-reply raw)
                     :type 'scalpel-llm-dialect-tool-call-error))))
@@ -152,12 +140,12 @@ distinguished from it."
 (ert-deftest scalpel-llm-laguna-test-parse-refuses-an-incomplete-argument ()
   "A call whose argument is incomplete is refused, not partly read.
 Skipping the unreadable pair and keeping the rest would silently
-lose a field, and the field this dialect is known to omit is the one
-that decides whether a command needs an answer from the user."
+lose a field, so any pair missing a key or a value must abort
+the whole parse instead of being tolerated."
   (let ((missing-value
          (concat "<tool_call>shell<arg_key>command</arg_key>"
                  "<arg_value>ls</arg_value>"
-                 "<arg_key>long-running</arg_key><arg_value>true"
+                 "<arg_key>command</arg_key><arg_value>true"
                  "</tool_call>"))
         (missing-key-end
          "<tool_call>file-peek<arg_key>file</tool_call>"))
