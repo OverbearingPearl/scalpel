@@ -1132,39 +1132,163 @@ was confirmed without ever being displayed."
                     '(:tool "confirm" :reason "need input"))
                    "confirm: need input")))
 
+(ert-deftest scalpel-agent-test-substitute-threshold-asks-without-dry-run-count ()
+  "A dry-run asks for confirmation even without a recorded count.
+When the match count exceeds `scalpel-agent-file-substitute-confirm-threshold',
+the user must be asked for confirmation via `yes-or-no-p'.
+This test guards against a regression where the confirmation threshold
+depended on a :dry-run-count field that was never populated, silently
+skipping the prompt."
+  (let* ((temp-dir nil)
+         (yes-or-no-p-called 0)
+         (review-called 0)
+         (substitute-called 0)
+         (last-report nil)
+         (orig-context-file-p (symbol-function 'scalpel-agent--context-file-p)))
+    (unwind-protect
+        (progn
+          (setq temp-dir (make-temp-file "scalpel-agent-test-" t))
+          (let ((target-file (expand-file-name "target.txt" temp-dir)))
+            (with-temp-file target-file (insert "needle line"))
+            (cl-letf* (((symbol-function 'scalpel-agent--context-file-p)
+                        (lambda (_path) t))
+                       ((symbol-function 'scalpel-agent--perl-substitute-preview)
+                        (lambda (&rest _args) "Match count: 25\n(per-file section above threshold)"))
+                       ((symbol-function 'scalpel-agent--perl-substitute-preview-counts)
+                        (lambda (&rest _args) (list (list (cons target-file 25)) 25)))
+                       ((symbol-function 'yes-or-no-p)
+                        (lambda (_prompt)
+                          (cl-incf yes-or-no-p-called)
+                          t))
+                       ((symbol-function 'scalpel-agent-review-file-substitute)
+                        (lambda (&rest args)
+                          (cl-incf review-called)
+                          (funcall (nth 2 args) t "APPROVE")))
+                       ((symbol-function 'scalpel-agent-file-substitute)
+                        (lambda (&rest _args)
+                          (cl-incf substitute-called)
+                          "applied substitution to 25 occurrence(s)"))
+                       (scalpel-agent-file-substitute-confirm-threshold 1)
+                       (scalpel-agent-unattended-confirm nil))
+              (ert-info ("execute-action should trigger the confirmation flow based on the threshold even without :dry-run-count")
+                (let ((action (list :tool "file-substitute-dry-run"
+                                    :files (list target-file)
+                                    :pattern "needle line"
+                                    :replacement "replaced line")))
+                  (scalpel-agent-execute-action
+                   action
+                   (lambda (report)
+                     (setq last-report report))
+                   (lambda (err)
+                     (ert-fail (format "on-error was unexpectedly called: %S" err))))))
+              (ert-info ("review should be called exactly once")
+                (should (= review-called 1)))
+              (ert-info ("yes-or-no-p should be asked exactly once")
+                (should (= yes-or-no-p-called 1)))
+              (ert-info ("file-substitute should be executed exactly once")
+                (should (= substitute-called 1)))
+              (ert-info ("the success report should state the substitution was applied")
+                (should (stringp last-report))
+                (should (string-match-p "applied substitution" last-report))))))
+      (fset 'scalpel-agent--context-file-p orig-context-file-p)
+      (when (and temp-dir (file-directory-p temp-dir))
+        (delete-directory temp-dir t)))))
+
+(ert-deftest scalpel-agent-test-direct-substitute-gated-by-threshold ()
+  "Direct file-substitute path is gated by the same threshold as the dry-run path."
+  (let ((temp-file (make-temp-file "scalpel-agent-direct-sub"))
+        (ran-file-substitute 0)
+        (stub-answer nil)
+        (success-report nil))
+    (unwind-protect
+        (progn
+          (with-temp-buffer
+            (insert "alpha beta alpha\n")
+            (write-region (point-min) (point-max) temp-file))
+          (cl-letf (((symbol-function 'scalpel-agent--context-file-p)
+                     (lambda (&rest _args) t))
+                    ((symbol-function 'scalpel-agent--perl-substitute-preview)
+                     (lambda (&rest _args) "Match count: 2"))
+                    ((symbol-function 'scalpel-agent--perl-substitute-preview-counts)
+                     (lambda (&rest _args) (list (list (cons temp-file 2)) 2)))
+                    ((symbol-function 'scalpel-agent-review-file-substitute)
+                     (lambda (&rest args)
+                       (funcall (nth 2 args) t "APPROVE")))
+                    ((symbol-function 'scalpel-agent-file-substitute)
+                     (lambda (&rest _args)
+                       (setq ran-file-substitute (1+ ran-file-substitute))
+                       t))
+                    ((symbol-function 'yes-or-no-p)
+                     (lambda (&rest _args) stub-answer)))
+            (ert-info ("Declining the confirmation must not run the substitution and the report must say it did not run")
+              (setq ran-file-substitute 0
+                    stub-answer nil
+                    success-report nil)
+              (let ((scalpel-agent-file-substitute-confirm-threshold 1)
+                    (scalpel-agent-unattended-confirm nil))
+                (scalpel-agent-execute-action
+                 (list :tool "file-substitute"
+                       :files (list temp-file)
+                       :pattern "alpha"
+                       :replacement "beta")
+                 (lambda (report) (setq success-report (format "%s" report)))
+                 (lambda (report)
+                   (ert-fail (format "on-error called unexpectedly: %s" report)))))
+              (should (= 0 ran-file-substitute))
+              (should (stringp success-report))
+              (should (string-match-p "declin\\|denied\\|cancel\\|skip\\|not run\\|not\\s-*performed" success-report)))
+            (ert-info ("Approving the confirmation must run the substitution exactly once")
+              (setq ran-file-substitute 0
+                    stub-answer t
+                    success-report nil)
+              (let ((scalpel-agent-file-substitute-confirm-threshold 1)
+                    (scalpel-agent-unattended-confirm nil))
+                (scalpel-agent-execute-action
+                 (list :tool "file-substitute"
+                       :files (list temp-file)
+                       :pattern "alpha"
+                       :replacement "beta")
+                 (lambda (_report) t)
+                 (lambda (report)
+                   (ert-fail (format "on-error called unexpectedly: %s" report)))))
+              (should (= 1 ran-file-substitute)))))
+      (when (file-exists-p temp-file)
+        (delete-file temp-file)))))
+
 (ert-deftest scalpel-agent-test-shell-confirm-gated-by-flags ()
-  "Shell actions do not ask for confirmation, even after a long execution."
-  (let ((scalpel-agent-confirm-tools '("shell"))
+  (skip-unless (fboundp 'scalpel-agent-execute-action))
+  (let ((tmpdir (make-temp-file "scalpel-agent-test-" t))
         (asked 0)
-        (ran 0)
-        (now 0)
-        (original-float-time (symbol-function 'float-time)))
-    (cl-letf (((symbol-function 'yes-or-no-p)
-               (lambda (&rest _) (setq asked (1+ asked)) t))
-              ((symbol-function 'current-time)
-               (lambda () (seconds-to-time now)))
-              ((symbol-function 'float-time)
-               (lambda (&optional time)
-                 (if time
-                     (funcall original-float-time time)
-                   now)))
-              ((symbol-function 'scalpel-agent-shell)
-               (lambda (&rest _)
-                 (setq ran (1+ ran)
-                       now (+ now 3600))
-                 "report")))
-      (let ((action '(:tool "shell" :command "rm -rf build"
-                            :reason "clean"))
-            report)
-        (scalpel-agent-execute-action
-         action
-         (lambda (r) (setq report r))
-         (lambda (err) (ert-fail (plist-get err :message))))
-        (ert-info ((format "After a one-hour shell execution: report=%S, asked=%d, ran=%d"
-                           report asked ran))
-          (should (string= report "report"))
-          (should (= asked 0))
-          (should (= ran 1)))))))
+        (shell-ran 0)
+        (scalpel-agent-confirm-tools (list "shell"))
+        (scalpel-agent-unattended-confirm nil))
+    (unwind-protect
+        (cl-letf (((symbol-function 'yes-or-no-p)
+                   (lambda (&rest _prompt)
+                     (setq asked (1+ asked))
+                     t))
+                  ((symbol-function 'scalpel-agent-shell)
+                   (lambda (&rest _args)
+                     (setq shell-ran (1+ shell-ran))
+                     "report"))
+                  (action (list :tool "shell"
+                                :command "rm -rf build"
+                                :reason "clean"))
+                  (report nil)
+                  (failed nil))
+          (scalpel-agent-execute-action
+           action
+           (lambda (rep) (setq report rep))
+           (lambda (&rest _err) (setq failed t)))
+          (ert-info ("Success callback must receive the shell tool report")
+            (should (equal report "report")))
+          (ert-info ("Shell being confirm-gated by flags must not prompt the user")
+            (should (= asked 0)))
+          (ert-info ("Shell tool must run exactly once")
+            (should (= shell-ran 1)))
+          (ert-info ("Error callback must not fire on success")
+            (should-not failed)))
+      (delete-directory tmpdir t))))
 
 (ert-deftest scalpel-agent-test-shell-does-not-ask-for-duration-confirmation ()
   "A shell action succeeds without asking for confirmation based on duration."

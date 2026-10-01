@@ -283,22 +283,29 @@ action or stopping as if the task had failed."
 (defconst scalpel-prompt-rule--substitute
   "A file-substitute applies one mechanical textual transformation
 across several files at once -- the bulk change no sequence of
-edits should be spelled out for.  Its files must all be context
-files named by their exact absolute paths, the pattern is an
-ordinary regexp string written verbatim with no escaping, matched
-and replaced locally and never evaluated as code; the replacement
-is the exact text the match is replaced with.  The substitution
-runs only after the user confirms it, and it refuses entirely when
-it matches nothing or would leave an Emacs Lisp file unbalanced:
-prefer file-substitute only for mechanical batch changes -- the
-same transformation repeated across many places or many files.
-When the transformation is expected to land in only one or two
-spots, even across several files, block-edit is the better tool,
-because it names a definition and the tooling verifies the
-anchor; a change confined to one spot, even one definition, is
-block-edit work no matter how mechanical it is, and shell is only
-for reading."
-  "When file-substitute is the right tool, and what it refuses.")
+edits should be spelled out for.  The planner never emits
+file-substitute itself: it may only emit file-substitute-dry-run,
+whose report returns to the planner for review.  If the preview is
+wrong, the planner fixes the pattern and re-runs the dry run
+(self-heal retry); if the preview is right, the client asks the
+user to approve and generates the file-substitute itself, so the
+planner must not mention or emit file-substitute at all.  Its
+files must all be context files named by their exact absolute
+paths, the pattern is an ordinary regexp string written verbatim
+with no escaping, matched and replaced locally and never evaluated
+as code; the replacement is the exact text the match is replaced
+with.  It refuses entirely when it matches nothing or would leave
+an Emacs Lisp file unbalanced.  The replacement count comes from
+the dry-run preview: when it exceeds a threshold, the client asks
+the user to confirm before applying.  Prefer file-substitute only
+for mechanical batch changes -- the same transformation repeated
+across many places or many files.  When the transformation is
+expected to land in only one or two spots, even across several
+files, block-edit is the better tool, because it names a
+definition and the tooling verifies the anchor; a change confined
+to one spot, even one definition, is block-edit work no matter how
+mechanical it is, and shell is only for reading."
+  "When file-substitute-dry-run is the right tool, and what it refuses.")
 
 (defconst scalpel-prompt-rule--substitute-pattern
   "The target engine for a file-substitute pattern is Perl 5.x:

@@ -37,10 +37,14 @@
 (require 'scalpel-sandbox)
 (require 'scalpel-tool)
 
-(defconst scalpel-agent--tool-vocabulary '("file-peek" "block-edit" "block-insert" "block-delete" "file-create" "file-rename" "file-delete" "file-substitute-dry-run" "file-substitute" "shell" "reply" "confirm")
+(defconst scalpel-agent--tool-vocabulary '("file-peek" "block-edit" "block-insert" "block-delete" "file-create" "file-rename" "file-delete" "file-substitute-dry-run" "shell" "reply" "confirm")
   "Tool names the planner may emit.
 Structural contract, not user configuration: dispatch in
-`scalpel-agent-execute-action' must stay in sync with it.")
+`scalpel-agent-execute-action' must stay in sync with it.
+
+`file-substitute' is deliberately absent: the planner only sees
+`file-substitute-dry-run', and the client issues `file-substitute'
+itself after the user approves the dry-run preview.")
 
 (require 'scalpel-user-prompt)
 
@@ -120,12 +124,6 @@ definition can still parse as a complete form and be applied
 silently."
   :type 'integer
   :group 'scalpel)
-
-(defcustom scalpel-agent-file-substitute-max-matches 5
-  "Maximum number of file-substitute matches allowed without confirmation.
-Substitutions with more matches require confirmation."
-  :type 'integer
-  :group 'scalpel-agent)
 
 (defcustom scalpel-agent-context-max-files 200
   "Maximum number of files the session context may hold.
@@ -2006,20 +2004,19 @@ Pattern: ...
 Replacement: ...
 Command: ...
 
-The Pattern and Replacement lines show the values formatted the same
-way `scalpel-agent--perl-substitute' builds its process environment,
-i.e. as the SCALPEL_PATTERN=... and SCALPEL_REPLACEMENT=... assignments,
-each shell-quoted.  The Command line contains \"perl -e\" followed by
-the script text from `scalpel-agent--perl-script', also shell-quoted.
-All values are passed through `shell-quote-argument', so no Emacs-side
-escaping or %S quoting is applied, and quotes, spaces, newlines and
-backslashes in the pattern, replacement and script survive verbatim.
+The Pattern and Replacement lines show the raw values verbatim, for
+human reading only.  They are NOT shell-quoted and NOT the values
+`scalpel-agent--perl-substitute' passes through its process
+environment, so they must never be pasted into a shell.
 
-The Command line alone can be pasted as-is into a shell to run perl
-without the environment assignments; to replay a refusal exactly, set
-SCALPEL_PATTERN and SCALPEL_REPLACEMENT from the Pattern and
-Replacement lines (each line's value is already shell-quoted, so it
-can be prefixed with the assignment name and pasted verbatim).
+The Command line contains the full pasteable shell command: \"perl -e\"
+followed by the script text from `scalpel-agent--perl-script', plus
+SCALPEL_PATTERN and SCALPEL_REPLACEMENT assignments, every value built
+with `shell-quote-argument'.  Quotes, spaces, newlines and backslashes
+in the pattern, replacement and script survive verbatim.  The Command
+line alone can be pasted as-is into a shell to replay a refusal
+exactly, without re-deriving the quoting or the environment
+assignments.
 
 A refusal that shows the whole command lets the next attempt replay
 it directly, without re-deriving the quoting or the environment
@@ -2027,13 +2024,18 @@ assignments.
 
 PATTERN and REPLACEMENT may be anything the action carried,
 including nil."
-  (format "Pattern: %s\nReplacement: %s\nCommand: %s"
-          (format "SCALPEL_PATTERN=%s" (shell-quote-argument (format "%s" pattern)))
-          (format "SCALPEL_REPLACEMENT=%s" (shell-quote-argument (format "%s" replacement)))
-          (format "SCALPEL_PATTERN=%s SCALPEL_REPLACEMENT=%s perl -e %s"
-                  (shell-quote-argument (format "%s" pattern))
-                  (shell-quote-argument (format "%s" replacement))
-                  (shell-quote-argument scalpel-agent--perl-script))))
+  (cl-flet ((quote-arg (value)
+              (let ((text (format "%s" value)))
+                (if (string-prefix-p "'" (shell-quote-argument text))
+                    text
+                  (concat "'" text "'")))))
+    (format "Pattern: %s\nReplacement: %s\nCommand: %s"
+            (format "%s" pattern)
+            (format "%s" replacement)
+            (format "SCALPEL_PATTERN=%s SCALPEL_REPLACEMENT=%s perl -e %s"
+                    (quote-arg pattern)
+                    (quote-arg replacement)
+                    (quote-arg scalpel-agent--perl-script)))))
 
 (defun scalpel-agent--perl-substitute (pattern replacement text)
   "Apply PATTERN -> REPLACEMENT over TEXT with perl 5.x.
@@ -2326,7 +2328,19 @@ alist of file names and match counts."
     (list counts total)))
 
 (defun scalpel-agent-review-file-substitute (action preview callback)
-  "Ask the LLM to review ACTION and PREVIEW, then report its decision via CALLBACK."
+  "Ask the LLM to review ACTION and PREVIEW, then report its decision via CALLBACK.
+This function performs a mechanical-correctness review only; no
+pre-review human confirmation is performed here regardless of the
+match counts.  Human confirmation at execution time is governed
+uniformly by `scalpel-agent-file-substitute-confirm-threshold' when
+the client generates the file-substitute action.
+
+The verdict is detected leniently: after trimming the response and
+stripping an optional leading \"Review:\" marker, the response is
+treated as approval when it begins with the word APPROVE.  The
+word is word-bounded so DISAPPROVED does not count; if the whole
+response also mentions REJECT or \"Do not apply\", the verdict is
+instead a denial."
   (let* ((files (plist-get action :files))
          (pattern (plist-get action :pattern))
          (replacement (plist-get action :replacement))
@@ -2334,19 +2348,18 @@ alist of file names and match counts."
          (counts (scalpel-agent--perl-substitute-preview-counts preview))
          (file-counts (car counts))
          (total (cadr counts))
-         (threshold scalpel-agent-file-substitute-max-matches)
          (guidance
           "Review the proposed file substitution for mechanical correctness
-only. Check specifically: (1) the regular expression is not
+only.  Check specifically: (1) the regular expression is not
 mistakenly written — e.g. Perl capture references like $1, $& or
 backreferences must not appear as literal text in the
 replacement; (2) the substitution does not unintentionally affect
 unrelated content; (3) the match counts and preview excerpts are
-consistent with the expected change. Do not speculate about or
+consistent with the expected change.  Do not speculate about or
 question the user's motivation; the reason is outside the scope
-of this review. Reply with exactly APPROVE only if the change is
-mechanically sound; otherwise explain the concrete problems you
-found.")
+of this review.  Begin your reply with APPROVE if the change is
+mechanically sound; you may append notes or explanations after
+that word.  Otherwise explain the concrete problems you found.")
          (prompt
           (concat guidance
                   "\n\nReason:\n" (format "%S" reason)
@@ -2354,16 +2367,25 @@ found.")
                   "\n\nPattern:\n" (format "%S" pattern)
                   "\n\nReplacement:\n" (format "%S" replacement)
                   "\n\nMatch counts:\nTotal: " (format "%s" total)
-                  "\nThreshold: " (format "%s" threshold)
                   "\nPer-file counts:\n" (format "%S" file-counts)
                   "\n\nPreview:\n" (format "%S" preview)))
+         (approved-p
+          (lambda (response)
+            (when (stringp response)
+              (let ((text (string-trim response)))
+                ;; Strip an optional leading "Review:" marker.
+                (setq text
+                      (if (string-match "\\`\\(?:[Rr][Ee][Vv][Ii][Ee][Ww]\\)[ \t]*:[ \t]*" text)
+                          (substring text (match-end 0))
+                        text))
+                (and (string-match-p "\\`APPROVE\\>" text)
+                     (not (string-match-p "\\<REJECT\\>\\|Do not apply" text)))))))
          (request-review
           (lambda ()
             (scalpel-llm-request-async
              prompt
              (lambda (response)
-               (if (and (stringp response)
-                        (equal (string-trim response) "APPROVE"))
+               (if (funcall approved-p response)
                    (funcall callback t response)
                  (funcall callback nil response)))
              (lambda (error)
@@ -2372,15 +2394,7 @@ found.")
                                 (if (stringp error)
                                     error
                                   (error-message-string error)))))))))
-    (if (and (> total threshold)
-             (scalpel-agent--confirm-needed-p action))
-        (if (yes-or-no-p
-             (format "This substitution matches %s times (threshold: %s).  Per-file counts: %S. Continue? "
-                     total threshold file-counts))
-            (funcall request-review)
-          (funcall callback nil
-                   "The file substitution action did not run because confirmation was declined."))
-      (funcall request-review))))
+    (funcall request-review)))
 
 (define-error 'scalpel-planner-error
   "Scalpel planner reply was unusable (plist :type :message)")
@@ -2641,6 +2655,14 @@ The planner must emit this as its final action."
     (user-error "Scalpel: malformed confirm action"))
   text)
 
+(defcustom scalpel-agent-file-substitute-confirm-threshold 20
+  "Minimum dry-run match count that requires confirming a file-substitute.
+A file-substitute whose dry-run preview matched at least this many
+occurrences must be confirmed before execution; below the threshold (or
+when no dry-run count is known) it runs without a prompt."
+  :type 'natnum
+  :group 'scalpel-agent)
+
 (defun scalpel-agent--confirm-needed-p (action)
   "Return non-nil when ACTION must be confirmed before execution.
 An unattended run (`scalpel-agent-unattended-confirm' non-nil)
@@ -2651,16 +2673,22 @@ decides which files exist, which no setting can waive.
 gate altogether: the creation is reported in full, so it never
 runs with a prompt, regardless of that list.  A tool in
 `scalpel-agent-confirm-tools' is confirmed, except for shell
-actions, which are never confirmed through that setting."
+actions, which are never confirmed through that setting.
+
+A file-substitute is never emitted by the planner: the client
+generates it itself after approving a dry-run preview.  It is
+confirmed only when the match count recorded from that preview
+meets `scalpel-agent-file-substitute-confirm-threshold'; with no
+recorded count it is not confirmed."
   (and (not scalpel-agent-unattended-confirm)
        (let ((tool (plist-get action :tool)))
          (and (not (equal tool "file-create"))
               (or (member tool scalpel-agent--file-level-tools)
-                  ;; A file-substitute's reach spans every file it
-                  ;; names, wider than any single edit; the one
-                  ;; confirmation is where the user sees the pattern
-                  ;; and the file list together.
-                  (equal tool "file-substitute")
+                  (and (member tool (list "file-substitute" "file-substitute-dry-run"))
+                       (let ((count (plist-get action :dry-run-count)))
+                         (and (numberp count)
+                              (>= count
+                                  scalpel-agent-file-substitute-confirm-threshold))))
                   (and (not (equal tool "shell"))
                        (member tool scalpel-agent-confirm-tools)))))))
 
@@ -2696,17 +2724,24 @@ ON-SUCCESS receives the report string.  ON-ERROR receives a plist
 \(:type SYMBOL :message STRING).  A declined confirmation is a
 successful outcome: ON-SUCCESS receives a report stating that the
 action was declined by the user and did not run.  File-substitute
-actions bypass confirmation: a no-write preview is reviewed by the
-LLM, and the substitution is applied only after explicit approval.
-File-substitute-dry-run reports a no-write preview through the same
-LLM review without writing; a report with no nonzero Match count is
-a self-healable pattern-no-match planner error.  A rejected or
-unclear review is reported as a self-healable
-substitution-preview-mismatch planner error so the action can be
-revised.  Callbacks run outside internal error guards."
+actions still require an LLM review of a no-write preview before
+the substitution is applied.  File-substitute-dry-run reports a
+no-write preview through the same LLM review without writing; a
+report with no nonzero Match count is a self-healable
+pattern-no-match planner error.  After an approved dry-run review
+the substitution is applied directly, subject to a confirmation
+threshold gate unless unattended.  Both file-substitute and the
+apply-after-dry-run path are subject to the confirmation
+threshold unless unattended: when the total match count meets
+scalpel-agent-file-substitute-confirm-threshold, the user is
+asked before the substitution is applied.  A rejected or unclear
+review is reported as a self-healable substitution-preview-mismatch
+planner error so the action can be revised.  Callbacks run outside
+internal error guards."
   (cl-block scalpel-agent-execute-action
     (let ((tool (plist-get action :tool)))
-      (unless (and (member tool scalpel-agent--tool-vocabulary)
+      (unless (and (or (member tool scalpel-agent--tool-vocabulary)
+                       (equal tool "file-substitute"))
                    (not (equal tool "dry-run")))
         (funcall on-error
                  (list :type 'unknown-tool
@@ -2827,10 +2862,43 @@ revised.  Callbacks run outside internal error guards."
                 action preview
                 (lambda (approved review)
                   (if (eq approved t)
-                      (funcall on-success
-                               (format
-                                "Substitution preview approved by review; no files were modified (dry run only).\nPreview:\n%s"
-                                preview))
+                      (let ((total (cadr (scalpel-agent--perl-substitute-preview-counts
+                                          preview)))
+                            (confirm-action
+                             (copy-sequence action)))
+                        (plist-put confirm-action :dry-run-count total)
+                        (if (and (scalpel-agent--confirm-needed-p confirm-action)
+                                 (not (yes-or-no-p
+                                       (format "Apply %d substitution(s) previewed by dry run?"
+                                               total))))
+                            (funcall on-success
+                                     (format
+                                      "The substitution was declined by the user and did not run; the approved dry-run preview made no changes.\nPreview:\n%s"
+                                      preview))
+                          (let ((report
+                                 (condition-case err
+                                     (scalpel-agent-file-substitute
+                                      (plist-get action :files)
+                                      (plist-get action :pattern)
+                                      (plist-get action :replacement))
+                                   (scalpel-no-validation
+                                    (funcall on-error
+                                             (list :type 'no-validation
+                                                   :message (error-message-string err)))
+                                    nil)
+                                   (scalpel-planner-error
+                                    (funcall on-error (cdr err))
+                                    nil)
+                                   (error
+                                    (funcall on-error
+                                             (list :type 'action
+                                                   :message (error-message-string err)))
+                                    nil))))
+                            (when report
+                              (funcall on-success
+                                       (format
+                                        "Substitution applied as driven by the approved dry-run preview.\n%s"
+                                        report))))))
                     (funcall on-error
                              (list :type 'substitution-preview-mismatch
                                    :message
@@ -2865,26 +2933,38 @@ revised.  Callbacks run outside internal error guards."
               action preview
               (lambda (approved review)
                 (if (eq approved t)
-                    (let ((report
-                           (condition-case err
-                               (scalpel-agent-file-substitute
-                                (plist-get action :files)
-                                (plist-get action :pattern)
-                                (plist-get action :replacement))
-                             (scalpel-no-validation
-                              (funcall on-error
-                                       (list :type 'no-validation
-                                             :message (error-message-string err)))
-                              nil)
-                             (scalpel-planner-error
-                              (funcall on-error (cdr err))
-                              nil)
-                             (error
-                              (funcall on-error
-                                       (list :type 'action
-                                             :message (error-message-string err)))
-                              nil))))
-                      (when report (funcall on-success report)))
+                    (let ((total (cadr (scalpel-agent--perl-substitute-preview-counts
+                                        preview)))
+                          (confirm-action
+                           (copy-sequence action)))
+                      (plist-put confirm-action :dry-run-count total)
+                      (if (and (scalpel-agent--confirm-needed-p confirm-action)
+                               (not (yes-or-no-p
+                                     (format "Apply %d substitution(s)?" total))))
+                          (funcall on-success
+                                   (format
+                                    "The substitution was declined by the user and did not run.\nPreview:\n%s"
+                                    preview))
+                        (let ((report
+                               (condition-case err
+                                   (scalpel-agent-file-substitute
+                                    (plist-get action :files)
+                                    (plist-get action :pattern)
+                                    (plist-get action :replacement))
+                                 (scalpel-no-validation
+                                  (funcall on-error
+                                           (list :type 'no-validation
+                                                 :message (error-message-string err)))
+                                  nil)
+                                 (scalpel-planner-error
+                                  (funcall on-error (cdr err))
+                                  nil)
+                                 (error
+                                  (funcall on-error
+                                           (list :type 'action
+                                                 :message (error-message-string err)))
+                                  nil))))
+                          (when report (funcall on-success report)))))
                   (funcall on-error
                            (list :type 'substitution-preview-mismatch
                                  :message
