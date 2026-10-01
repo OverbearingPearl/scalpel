@@ -2336,10 +2336,20 @@ alist of file names and match counts."
          (total (cadr counts))
          (threshold scalpel-agent-file-substitute-max-matches)
          (guidance
-          "Review the proposed file substitution for safety and consistency with the intended change. Reply with exactly APPROVE only if the change is appropriate; otherwise explain your concerns.")
+          "Review the proposed file substitution for mechanical correctness
+only. Check specifically: (1) the regular expression is not
+mistakenly written — e.g. Perl capture references like $1, $& or
+backreferences must not appear as literal text in the
+replacement; (2) the substitution does not unintentionally affect
+unrelated content; (3) the match counts and preview excerpts are
+consistent with the expected change. Do not speculate about or
+question the user's motivation; the reason is outside the scope
+of this review. Reply with exactly APPROVE only if the change is
+mechanically sound; otherwise explain the concrete problems you
+found.")
          (prompt
           (concat guidance
-                  "\n\nIntended change:\n" (format "%S" reason)
+                  "\n\nReason:\n" (format "%S" reason)
                   "\n\nFiles:\n" (format "%S" files)
                   "\n\nPattern:\n" (format "%S" pattern)
                   "\n\nReplacement:\n" (format "%S" replacement)
