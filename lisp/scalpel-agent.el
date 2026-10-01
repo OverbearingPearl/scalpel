@@ -1999,16 +1999,27 @@ whole match, and prints a SCALPEL-COUNT line followed by the rewritten
 text on stdout.")
 
 (defun scalpel-agent--perl-invocation (pattern replacement)
-  "Return a one-string, pasteable description of the complete perl command.
-The command consists of the two environment assignments
-SCALPEL_PATTERN=... and SCALPEL_REPLACEMENT=..., with the values
-formatted the same way `scalpel-agent--perl-substitute' builds its
-process environment, followed by \"perl -e\" and the script text from
-`scalpel-agent--perl-script'.  All three pieces are passed through
-`shell-quote-argument', so the result can be pasted as-is into a
-shell: no Emacs-side escaping or %S quoting is applied, and quotes,
-spaces, newlines and backslashes in the pattern, replacement and
-script survive verbatim.
+  "Return a multi-line, pasteable description of the complete perl command.
+The description consists of three labeled lines:
+
+Pattern: ...
+Replacement: ...
+Command: ...
+
+The Pattern and Replacement lines show the values formatted the same
+way `scalpel-agent--perl-substitute' builds its process environment,
+i.e. as the SCALPEL_PATTERN=... and SCALPEL_REPLACEMENT=... assignments,
+each shell-quoted.  The Command line contains \"perl -e\" followed by
+the script text from `scalpel-agent--perl-script', also shell-quoted.
+All values are passed through `shell-quote-argument', so no Emacs-side
+escaping or %S quoting is applied, and quotes, spaces, newlines and
+backslashes in the pattern, replacement and script survive verbatim.
+
+The Command line alone can be pasted as-is into a shell to run perl
+without the environment assignments; to replay a refusal exactly, set
+SCALPEL_PATTERN and SCALPEL_REPLACEMENT from the Pattern and
+Replacement lines (each line's value is already shell-quoted, so it
+can be prefixed with the assignment name and pasted verbatim).
 
 A refusal that shows the whole command lets the next attempt replay
 it directly, without re-deriving the quoting or the environment
@@ -2016,10 +2027,13 @@ assignments.
 
 PATTERN and REPLACEMENT may be anything the action carried,
 including nil."
-  (format "%s %s perl -e %s"
+  (format "Pattern: %s\nReplacement: %s\nCommand: %s"
           (format "SCALPEL_PATTERN=%s" (shell-quote-argument (format "%s" pattern)))
           (format "SCALPEL_REPLACEMENT=%s" (shell-quote-argument (format "%s" replacement)))
-          (shell-quote-argument scalpel-agent--perl-script)))
+          (format "SCALPEL_PATTERN=%s SCALPEL_REPLACEMENT=%s perl -e %s"
+                  (shell-quote-argument (format "%s" pattern))
+                  (shell-quote-argument (format "%s" replacement))
+                  (shell-quote-argument scalpel-agent--perl-script))))
 
 (defun scalpel-agent--perl-substitute (pattern replacement text)
   "Apply PATTERN -> REPLACEMENT over TEXT with perl 5.x.
@@ -2089,9 +2103,10 @@ pattern."
 Return a bounded string that leads with the complete, pasteable perl
 command (as produced by `scalpel-agent--perl-invocation'), followed by
 per-file sections containing file names, match counts, and bounded
-excerpts.  Files are never modified, and substituted file contents are
-never included in full.  The command line consumes the same report
-length budget as any other text."
+unified-diff-style excerpts of the changed lines.  Files are never
+modified, and substituted file contents are never included in full.
+The command line consumes the same report length budget as any other
+text."
   (unless (and (stringp pattern)
                (stringp replacement)
                (consp files)
@@ -2181,6 +2196,7 @@ length budget as any other text."
                (source-index 0)
                (content-index 0)
                (changed-lines nil)
+               (changed-set (make-hash-table :test 'eq))
                (line-count (length content-lines))
                (ranges nil)
                (excerpt-parts nil)
@@ -2213,6 +2229,8 @@ length budget as any other text."
                     (setq content-index (1+ content-index)))))))
           (setq changed-lines (nreverse changed-lines))
           (dolist (line-index changed-lines)
+            (puthash line-index t changed-set))
+          (dolist (line-index changed-lines)
             (let* ((start (max 0 (- line-index excerpt-radius)))
                    (end (min (1- line-count)
                              (+ line-index excerpt-radius)))
@@ -2224,19 +2242,35 @@ length budget as any other text."
           (when (> (length ranges) max-excerpts)
             (setq ranges (seq-take ranges max-excerpts)))
           (dolist (range ranges)
-            (let ((line-index (car range)))
+            (when excerpt-parts
+              (push "" excerpt-parts))
+            (push (format "Lines %d-%d:" (1+ (car range)) (1+ (cdr range)))
+                  excerpt-parts)
+            (let ((line-index (car range))
+                  (header-shown t))
               (while (and (<= line-index (cdr range))
-                          (> file-budget shown-characters))
+                          (> file-budget (+ shown-characters
+                                            (if header-shown 0 1))))
                 (let* ((line (nth line-index content-lines))
-                       (available (- file-budget shown-characters))
-                       (take (min available max-line-length (length line)))
+                       (changed (gethash line-index changed-set))
+                       (prefix (if changed "+ " "  "))
+                       (available (- file-budget
+                                     shown-characters
+                                     (length prefix)
+                                     (if header-shown 0 1)))
+                       (take (max 0 (min available
+                                         max-line-length
+                                         (length line))))
                        (piece (substring line 0 take)))
-                  (push (format "%d: %s%s"
-                                (1+ line-index)
+                  (push (concat prefix
                                 piece
                                 (if (< take (length line)) "…" ""))
                         excerpt-parts)
-                  (setq shown-characters (+ shown-characters take)
+                  (setq shown-characters (+ shown-characters
+                                            (length prefix)
+                                            take
+                                            (if header-shown 0 1))
+                        header-shown nil
                         line-index (1+ line-index)))))
             (when (and (< (cdr range) (1- line-count))
                        (> file-budget shown-characters))
@@ -2246,7 +2280,7 @@ length budget as any other text."
                      (mapconcat #'identity (nreverse excerpt-parts) "\n")
                    (if (> count 0)
                        "No bounded changed-line excerpt is available."
-                     "No changed-line excerpt is available."))))
+                     "No matches found; the file is unchanged."))))
             (push (format "File: %s\nMatch count: %d\n%s\nContent omitted: only bounded excerpts are shown.\n"
                           file count body)
                   sections)))))
