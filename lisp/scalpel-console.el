@@ -128,6 +128,14 @@ falls through to the usual retry header for the user."
   :type 'natnum
   :group 'scalpel-console)
 
+(defcustom scalpel-console-self-heal-max-per-type 2
+  "Maximum number of automatic retries allowed per planner error type.
+This limit applies to any single planner error type per instruction
+and complements the total retry budget in `scalpel-console-self-heal-max'
+so that one recurring error type cannot consume the whole retry budget."
+  :type 'natnum
+  :group 'scalpel-console)
+
 (defcustom scalpel-console-unattended-max-rounds 30
   "Rounds an unattended run may spend before it stops itself.
 `scalpel-console-unattended' accepts a prefix argument to override
@@ -1724,10 +1732,10 @@ command again.  The unattended state is re-read at every round
 boundary, so `scalpel-console-unattended' may arm it while a round
 is in flight, and the time budget ends only the unattended state,
 not the task.  Planner errors that are self-healable are retried
-automatically: at most `scalpel-console-self-heal-max' retries per
-instruction are allowed, counted both per error type and in total,
-and the attempt counters reset with each invocation of this
-function.  An unattended run also arms
+automatically: at most `scalpel-console-self-heal-max-per-type'
+retries per error type and at most `scalpel-console-self-heal-max'
+retries in total are allowed, and both counters reset with each
+invocation of this function.  An unattended run also arms
 `scalpel-agent-unattended-confirm', so no action confirms, and
 stops at its own round limit with a timestamped mark instead of
 the interactive round-limit notice.  Closing marks for an
@@ -1748,8 +1756,8 @@ round."
                          scalpel-console-max-rounds))
           (conversation history)
           (next-instruction instruction)
-          (self-heal-attempts nil)
-          (self-heal-total 0))
+          (self-heal-total 0)
+          (self-heal-by-type nil))
       (cl-labels
           ((unattended-p () scalpel-console--unattended-p)
            (phase-line ()
@@ -1865,26 +1873,29 @@ after %s: %s."
                                  (scalpel-diagnose-self-heal-p round-error)
                                  (< self-heal-total
                                     scalpel-console-self-heal-max)
-                                 (< (or (cdr (assq (plist-get round-error :type)
-                                                   self-heal-attempts))
-                                        0)
-                                    scalpel-console-self-heal-max))
-                            (setq self-heal-total (1+ self-heal-total))
-                            (let* ((etype (plist-get round-error :type))
-                                   (count
-                                    (1+ (or (cdr (assq etype
-                                                       self-heal-attempts))
-                                            0))))
-                              (setq self-heal-attempts
-                                    (cons (cons etype count)
-                                          (assq-delete-all
-                                           etype self-heal-attempts)))
+                                 (< (or (plist-get self-heal-by-type (plist-get round-error :type)) 0)
+                                    scalpel-console-self-heal-max-per-type))
+                            (let ((err-type
+                                   (plist-get round-error :type))
+                                  (type-count 0))
+                              (setq self-heal-total (1+ self-heal-total))
+                              (setq type-count
+                                    (1+ (or (plist-get self-heal-by-type err-type) 0)))
+                              (setq self-heal-by-type
+                                    (plist-put self-heal-by-type
+                                               err-type type-count))
                               (scalpel-console--append
                                (format
                                 (concat
                                  "Scalpel: retrying after %s error "
-                                 "(type attempt %d/%d, %d of %d retries left)")
-                                etype count scalpel-console-self-heal-max
+                                 "(attempt %d, %d of %d retries left "
+                                 "for this type; %d of %d total "
+                                 "retries left)")
+                                err-type
+                                type-count
+                                (- scalpel-console-self-heal-max-per-type
+                                   type-count)
+                                scalpel-console-self-heal-max-per-type
                                 (- scalpel-console-self-heal-max
                                    self-heal-total)
                                 scalpel-console-self-heal-max))
