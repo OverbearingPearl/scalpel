@@ -120,7 +120,7 @@ Set it to nil to show every body."
 
 (defcustom scalpel-console-self-heal-max 2
   "Maximum automatic retries per instruction for self-healable planner errors.
-A planner error whose type is in `scalpel-diagnose-self-heal-types' is
+A planner error whose type is in `scalpel-diagnose-self-heal-denylist' is
 retried automatically -- the failure report stays in the conversation,
 so the model can correct its own reply -- until this many retries have
 been spent or the same error type keeps recurring.  Exceeding the budget

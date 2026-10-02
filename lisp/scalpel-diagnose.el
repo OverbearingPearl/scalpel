@@ -21,6 +21,11 @@
   '(parse tool-call prose unknown-tool missing-field malformed no-replacement
           no-such-symbol pattern-no-match bad-path unbalanced no-validation)
   "Error types caused by the planner's reply, not by Scalpel or the user.
+Under the default-allow self-heal policy every type in this list is
+eligible for an automatic retry round except the two names held in the
+denylist: PROSE and the context type FILE-OUTSIDE-CONTEXT.  The
+denylist therefore contains only those two entries; no other planner
+type here may be excluded from self-heal.
 A round that fails with one of these did not run anything: the
 model's output broke the action contract.  Retry advice differs
 type by type, so see the variable `scalpel-diagnose-advice-category-table'.
@@ -55,41 +60,36 @@ Such a round executed nothing and failed because the model's reply
 did not follow the action contract."
   (eq (scalpel-diagnose-category (plist-get err :type)) 'planner))
 
-(defconst scalpel-diagnose-self-heal-types
-  '(parse malformed no-replacement no-such-symbol pattern-no-match
-          substitution-preview-mismatch
-          bad-path unbalanced no-validation missing-field tool-call)
-  "Planner error types the console may retry automatically.
-Their failure reports carry enough context (near-miss lines, closest
-symbols) for the model to correct its own reply next round.
-NO-VALIDATION is the capability gate's refusal -- its message already
-names the remedy (block-edit), so the retried round can plan the
-right command from it.
-MISSING-FIELD is retriable because the error names the omitted field,
-so a retry with the error text in the conversation can re-emit the
-document with the field filled.
-TOOL-CALL is retriable because its failure report carries the
-offending reply text, so the next round sees what it did wrong and
-can re-emit the document without the XML-style markup; the console's
-retry budget caps how often the same prompt is repeated before the
-error is surfaced to the user.
-SUBSTITUTION-PREVIEW-MISMATCH is retriable because the preview and
-review feedback show how the proposed change differs from the
-intended change, letting the planner revise the substitution.
-PROSE is deliberately excluded: an output-contract violation where
-the planner replied with prose instead of the TOML action document.
-Retrying the identical prompt only repeats the prose and burns
-tokens; instead the prose answer stays in the conversation history
-for the user to read and re-ask on.")
+(defconst scalpel-diagnose-self-heal-denylist
+  '(prose file-outside-context)
+  "Error types excluded from automatic self-healing retries.
+
+By default self-healing is attempted for EVERY planner error
+type: a type is denied only when retrying the identical prompt
+provably repeats the failure and thus burns retry tokens for
+nothing.  The console retry budget still caps the total number
+of attempts for any error that IS retried.
+
+The list contains:
+
+- `prose': retrying a prose-generation failure cannot fix the
+  underlying problem and only wastes tokens repeating the same
+  output, which is exactly why the old allowlist excluded it.
+
+- `file-outside-context': the only real context-category error;
+  it means some file must be provided by the user, so retrying
+  cannot add a file the user must add, making an automatic
+  retry pointless.")
 
 (defun scalpel-diagnose-self-heal-p (err)
   "Return non-nil when ERR is a plist whose :type is self-healable.
-Such an error names a planner-output failure that a retry with
-the error text in the conversation can fix; see the variable
-`scalpel-diagnose-self-heal-types'."
+Self-healing is the default: any plist carrying a :type is
+considered a planner-output failure that a retry with the error
+text in the conversation can fix, unless that type is explicitly
+listed in the denylist variable `scalpel-diagnose-self-heal-denylist'."
   (and (listp err)
        (plist-member err :type)
-       (memq (plist-get err :type) scalpel-diagnose-self-heal-types)))
+       (not (memq (plist-get err :type) scalpel-diagnose-self-heal-denylist))))
 
 (defconst scalpel-diagnose-dialect-error-types
   '((scalpel-llm-dialect-tool-call-error . tool-call)

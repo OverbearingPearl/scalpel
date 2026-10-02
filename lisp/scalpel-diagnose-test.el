@@ -35,10 +35,27 @@
   (should-not (scalpel-diagnose-planner-error-p
                (list :type (car scalpel-diagnose-context-types)))))
 
+(ert-deftest scalpel-diagnose-test-self-healable-p-covers-all-planner-types-by-default ()
+  "Default policy: all planner error types except prose should be self-healable, prose should not be, and unknown types should default to self-healable."
+  (dolist (type scalpel-diagnose-planner-types)
+    (if (eq type 'prose)
+        (ert-info ((format "planner type %S should explicitly not be self-healable" type))
+          (should-not (scalpel-diagnose-self-heal-p (list :type type))))
+      (ert-info ((format "planner type %S should be self-healable by default" type))
+        (should (scalpel-diagnose-self-heal-p (list :type type))))))
+  (ert-info ((format "any unknown type %S should also be self-healable by default" 'scalpel-diagnose-test-unknown-type))
+    (should (scalpel-diagnose-self-heal-p (list :type 'scalpel-diagnose-test-unknown-type)))))
+
+(ert-deftest scalpel-diagnose-test-self-healable-p-excludes-listed-types ()
+  "Types on the denylist (prose and context types) should not be self-healable."
+  (dolist (type scalpel-diagnose-self-heal-denylist)
+    (ert-info ((format "Denylisted type %S should not be self-healable" type))
+      (should-not (scalpel-diagnose-self-heal-p type)))))
+
 (ert-deftest scalpel-diagnose-test-advice-for-covers-every-type ()
   (dolist (type (append scalpel-diagnose-planner-types
                         scalpel-diagnose-context-types
-                        scalpel-diagnose-self-heal-types
+                        scalpel-diagnose-self-heal-denylist
                         '(no-validation)))
     (should (stringp (scalpel-diagnose-advice-for type)))))
 
