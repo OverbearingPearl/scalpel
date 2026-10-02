@@ -2000,6 +2000,62 @@ the Nth capture group of the match and backslash-ampersand by the
 whole match, and prints a SCALPEL-COUNT line followed by the rewritten
 text on stdout.")
 
+(defconst scalpel-agent--perl-compile-check-script
+  "my $p = $ENV{SCALPEL_PATTERN};
+exit 3 unless defined $p;
+my $re = eval { qr/$p/ };
+if ($@ or !defined $re) {
+  print \"SCALPEL-ERROR perl cannot compile the pattern: $@\";
+  exit 2;
+}
+print \"SCALPEL-OK\\n\";
+exit 0;"
+  "Perl script used by `scalpel-agent--perl-compile-check'.
+Reads SCALPEL_PATTERN from the environment, compiles it with qr//
+inside an eval, prints SCALPEL-OK and exits 0 on success, or prints
+a SCALPEL-ERROR diagnostic and exits 2 on failure.")
+
+(defun scalpel-agent--perl-compile-check-invocation (pattern)
+  "Return the pasteable shell command replaying the Perl compile check for PATTERN."
+  (format "perl -e %s <<'SCALPEL_EOF'\nmy $re = %s;\nexit 0\nSCALPEL_EOF"
+          (shell-quote-argument (format "my $re = %s;" pattern)) (shell-quote-argument pattern)))
+
+(defun scalpel-agent--perl-compile-check (pattern)
+  "Verify with perl that PATTERN compiles as a regular expression.
+Runs the same `process-environment' trick as
+`scalpel-agent--perl-substitute', but only compiles the pattern
+with qr// and exits.  Signals `user-error' with the concrete perl
+message plus a pasteable replay command when compilation fails or
+the marker output is missing.  Returns nil on success."
+  (let* ((script scalpel-agent--perl-compile-check-script)
+         exit-code
+         output)
+    (with-temp-buffer
+      (setq exit-code
+            (let ((process-environment
+                   (cons (concat "SCALPEL_PATTERN=" pattern)
+                         process-environment)))
+              (call-process "perl" nil t nil "-e" script)))
+      ;; Read the output inside the temp buffer: after the buffer is
+      ;; gone, `buffer-string' would read whatever buffer is current.
+      (setq output (buffer-string)))
+    (unless (and (zerop exit-code)
+                 (string-match-p "\\`SCALPEL-OK" output))
+      (let ((trimmed (string-trim output))
+            reason)
+        (if (string-match
+             "\\`SCALPEL-ERROR perl cannot compile the pattern: \\(.+\\)\\'"
+             trimmed)
+            (setq reason (match-string 1 trimmed))
+          (setq reason
+                (format "unexpected perl output (exit %d): %s"
+                        exit-code trimmed)))
+        (user-error
+         "Perl cannot compile the pattern: %s\nReplay with: %s"
+         reason
+         (scalpel-agent--perl-compile-check-invocation pattern))))
+    nil))
+
 (defun scalpel-agent--perl-invocation (pattern replacement)
   "Return a multi-line, pasteable description of the complete perl command.
 The description consists of three labeled lines:
@@ -2043,8 +2099,11 @@ including nil."
 
 (defun scalpel-agent--perl-substitute (pattern replacement text)
   "Apply PATTERN -> REPLACEMENT over TEXT with perl 5.x.
-The substitute engine is fixed to the perl executable.  The script body
-is the perl script constant `scalpel-agent--perl-script' and this
+A compile pre-check runs unconditionally before the substitution
+script: `scalpel-agent--perl-compile-check' is called with PATTERN so a
+pattern perl refuses is rejected up front, before any stdin text is
+piped.  The substitute engine is fixed to the perl executable.  The
+script body is the perl script constant `scalpel-agent--perl-script' and this
 function feeds it PATTERN, REPLACEMENT and TEXT.  The pattern is
 compiled by perl's own qr//, so a pattern perl refuses comes back as a
 concrete error the next attempt repairs.  TEXT is piped on stdin and
@@ -2052,57 +2111,66 @@ perl prints a \"SCALPEL-COUNT n\" line followed by the rewritten text,
 both on stdout, so no stderr channel is involved.  On a compile failure
 perl prints a \"SCALPEL-ERROR ...\" line and exits 2, surfacing perl's
 concrete message.  In REPLACEMENT, \\N means the Nth capture group and
-\\& the whole match.  Every refusal \(compile failure, nonzero exit, or
-missing count report) ends with the complete perl command produced by
-`scalpel-agent--perl-invocation', so the next attempt can replay it
-directly.  Signal `user-error' when perl refuses to compile the
-pattern."
-  (with-temp-buffer
-    (insert text)
-    (let* ((process-environment
-            (cons (format "SCALPEL_PATTERN=%s" pattern)
-                  (cons (format "SCALPEL_REPLACEMENT=%s" replacement)
-                        process-environment)))
-           (script scalpel-agent--perl-script)
-           (command (scalpel-agent--perl-invocation pattern replacement))
-           (exit
-            (call-process-region
-             (point-min) (point-max) "perl" t t nil "-e" script))
-           (first-line-start (point-min))
-           (first-line-end (progn (goto-char (point-min))
-                                  (line-end-position)))
-           (first-line (buffer-substring-no-properties
-                        first-line-start first-line-end))
-           (new-text (progn (goto-char (point-min))
-                            (buffer-substring-no-properties
-                             (line-beginning-position 2) (point-max)))))
-      (if (/= exit 0)
-          (if (string-match "\\`SCALPEL-ERROR " first-line)
+\\& the whole match.  Every refusal \(compile-check failure, compile
+failure, nonzero exit, or missing count report) ends with the complete
+perl command produced by `scalpel-agent--perl-invocation', so the next
+attempt can replay it directly.  Signal `user-error' when perl refuses
+to compile the pattern."
+  (let ((command (scalpel-agent--perl-invocation pattern replacement)))
+    (let ((refusal (scalpel-agent--perl-compile-check pattern)))
+      (when refusal
+        (user-error
+         (concat "Scalpel: pattern is not valid perl 5.x regexp "
+                 "text compiled with qr//, compile check said: %s\n%s\n"
+                 "command: %s")
+         (string-trim refusal)
+         (scalpel-agent--substitute-invocation pattern replacement)
+         command)))
+    (with-temp-buffer
+      (insert text)
+      (let* ((process-environment
+              (cons (format "SCALPEL_PATTERN=%s" pattern)
+                    (cons (format "SCALPEL_REPLACEMENT=%s" replacement)
+                          process-environment)))
+             (script scalpel-agent--perl-script)
+             (exit
+              (call-process-region
+               (point-min) (point-max) "perl" t t nil "-e" script))
+             (first-line-start (point-min))
+             (first-line-end (progn (goto-char (point-min))
+                                    (line-end-position)))
+             (first-line (buffer-substring-no-properties
+                          first-line-start first-line-end))
+             (new-text (progn (goto-char (point-min))
+                              (buffer-substring-no-properties
+                               (line-beginning-position 2) (point-max)))))
+        (if (/= exit 0)
+            (if (string-match "\\`SCALPEL-ERROR " first-line)
+                (user-error
+                 (concat "Scalpel: pattern is not valid perl 5.x regexp "
+                         "text compiled with qr//, perl said: %s\n%s\n"
+                         "command: %s")
+                 (string-trim (substring first-line (match-end 0)))
+                 (scalpel-agent--substitute-invocation pattern replacement)
+                 command)
               (user-error
-               (concat "Scalpel: pattern is not valid perl 5.x regexp "
-                       "text compiled with qr//, perl said: %s\n%s\n"
-                       "command: %s")
-               (string-trim (substring first-line (match-end 0)))
+               (concat "Scalpel: perl exited with code %d while "
+                       "rewriting (target engine perl 5.x, compiled "
+                       "with qr//): %s\n%s\ncommand: %s")
+               exit
+               (string-trim first-line)
                (scalpel-agent--substitute-invocation pattern replacement)
-               command)
+               command))
+          (unless (string-match "\\`SCALPEL-COUNT \\([0-9]+\\)" first-line)
             (user-error
-             (concat "Scalpel: perl exited with code %d while "
-                     "rewriting (target engine perl 5.x, compiled "
-                     "with qr//): %s\n%s\ncommand: %s")
-             exit
-             (string-trim first-line)
+             (concat "Scalpel: perl produced no count report (target "
+                     "engine perl 5.x, compiled with qr//); first 200 "
+                     "chars: %s\n%s\ncommand: %s")
+             (substring first-line 0 (min 200 (length first-line)))
              (scalpel-agent--substitute-invocation pattern replacement)
              command))
-        (unless (string-match "\\`SCALPEL-COUNT \\([0-9]+\\)" first-line)
-          (user-error
-           (concat "Scalpel: perl produced no count report (target "
-                   "engine perl 5.x, compiled with qr//); first 200 "
-                   "chars: %s\n%s\ncommand: %s")
-           (substring first-line 0 (min 200 (length first-line)))
-           (scalpel-agent--substitute-invocation pattern replacement)
-           command))
-        (cons (string-to-number (match-string 1 first-line))
-              new-text)))))
+          (cons (string-to-number (match-string 1 first-line))
+                new-text))))))
 
 (defun scalpel-agent--perl-substitute-preview (pattern replacement files)
   "Preview PATTERN replaced by REPLACEMENT in each file in FILES.
@@ -2118,6 +2186,7 @@ text."
                (consp files)
                (proper-list-p files))
     (error "Invalid Perl substitution preview arguments"))
+  (scalpel-agent--perl-compile-check pattern)
   (dolist (file files)
     (unless (and (stringp file)
                  (scalpel-agent--context-file-p file))
