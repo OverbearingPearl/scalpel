@@ -3020,7 +3020,11 @@ CHANGES holds one report per action in
 so a caller can tell a round that changed something from one that
 only looked, and continue the loop so the planner can read its own
 change back.  A round whose only action created, renamed or deleted
-a file reports it here, and nothing else.
+a file reports it here, and nothing else.  A
+`file-substitute-dry-run' action whose preview was approved and
+whose substitution was therefore applied is recorded here too, so
+a round that applied a batch substitution still counts as a
+changing round.
 ON-ERROR receives a plist (:type SYMBOL :message STRING).
 
 Actions are executed in array order; a `block-edit' or
@@ -3085,9 +3089,12 @@ busy flag still gets a chance to release it."
                               (push (list :file (plist-get action :file)
                                           :symbol (plist-get action :symbol))
                                     reads))
-                            ((member (plist-get action :tool)
-                                     scalpel-agent--change-tools)
-                             (push report changes)))
+                             ((equal (plist-get action :tool)
+                                     "file-substitute-dry-run")
+                              (push report changes))
+                             ((member (plist-get action :tool)
+                                      scalpel-agent--change-tools)
+                              (push report changes)))
                             (step (cdr rest))))
                          (lambda (err)
                            (in-session
