@@ -325,6 +325,11 @@ and the ampersand form means the whole match.
 The common constructs are literals, character classes,
 non-capturing groups, capture groups, alternation, repetition,
 anchors, and word, whitespace and digit classes.
+Grouping parentheses are written bare; escape a metacharacter
+only when it must match literally.  Escaped grouping parens are
+Emacs regexp syntax: in Perl they match literal parentheses,
+which is the most common way an Emacs-style pattern fails.  When
+in doubt, compile-test with qr// first.
 A pattern is a plain regexp string, nothing else: output only the
 regexp text itself, with no quotes, no delimiters, no flags, no
 qr// or m// wrapper, and no prose."
