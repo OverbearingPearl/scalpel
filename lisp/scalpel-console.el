@@ -1883,8 +1883,11 @@ after %s: %s."
                                (format
                                 (concat
                                  "Scalpel: retrying after %s error "
-                                 "(attempt %d/%d)")
-                                etype count scalpel-console-self-heal-max))
+                                 "(type attempt %d/%d, %d of %d retries left)")
+                                etype count scalpel-console-self-heal-max
+                                (- scalpel-console-self-heal-max
+                                   self-heal-total)
+                                scalpel-console-self-heal-max))
                               (setq next-instruction (phase-line))
                               (run-next)))
                            ((not
