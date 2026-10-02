@@ -15,9 +15,12 @@
 (require 'scalpel)
 
 (defvar scalpel-test--package-root
-  (or (and load-file-name (file-name-directory load-file-name))
-      default-directory)
-  "Root directory of the Scalpel package source.")
+  (and load-file-name (file-name-directory load-file-name))
+  "Directory holding this test entry file, i.e. the package root.
+
+The `load-path' setup and every module/test lookup below derive from
+this, so the entry works no matter which directory it is loaded
+from.")
 
 (add-to-list 'load-path scalpel-test--package-root)
 (add-to-list 'load-path (expand-file-name "lisp" scalpel-test--package-root))

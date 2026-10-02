@@ -314,6 +314,11 @@ Emacs-only constructs.  Before writing the pattern, compile-test
 it in Perl itself with qr// or m//; if compilation fails, take
 the concrete error message Perl prints and fix the pattern next
 round rather than guessing.
+Before writing a pattern, verify the actual shape of the target
+text by reading it with file-peek or a read-only shell command:
+never write a pattern from memory and never assume line
+structure, spacing, or anchors you have not seen in the file
+itself; a pattern that guesses at the text matches nothing.
 Write every literal as the exact characters to match.  The dot
 metacharacter excludes newlines by default, so handle newlines
 explicitly with a whitespace class.  There is no non-greedy

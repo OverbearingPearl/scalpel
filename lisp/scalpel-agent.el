@@ -1922,6 +1922,11 @@ refusal lacks: it is what separates a pattern aimed at a line the
 file does not hold from one written as the text the rewrite was
 meant to produce.  The lines are quoted, never inferred.
 
+Each file section closes with a directive telling the planner to
+check the real shape of the target text with `file-peek' or a
+read-only shell command before composing the next pattern, and
+never to resend the same pattern unchanged.
+
 Because PATTERN is an ordinary Emacs regexp string, there is no
 bracket-escape misreading to correct: the pattern means exactly its
 literal regexp meaning, and the quoted lines are the whole of the
@@ -1933,14 +1938,13 @@ not as a re-spelling of the same one."
       (let ((lines (scalpel-agent--substitute-prefix-lines
                     (nth 1 entry) pattern)))
         (when lines
-          (push (format "\nThe closest lines in %s are:\n%s"
-                        (nth 0 entry)
-                        (string-join
-                         (mapcar (lambda (line) (format "  %s" line))
-                                 lines)
-                         "\n"))
+          (push (format "\nThe closest lines in %s are:\n%s\nCheck \
+the real shape of the target text with `file-peek' or a read-only \
+shell command before composing the next pattern, and never resend \
+the same pattern unchanged.\n"
+                        (car entry) lines)
                 blocks))))
-    (string-join (nreverse blocks) "")))
+    (apply #'string-join (list (nreverse blocks) ""))))
 
 (defun scalpel-agent--substitute-invocation (pattern replacement)
   "Return the pattern and the replacement of a file-substitute, on one line.
@@ -2733,8 +2737,8 @@ the substitution is applied directly, subject to a confirmation
 threshold gate unless unattended.  Both file-substitute and the
 apply-after-dry-run path are subject to the confirmation
 threshold unless unattended: when the total match count meets
-scalpel-agent-file-substitute-confirm-threshold, the user is
-asked before the substitution is applied.  A rejected or unclear
+scalpel-agent-file-substitute-confirm-threshold, the user is asked
+before the substitution is applied.  A rejected or unclear
 review is reported as a self-healable substitution-preview-mismatch
 planner error so the action can be revised.  Callbacks run outside
 internal error guards."
@@ -2897,7 +2901,10 @@ internal error guards."
                             (when report
                               (funcall on-success
                                        (format
-                                        "Substitution applied as driven by the approved dry-run preview.\n%s"
+                                        "Substitution applied as driven by the approved dry-run preview.\nPerl invocation: %s\n%s"
+                                        (scalpel-agent--perl-invocation
+                                         (plist-get action :pattern)
+                                         (plist-get action :replacement))
                                         report))))))
                     (funcall on-error
                              (list :type 'substitution-preview-mismatch
