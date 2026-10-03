@@ -106,6 +106,50 @@ careful attempt.  Like `scalpel-prompt--why' and
 `scalpel-prompt--summarize', the response must not include any
 unrelated modification beyond the new attempt.")
 
+(defconst scalpel-prompt--retry
+  "Retry prompt text used when an operation must be attempted again.")
+
+(defvar scalpel-prompt--perlre-toc-cache nil
+  "Cached table of contents of the perlre manual, or nil before first use.")
+
+(defun scalpel-prompt--perlre-toc ()
+  "Return the table of contents of the perlre manual.
+
+On first call, run `perldoc -T perlre' via `call-process', reduce its
+output to the section-title lines, cache the result in
+`scalpel-prompt--perlre-toc-cache', and return it.  Subsequent calls
+return the cached value directly.  If perldoc is missing or anything
+fails, the empty string is computed and cached so that prompt building
+is never blocked."
+  (or scalpel-prompt--perlre-toc-cache
+      (setq scalpel-prompt--perlre-toc-cache
+            (condition-case nil
+                (with-temp-buffer
+                  (call-process "perldoc" nil t nil "-T" "perlre")
+                  (goto-char (point-min))
+                  (let ((lines nil))
+                    (while (not (eobp))
+                      (let ((line
+                             (buffer-substring-no-properties
+                              (line-beginning-position)
+                              (line-end-position))))
+                        (when (string-match
+                               "\\`=\\{1,4\\}[ \t]+\\([^\t\n]+\\)[ \t]*\\'"
+                               line)
+                          (push (match-string 1 line) lines)))
+                      (forward-line 1))
+                    (string-join (nreverse lines) "\n")))
+              (error "")))))
+
+(defun scalpel-prompt--substitute-retry-instruction ()
+  "Return the unified exit for all substitute-related retry wording.
+
+Formats `scalpel-prompt-rule--substitute-retry' with the Perl-regexp
+table of contents produced by `scalpel-prompt--perlre-toc' as its
+single %s argument."
+  (format scalpel-prompt-rule--substitute-retry
+          (scalpel-prompt--perlre-toc)))
+
 (defconst scalpel-prompt--resume
   "The previous round was cut off by an interruption outside
 your control -- an unstable network, a server error, or the

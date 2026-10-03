@@ -340,6 +340,22 @@ regexp text itself, with no quotes, no delimiters, no flags, no
 qr// or m// wrapper, and no prose."
   "Substitute pattern contract: a Perl 5.x regexp, not code.")
 
+(defconst scalpel-prompt-rule--substitute-retry
+  "Substitute-retry wording rule.
+
+Whenever a round is a retry of a substitute-related failure -- a
+refused pattern, a perl compile error, a no-match refusal, or any
+other substitute retry -- the retry input must carry the table of
+contents of the perlre manual followed by permission for one
+additional filtered perldoc query before the repaired pattern is
+emitted.  Only section text actually fetched may be cited.
+
+This rule states only how the retry input is worded; it never
+states how the table of contents is fetched.
+
+%s"
+  "Substitute-retry wording rule.")
+
 (defconst scalpel-prompt-rule--symbol-name
   "A definition's name is taken literally, character for character.
 Two names differing only by an extra pair of dashes are two

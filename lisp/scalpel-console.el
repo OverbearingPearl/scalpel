@@ -182,59 +182,6 @@ screen.  The console carries it as display properties only, never as
 buffer text, so it can reach neither the conversation nor the
 pending-input scanner.")
 
-(defvar scalpel-console--perlre-toc-cache nil
-  "Cached table of contents of the perlre manual, or nil before first use.")
-
-(defun scalpel-console--perlre-toc ()
-  "Return the table of contents of the perlre manual.
-The TOC is computed client-side by invoking `perldoc' (never
-modifying any files) and cached in
-`scalpel-console--perlre-toc-cache' so repeated calls are cheap.
-Returns an empty string if perldoc is unavailable or fails."
-  (or scalpel-console--perlre-toc-cache
-      (setq scalpel-console--perlre-toc-cache
-            (with-temp-buffer
-              (let ((exit-code
-                     (apply #'call-process "perldoc" nil t nil
-                            '("-T" "perlre"))))
-                (if (zerop exit-code)
-                    ;; Plain-text perldoc output: section headings are
-                    ;; lines that either consist of uppercase words
-                    ;; (e.g. "DESCRIPTION") or start with a slash
-                    ;; (e.g. "/x", "/xx").  Collect them in order.
-                    (mapconcat
-                     #'identity
-                     (let (heads)
-                       (goto-char (point-min))
-                       (while (re-search-forward
-                               "^\\([A-Z][A-Z[:space:]-]+\\|/[A-Za-z]+\\)[[:space:]]*$"
-                               nil t)
-                         (push (match-string 1) heads))
-                       (nreverse heads))
-                     "\n")
-                  ""))))))
-
-(defconst scalpel-console--substitute-retry-instruction-template
-  "The previous perlre `s///' substitution pattern was rejected.  Repair it.
-Below is the table of contents of the perlre manual, computed via perldoc:
-
-%s
-
-You MAY, before emitting the repaired pattern, run one additional
-filtered shell action (for example `perldoc -T perlre | grep -A 40 /x')
-to fetch a specific perlre section you need.  Only section text you
-actually fetched may be cited.  Then output the corrected substitute
-pattern."
-  "English instruction for substitute-related retry rounds.
-The `%s' placeholder is filled with the result of
-`scalpel-console--perlre-toc' at use time; this keeps the constant
-free of perldoc invocations at load time.")
-
-(defun scalpel-console--substitute-retry-instruction ()
-  "Return the substitute retry instruction with the perlre TOC embedded."
-  (format scalpel-console--substitute-retry-instruction-template
-          (scalpel-console--perlre-toc)))
-
 (defvar-local scalpel-console--root nil
   "Absolute directory this console session is anchored to.
 Set by `scalpel-console-open'; while non-nil, `default-directory'
@@ -1967,7 +1914,7 @@ after %s: %s."
                                 scalpel-console-self-heal-max))
                               (setq next-instruction
                                     (if (substitute-error-p round-error)
-                                        (scalpel-console--substitute-retry-instruction)
+                                        (scalpel-prompt--substitute-retry-instruction)
                                       (phase-line)))
                               (run-next)))
                            ((not
