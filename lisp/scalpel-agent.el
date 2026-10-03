@@ -2810,7 +2810,7 @@ internal error guards."
         (cl-return-from scalpel-agent-execute-action))
       (unless (or (member tool '("file-substitute" "file-substitute-dry-run"))
                   (not (scalpel-agent--confirm-needed-p action))
-                  (yes-or-no-p (format "Execute %s action: %s?"
+                  (y-or-n-p (format "Execute %s action: %s?"
                                        tool
                                        (scalpel-agent--action-summary action))))
         (funcall on-success
@@ -2929,7 +2929,7 @@ internal error guards."
                              (copy-sequence action)))
                         (plist-put confirm-action :dry-run-count total)
                         (if (and (scalpel-agent--confirm-needed-p confirm-action)
-                                 (not (yes-or-no-p
+                                 (not (y-or-n-p
                                        (format "Apply %d substitution(s) previewed by dry run?"
                                                total))))
                             (funcall on-success
@@ -3003,7 +3003,7 @@ internal error guards."
                            (copy-sequence action)))
                       (plist-put confirm-action :dry-run-count total)
                       (if (and (scalpel-agent--confirm-needed-p confirm-action)
-                               (not (yes-or-no-p
+                               (not (y-or-n-p
                                      (format "Apply %d substitution(s)?" total))))
                           (funcall on-success
                                    (format

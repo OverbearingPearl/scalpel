@@ -266,8 +266,8 @@ blocks on the prompt."
        (file-name-as-directory
         (expand-file-name temporary-file-directory))
        (expand-file-name scalpel-console--root))
-      (yes-or-no-p
-       (format "Kill Scalpel console %s?  Its conversation record will be lost? "
+      (y-or-n-p
+       (format "Kill Scalpel console %s?  Its conversation record will be lost?"
                (buffer-name)))))
 
 (defun scalpel-console--teardown ()
@@ -1371,7 +1371,7 @@ the resend."
     (when (>= growth scalpel-console-compression-offer-growth-threshold)
       (if (not (y-or-n-p
                 (format "Compress the conversation history into a summary \
-(history: %d tokens)? "
+(history: %d tokens)?"
                         history-tokens)))
           ;; Declined: advance the baseline now that the answer is known,
           ;; so a declined offer still requires another threshold of
@@ -1866,7 +1866,7 @@ conversation).  Return nil to stop."
     ('always t)
     ('ask (or (not (scalpel-console--noisy-round-p result))
               (and (not noninteractive)
-                   (if (yes-or-no-p
+                   (if (y-or-n-p
                         (format "Send the output of %s back to Scalpel anyway? (%s)?"
                                 (if (= (length (plist-get result :shells)) 1)
                                     "this command"
