@@ -43,6 +43,7 @@
 (require 'scalpel-diagnose)
 (require 'scalpel-diagnose-advice)
 (require 'scalpel-token)
+(require 'scalpel-prompt)
 
 (defcustom scalpel-console-buffer-name-format "*scalpel: %s*"
   "Format string for the Scalpel console buffer name.
@@ -152,6 +153,14 @@ again, but the task's rounds keep running attended until they
 finish or the user aborts.  This is a guard rail, not a goal; the
 run ends earlier when the task completes or the user aborts."
   :type 'natnum
+  :group 'scalpel)
+
+(defcustom scalpel-console-compression-offer-growth-threshold 10000
+  "Token growth that triggers a history compression offer.
+The count is measured since the last offer, so the next offer always
+waits for a further growth of this many tokens regardless of the
+previous answer."
+  :type 'integer
   :group 'scalpel)
 
 (defvar-local scalpel-console--unattended-p nil
@@ -298,6 +307,7 @@ not exist."
 (defconst scalpel-console--session-variables
   '(scalpel-console--root
     scalpel-console--context-baseline
+    scalpel-console--compress-baseline
     scalpel-console--last-instruction
     scalpel-agent--context-files
     scalpel-commit--style
@@ -308,6 +318,9 @@ not exist."
 never costs a live console its session.  A new buffer-local session
 variable belongs in this list; nothing else enumerates them, so
 forgetting to add it here is the only way to lose one.
+The compression baseline `scalpel-console--compress-baseline' is
+carried here so it survives a module reload like the rest of the
+session state.
 
 Transient state is deliberately left out.  `scalpel-console--busy'
 and `scalpel-console--operation-generation' must not survive a reload,
@@ -316,7 +329,9 @@ only risk resurrecting a dead round.
 `scalpel-agent--shell-output' is reset before and read within a
 single action, so its value belongs to no session.
 The commit style and language defaults chosen from a console are
-carried here so they survive a module reload.")
+carried here so they survive a module reload.
+`scalpel-console--compression-last-total' carries the token total at
+the last compression offer so it survives a module reload too.")
 
 (defconst scalpel-console--session-globals
   '(scalpel-token--console-totals
@@ -1308,6 +1323,110 @@ body was dropped would describe the wrong thing."
       (goto-char (point-max))
       (message "Scalpel: conversation forgotten; the text stays on screen."))))
 
+(defvar-local scalpel-console--compression-baseline 0
+  "Cumulative token total (uploaded plus received) at the last compression offer.
+The baseline is advanced before the user is asked, so the next offer
+always waits for a further growth of the threshold regardless of the
+answer.")
+
+(defun scalpel-console--cumulative-token-total (console-buffer)
+  "Return the sum of cumulative up and down tokens for CONSOLE-BUFFER.
+Reads the totals out of the variable `scalpel-token--console-totals';
+the hash is keyed by the console buffer's name, because
+`scalpel-token-record' records totals by `buffer-name'.  A missing
+entry counts as zero."
+  (let ((entry (cdr (assoc (buffer-name console-buffer)
+                           scalpel-token--console-totals))))
+    (+ (or (car entry) 0) (or (cdr entry) 0))))
+
+(defun scalpel-console--offer-history-compression ()
+  "Offer to compress the current console's conversation history.
+Computes growth of the cumulative token total since the last offer;
+does nothing while growth stays below
+`scalpel-console-compression-offer-growth-threshold'.  Otherwise the
+baseline is advanced first and the user is asked whether to compress
+the history.  On confirmation the current conversation is sent to the
+LLM for a factual summary and, on success, the tagged conversation
+regions that existed before the summary are cleared the same way
+`scalpel-console-forget-history' clears them, leaving the summary as
+the new conversation body.  On an LLM error only a display-only note
+is appended and the roles are left untouched."
+  (let* ((total (scalpel-console--cumulative-token-total (current-buffer)))
+         (growth (- total scalpel-console--compression-baseline)))
+    (when (>= growth scalpel-console-compression-offer-growth-threshold)
+      ;; Advance the baseline before asking so a declined offer still
+      ;; requires another threshold of growth before the next offer.
+      (setq scalpel-console--compression-baseline total)
+      (if (not (y-or-n-p "Compress the conversation history into a summary?"))
+          ;; Declined: leave a display-only note, touch nothing else.
+          (let ((inhibit-read-only t))
+            (save-excursion
+              (goto-char (point-max))
+              (insert (propertize "\n[history compression offer declined]\n"
+                                  'face 'shadow))))
+        ;; Accepted: ask the LLM for a summary of the conversation.
+        (let ((console-buffer (current-buffer))
+              (prompt
+               (concat
+                scalpel-prompt--history-compress-instruction
+                "\n\n"
+                (scalpel-console--history)
+                "\n")))
+          (scalpel-llm-request-async
+           prompt
+           (lambda (summary)
+             (when (buffer-live-p console-buffer)
+               (with-current-buffer console-buffer
+                 ;; Collect the role-tagged ranges up front, before any
+                 ;; insertion, so the rewrite below is independent of how
+                 ;; the buffer changes while the summary is appended.
+                 (let ((ranges nil)
+                       (pos (point-min)))
+                   (while (< pos (point-max))
+                     (let ((next (next-single-property-change
+                                  pos 'scalpel-console-role nil (point-max))))
+                       (when (get-text-property pos 'scalpel-console-role)
+                         (push (cons pos next) ranges))
+                       (setq pos next)))
+                   (setq ranges (nreverse ranges))
+                   ;; Capture the summary's start position before the
+                   ;; append so the before/after split stays correct.
+                   (let ((summary-start (copy-marker (point-max) nil)))
+                     (scalpel-console--append summary "assistant")
+                     (let ((inhibit-read-only t))
+                       ;; Clear roles and mute every range that lies
+                       ;; entirely before the appended summary turn.
+                       (dolist (range ranges)
+                         (when (< (cdr range) summary-start)
+                           (remove-text-properties
+                            (car range) (cdr range)
+                            '(scalpel-console-role nil))
+                           (add-text-properties
+                            (car range) (cdr range)
+                            '(scalpel-console-output t face shadow)))))
+                     ;; Keep the consumed-body marks in sync with the
+                     ;; rewritten buffer.
+                     (scalpel-console--refresh-consumed-body-markers)
+                     ;; Leave a display-only note above the summary.
+                     (let ((inhibit-read-only t))
+                       (save-excursion
+                         (goto-char summary-start)
+                         (insert
+                          (propertize
+                           "\n[the conversation above was compressed into the summary below]\n"
+                           'face 'shadow)))))))))
+           (lambda (error)
+             (when (buffer-live-p console-buffer)
+               (with-current-buffer console-buffer
+                 ;; Failure: display-only note only; roles untouched.
+                 (let ((inhibit-read-only t))
+                   (save-excursion
+                     (goto-char (point-max))
+                     (insert
+                      (propertize
+                       (format "\n[history compression failed: %s]\n" error)
+                       'face 'shadow)))))))))))))
+
 (defun scalpel-console-reset-context ()
   "Clear the agent context.
 The context is the set of files in scope; it is not the
@@ -1747,7 +1866,11 @@ terminal point, so a second RET during a round is refused.  When
 an operation ends, the cursor in the target buffer is also moved
 to `point-max', signalling that the answer is finished.  The
 completion acknowledgement is only shown for a successful final
-round."
+round.  An interactive operation ends with a compression offer
+once the cumulative token growth since the last offer reaches
+`scalpel-console-compression-offer-growth-threshold'; a declined
+offer still advances the baseline, so the next offer waits for
+further growth."
   (let ((operation (cl-incf scalpel-console--operation-generation)))
     (setq scalpel-console--busy t)
     (let ((target (scalpel-console--target-buffer))
@@ -1838,6 +1961,14 @@ after %s: %s."
                     "Scalpel: Mission complete, over."))
                   ((unattended-p)
                    (stop-unattended "error ended the run")))
+                 (when (and (= operation
+                               scalpel-console--operation-generation)
+                            (not (unattended-p)))
+                   (condition-case err
+                       (scalpel-console--offer-history-compression)
+                     ((error quit)
+                      (message "Scalpel: compression offer failed: %s"
+                               (error-message-string err)))))
                  (goto-char (point-max)))))
            (run-next ()
              (when (unattended-p)

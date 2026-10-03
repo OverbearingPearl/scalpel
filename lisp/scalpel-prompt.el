@@ -190,6 +190,15 @@ changing the wording here requires checking that caller.")
 It supplies the label, a newline, the %s placeholder for the
 history, and a trailing blank line in the assembled user prompt.")
 
+(defconst scalpel-prompt--history-compress-instruction
+  "Compress the conversation history above into a concise summary.
+The summary must be one a coding agent can continue from.
+Keep: the current task and its goals, key decisions made, important file paths
+and symbols touched, unresolved issues, and any explicit user constraints.
+Drop: verbose tool outputs, redundant back-and-forth, and superseded attempts.
+Respond with the summary only."
+  "Instruction sent with the history when the console offers compression.")
+
 (defconst scalpel-prompt--project-rules-header
   "Project user prompt rules:\n%s\n\n"
   "Header introducing the project user prompt rules.
