@@ -59,6 +59,7 @@ Prompt for the directory, defaulting to the current
    (list (read-directory-name "Scalpel console root: "
                               default-directory nil t)))
   (let* ((perl (executable-find "perl"))
+         (perldoc (executable-find "perldoc"))
          (missing
           (delq nil
                 (list (unless (executable-find "git") "git")
@@ -71,7 +72,15 @@ Prompt for the directory, defaulting to the current
                                                 perl nil nil nil
                                                 "-e" "exit($] >= 5 ? 0 : 1)")))
                                      (error nil)))
-                        "Perl 5 interpreter")))))
+                        "Perl 5 interpreter")
+                      (unless (and perldoc
+                                   (condition-case nil
+                                       (with-temp-buffer
+                                         (eq 0 (call-process
+                                                perldoc nil nil nil
+                                                "-T" "perlre")))
+                                     (error nil)))
+                        "Perldoc")))))
     (when missing
       (user-error "Cannot open Scalpel console; missing requirement(s): %s"
                   (mapconcat #'identity missing ", ")))
