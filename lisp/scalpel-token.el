@@ -22,10 +22,8 @@
 (require 'cl-lib)
 (require 'scalpel-llm)
 
-(defcustom scalpel-token-buffer-name "*scalpel-tokens*"
-  "Buffer name holding the per-round token accounting."
-  :type 'string
-  :group 'scalpel)
+(defconst scalpel-token-buffer-name "*scalpel-tokens*"
+  "Buffer name holding the per-round token accounting.")
 
 (defvar scalpel-token--console-totals (make-hash-table :test 'equal)
   "Console buffer name -> (UP DOWN) cumulative estimated tokens.")

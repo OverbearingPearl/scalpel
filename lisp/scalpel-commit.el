@@ -56,22 +56,16 @@ confirmation."
     (message "Scalpel: preparing commit message...")
     (scalpel-commit--generate console workdir nil)))
 
-(defcustom scalpel-commit-subject-max 72
-  "Maximum characters the generated subject line may run to."
-  :type 'natnum
-  :group 'scalpel-commit)
+(defconst scalpel-commit-subject-max 72
+  "Maximum characters the generated subject line may run to.")
 
-(defcustom scalpel-commit-body-width 72
-  "Maximum width in characters of the generated body."
-  :type 'natnum
-  :group 'scalpel-commit)
+(defconst scalpel-commit-body-width 72
+  "Maximum width in characters of the generated body.")
 
-(defcustom scalpel-commit-diff-max-bytes 200000
+(defconst scalpel-commit-diff-max-bytes 200000
   "Largest diff handed to the LLM in one request.
 When the diff exceeds this, files are split into batches and the
-message is generated per batch, so no function name is cut away."
-  :type 'natnum
-  :group 'scalpel-commit)
+message is generated per batch, so no function name is cut away.")
 
 (progn
   (defvar scalpel-commit--workdir-cache nil

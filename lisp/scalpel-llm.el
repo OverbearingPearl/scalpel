@@ -24,7 +24,7 @@
 (require 'gptel)
 (require 'gptel-transient)
 
-(defcustom scalpel-llm-timeout 60
+(defconst scalpel-llm-timeout 60
   "Seconds of total callback silence before a request is abandoned.
 This is an *idle* budget, not a wall-clock deadline: every gptel
 callback -- content chunk, reasoning chunk, or completion -- resets the
@@ -34,19 +34,15 @@ Raise this for backends that think before emitting their first chunk.
 A continued round re-sends the whole conversation, and a backend may
 queue that prompt far longer than a first-round one before the first
 token arrives, which is why the default leaves room above the older
-30-second value."
-  :type 'integer
-  :group 'scalpel-llm)
+30-second value.")
 
-(defcustom scalpel-llm-deadline 900
+(defconst scalpel-llm-deadline 900
   "Seconds from the moment a request is sent until it is abandoned.
 It is independent of `scalpel-llm-timeout'.  Unlike the idle
 budget, this deadline is never reset by callbacks, so a backend
 that keeps streaming heartbeats/reasoning chunks without ever
 emitting a terminal callback still ends within this budget.  It
-must be larger than `scalpel-llm-timeout' to be useful."
-  :type 'integer
-  :group 'scalpel-llm)
+must be larger than `scalpel-llm-timeout' to be useful.")
 
 (defvar scalpel-llm--cancel-current nil
   "Closure that cancels the request currently in flight, or nil when none.

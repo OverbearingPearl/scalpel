@@ -45,25 +45,21 @@
 (require 'scalpel-token)
 (require 'scalpel-prompt)
 
-(defcustom scalpel-console-buffer-name-format "*scalpel: %s*"
+(defconst scalpel-console-buffer-name-format "*scalpel: %s*"
   "Format string for the Scalpel console buffer name.
 The single `%s' is substituted with the abbreviated console root,
-so a console opened at /home/me/proj is named \"*scalpel: ~/proj*\"."
-  :type 'string
-  :group 'scalpel)
+so a console opened at /home/me/proj is named \"*scalpel: ~/proj*\".")
 
-(defcustom scalpel-console-max-rounds 30
+(defconst scalpel-console-max-rounds 30
   "Maximum agent rounds one instruction may trigger.
 A round is one request/execute cycle.  A round that ran shell
 commands may be followed by another so the agent can act on their
 output; this caps the chain, because a command the agent cannot fix
 would otherwise loop forever.  The continuation question is not
 asked once this limit is reached, and reaching it is reported in
-the console buffer."
-  :type 'integer
-  :group 'scalpel)
+the console buffer.")
 
-(defcustom scalpel-console-continue-after-shell 'ask
+(defconst scalpel-console-continue-after-shell 'ask
   "Whether a round that ran shell commands is followed by another.
 A round whose command output is small continues silently: that
 output is what the planner needs to finish the work the user asked
@@ -73,23 +69,17 @@ round whose output is noisy \(see
 user, who is shown every command together with its output size.
 `ask' questions only that noisy round; `always' continues without
 asking even then; nil never continues, and never asks.  Batch runs
-never continue regardless of this value."
-  :type '(choice (const :tag "Never" nil)
-                 (const :tag "Ask when output is large" ask)
-                 (const :tag "Always continue" always))
-  :group 'scalpel)
+never continue regardless of this value.")
 
-(defcustom scalpel-console-continue-after-shell-max-bytes 4096
+(defconst scalpel-console-continue-after-shell-max-bytes 4096
   "Shell output above this size makes a round worth questioning.
 When a round ran a shell command whose raw output exceeded this
 many bytes -- or that was truncated or binary -- the round stops
 for a question under `scalpel-console-continue-after-shell' set to
 `ask'; under `always' it continues regardless.  Raise this to let
-more output flow back unquestioned."
-  :type 'integer
-  :group 'scalpel)
+more output flow back unquestioned.")
 
-(defcustom scalpel-console-trim-consumed-output t
+(defconst scalpel-console-trim-consumed-output t
   "Whether spent report bodies are dropped from what the agent reads.
 The console buffer always keeps every report in full; this controls
 only the text `scalpel-console--history' returns.  A round's output
@@ -101,11 +91,9 @@ placeholder.  Set it to nil to send every report whole: that costs
 the repeated growth, but never asks the planner to re-run a command
 for output it was already given.  Whichever way it is set, the console
 marks every report whose body it drops, on the display only, so the
-trimming is never silent."
-  :type 'boolean
-  :group 'scalpel)
+trimming is never silent.")
 
-(defcustom scalpel-console-collapse-output t
+(defconst scalpel-console-collapse-output t
   "Whether a report's fenced output body is folded in the display.
 A shell or file-peek report may hold thousands of lines that the user
 does not have to read: its output already goes back to the planner
@@ -115,53 +103,41 @@ set, the body between a report's fences is hidden behind a one-line
 placeholder; the text stays in the buffer, so
 `scalpel-console--history' and `scalpel-console--trim-report' see
 it unchanged, and `scalpel-console-toggle-output' expands it again.
-Set it to nil to show every body."
-  :type 'boolean
-  :group 'scalpel)
+Set it to nil to show every body.")
 
-(defcustom scalpel-console-self-heal-max 2
+(defconst scalpel-console-self-heal-max 2
   "Maximum automatic retries per instruction for self-healable planner errors.
 A planner error whose type is in `scalpel-diagnose-self-heal-denylist' is
 retried automatically -- the failure report stays in the conversation,
 so the model can correct its own reply -- until this many retries have
 been spent or the same error type keeps recurring.  Exceeding the budget
-falls through to the usual retry header for the user."
-  :type 'natnum
-  :group 'scalpel-console)
+falls through to the usual retry header for the user.")
 
-(defcustom scalpel-console-self-heal-max-per-type 2
+(defconst scalpel-console-self-heal-max-per-type 2
   "Maximum number of automatic retries allowed per planner error type.
 This limit applies to any single planner error type per instruction
 and complements the total retry budget in `scalpel-console-self-heal-max'
-so that one recurring error type cannot consume the whole retry budget."
-  :type 'natnum
-  :group 'scalpel-console)
+so that one recurring error type cannot consume the whole retry budget.")
 
-(defcustom scalpel-console-unattended-max-rounds 30
+(defconst scalpel-console-unattended-max-rounds 30
   "Rounds an unattended run may spend before it stops itself.
 `scalpel-console-unattended' accepts a prefix argument to override
 this for one run.  The limit is a guard rail, not a goal: the run
-stops earlier when the task completes or the user aborts."
-  :type 'natnum
-  :group 'scalpel)
+stops earlier when the task completes or the user aborts.")
 
-(defcustom scalpel-console-unattended-max-minutes 60
+(defconst scalpel-console-unattended-max-minutes 60
   "Maximum duration in minutes for an unattended run.
 When the budget runs out, the unattended state exits:
 `scalpel-agent-unattended-confirm' is cleared so actions ask
 again, but the task's rounds keep running attended until they
 finish or the user aborts.  This is a guard rail, not a goal; the
-run ends earlier when the task completes or the user aborts."
-  :type 'natnum
-  :group 'scalpel)
+run ends earlier when the task completes or the user aborts.")
 
-(defcustom scalpel-console-compression-offer-growth-threshold 10000
+(defconst scalpel-console-compression-offer-growth-threshold 10000
   "Token growth that triggers a history compression offer.
 The count is measured since the last offer, so the next offer always
 waits for a further growth of this many tokens regardless of the
-previous answer."
-  :type 'integer
-  :group 'scalpel)
+previous answer.")
 
 (defvar-local scalpel-console--unattended-p nil
   "Non-nil while an unattended run owns this console.

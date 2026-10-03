@@ -37,7 +37,7 @@ reference is resolvable at load time."
 Nil lets the model choose freely; a non-nil value is stated to the
 model as a constraint on reply text only, leaving reasoning,
 planning and code untouched."
-  :type '(choice (string :tag "Language")
+  :type '(choice (string :tag "Language name")
                  (const :tag "Let the model choose" nil))
   :group 'scalpel)
 
@@ -293,7 +293,7 @@ the structural contract shared with
 `scalpel-agent--no-change-sentinel': an LLM response consisting
 exactly of that token signals that nothing should be created.")
 
-(defcustom scalpel-prompt-system-prompt
+(defconst scalpel-prompt-system-prompt
   (concat
    scalpel-prompt-rule--no-wrapper "\n"
    scalpel-prompt-rule--document "\n"
@@ -327,9 +327,7 @@ is fixed by `scalpel-agent--tool-fields' and
 `scalpel-agent--tool-vocabulary' and must not be overridden here.
 Whether a reply language is imposed is controlled by
 `scalpel-prompt-reply-language'; nil there leaves the prompt
-unchanged."
-  :type 'string
-  :group 'scalpel)
+unchanged.")
 
 (provide 'scalpel-prompt)
 

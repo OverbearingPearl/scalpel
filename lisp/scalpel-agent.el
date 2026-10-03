@@ -101,18 +101,14 @@ loop ends after it without ever telling the planner what landed.")
 Structural contract shared by the replacement prompt in
 `scalpel-agent-block-edit' and its no-op check.")
 
-(defcustom scalpel-agent-cod-enabled nil
-  "Non-nil means append `scalpel-prompt-cod-prompt' to the system prompt."
-  :type 'boolean
-  :group 'scalpel)
+(defconst scalpel-agent-cod-enabled nil
+  "Non-nil means append `scalpel-prompt-cod-prompt' to the system prompt.")
 
-(defcustom scalpel-agent-shell-max-bytes 20000
+(defconst scalpel-agent-shell-max-bytes 20000
   "Maximum bytes of shell command output included in the LLM context.
-Larger outputs are truncated with an explicit marker."
-  :type 'integer
-  :group 'scalpel)
+Larger outputs are truncated with an explicit marker.")
 
-(defcustom scalpel-agent-file-read-max-bytes 40000
+(defconst scalpel-agent-file-read-max-bytes 40000
   "Maximum bytes a read action may put into the LLM context.
 This budget is separate from `scalpel-agent-shell-max-bytes':
 a shell report is an inspection whose size the planner does not
@@ -121,11 +117,9 @@ name.  A whole-file read is truncated at this limit with a marker
 stating the true size.  A single definition is never truncated:
 one that exceeds the limit is refused outright, because a partial
 definition can still parse as a complete form and be applied
-silently."
-  :type 'integer
-  :group 'scalpel)
+silently.")
 
-(defcustom scalpel-agent-context-max-files 200
+(defconst scalpel-agent-context-max-files 200
   "Maximum number of files the session context may hold.
 Each context file costs a line in the planner prompt, a read-only
 bind in the Linux sandbox policy, and read grants in the macOS
@@ -134,9 +128,7 @@ that would cross this limit is refused whole, with the context left
 exactly as it was, rather than accepted in part: a partially
 applied file list would make the sandbox's reach differ from what
 the user asked for, and nothing downstream could tell that it had.
-Raise it deliberately, or add a subdirectory instead."
-  :type 'integer
-  :group 'scalpel)
+Raise it deliberately, or add a subdirectory instead.")
 
 (defconst scalpel-agent--file-level-tools '("file-rename" "file-delete")
   "Tools that decide which files exist.
@@ -147,7 +139,7 @@ deliberately absent: the planner delivers a finished whole-file
 draft and the report names the path, so the creation is visible
 without a prompt.")
 
-(defcustom scalpel-agent-confirm-tools '("shell")
+(defconst scalpel-agent-confirm-tools '("shell")
   "Tools that require user confirmation before execution.
 Each entry is a tool name string.  When the planner emits an action
 whose :tool is in this list, the user is prompted to confirm before
@@ -158,9 +150,7 @@ bounds their reach.  The file-level tools (`file-rename',
 `file-delete') are confirmed regardless of this list: a file-level
 action changes which files exist rather than bytes inside a file,
 so the boundary lock cannot predict its reach and the user must
-always approve it."
-  :type '(repeat string)
-  :group 'scalpel)
+always approve it.")
 
 (defvar-local scalpel-agent-unattended-confirm nil
   "When non-nil, every confirmable action runs without asking.
@@ -1974,10 +1964,10 @@ my $out = eval {
     my $i = scalar(@{^CAPTURE});
     while ($i >= 1) {
       my $cap = defined ${^CAPTURE}[$i - 1] ? ${^CAPTURE}[$i - 1] : \"\";
-      $rep =~ s/\\\\$i/\\$cap/g;
+      $rep =~ s/\\\\$i/$cap/g;
       $i--;
     }
-    $rep =~ s/\\\\&/\\$whole/g;
+    $rep =~ s/\\\\&/$whole/g;
     $rep;
   ]ge;
   $t;
@@ -2728,13 +2718,11 @@ The planner must emit this as its final action."
     (user-error "Scalpel: malformed confirm action"))
   text)
 
-(defcustom scalpel-agent-file-substitute-confirm-threshold 20
+(defconst scalpel-agent-file-substitute-confirm-threshold 20
   "Minimum dry-run match count that requires confirming a file-substitute.
 A file-substitute whose dry-run preview matched at least this many
 occurrences must be confirmed before execution; below the threshold (or
-when no dry-run count is known) it runs without a prompt."
-  :type 'natnum
-  :group 'scalpel-agent)
+when no dry-run count is known) it runs without a prompt.")
 
 (defun scalpel-agent--confirm-needed-p (action)
   "Return non-nil when ACTION must be confirmed before execution.
