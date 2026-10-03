@@ -1969,6 +1969,7 @@ further growth."
              (let ((err-type (plist-get err-plist :type))
                    (err-message (plist-get err-plist :message)))
                (or (eq err-type 'pattern-no-match)
+                   (eq err-type 'substitution-preview-mismatch)
                    (eq err-type 'no-validation)
                    (and (eq err-type 'parse-error)
                         (stringp err-message)
