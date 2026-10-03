@@ -54,7 +54,9 @@
 (defun scalpel-open (root)
   "Open the Scalpel agent console for ROOT.
 Prompt for the directory, defaulting to the current
-`default-directory'; the console is anchored there."
+`default-directory'; the console is anchored there.
+Also prompt for an optional session suffix string
+\\(empty input allowed\\) and pass it to the console."
   (interactive
    (list (read-directory-name "Scalpel console root: "
                               default-directory nil t)))
@@ -84,9 +86,10 @@ Prompt for the directory, defaulting to the current
     (when missing
       (user-error "Cannot open Scalpel console; missing requirement(s): %s"
                   (mapconcat #'identity missing ", ")))
-    (let ((default-directory (file-name-as-directory
+    (let ((suffix (read-string "Scalpel session suffix (optional): "))
+          (default-directory (file-name-as-directory
                               (expand-file-name root))))
-      (scalpel-console-open))))
+      (scalpel-console-open suffix))))
 
 (defalias 'scalpel-set-backend #'scalpel-llm-select-backend
   "Interactively switch the gptel backend used for future Scalpel requests.")

@@ -258,25 +258,34 @@ scalpel-test-run' produced no *ert* buffer in the running editor."
   "`scalpel-open' prompts for a directory and anchors the console there.
 The console open is mocked out: this test covers the entry point's
 own behavior -- the prompt with the current directory as default and
-the `default-directory' binding -- not the console itself."
+the `default-directory' binding -- not the console itself.  It also
+asserts the session-suffix argument flows through to
+`scalpel-console-open'."
   (let ((seen-root nil)
+        (seen-suffix 'unset)
         (asked nil))
     (cl-letf (((symbol-function 'read-directory-name)
                (lambda (prompt _dir &optional _default _mustmatch)
                  (setq asked prompt)
                  (expand-file-name "sub" temporary-file-directory)))
+              ((symbol-function 'read-string)
+               (lambda (_prompt &optional _initial _history _default _inherit)
+                 "fixed-session"))
               ((symbol-function 'scalpel-console-open)
-               (lambda ()
-                 (setq seen-root default-directory))))
+               (lambda (&optional session-suffix)
+                 (setq seen-root default-directory
+                       seen-suffix session-suffix))))
       (let ((default-directory (file-name-as-directory
                                 (expand-file-name temporary-file-directory))))
         (call-interactively #'scalpel-open))
-      (ert-info ((format "asked=%S seen-root=%S" asked seen-root))
+      (ert-info ((format "asked=%S seen-root=%S seen-suffix=%S"
+                         asked seen-root seen-suffix))
         (should (string-match-p "Scalpel console root" asked))
         (should (string=
                  seen-root
                  (file-name-as-directory
-                  (expand-file-name "sub" temporary-file-directory))))))))
+                  (expand-file-name "sub" temporary-file-directory))))
+        (should (string= seen-suffix "fixed-session"))))))
 
 (provide 'scalpel-test)
 

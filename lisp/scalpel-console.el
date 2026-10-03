@@ -214,14 +214,18 @@ failure never gets this face: it stays out of the conversation
 entirely and must stay loud."
   :group 'scalpel)
 
-(defun scalpel-console--buffer-name (root)
+(defun scalpel-console--buffer-name (root &optional mnemonic)
   "Return the Scalpel console buffer name for ROOT.
 ROOT is expanded, normalized with `file-name-as-directory' and
-`directory-file-name', then abbreviated with `abbreviate-file-name'."
-  (format scalpel-console-buffer-name-format
-          (abbreviate-file-name
-           (directory-file-name
-            (file-name-as-directory (expand-file-name root))))))
+`directory-file-name', then abbreviated with `abbreviate-file-name'.
+When MNEMONIC is non-nil and non-empty, it is embedded in the
+buffer name right before the closing star."
+  (let ((base (abbreviate-file-name
+               (directory-file-name
+                (file-name-as-directory (expand-file-name root))))))
+    (if (and mnemonic (not (string-empty-p mnemonic)))
+        (format "*%s %s*" base mnemonic)
+      (format "*%s*" base))))
 
 (defun scalpel-console--target-buffer ()
   "Return the console buffer the current command should write to.
@@ -1495,19 +1499,25 @@ clear the conversation instead, use
     (scalpel-agent-context-reset)
     (scalpel-console--show-context)))
 
-(defun scalpel-console-open ()
+(defun scalpel-console-open (&optional mnemonic)
   "Open a fresh Scalpel console buffer for the current directory.
 Internal setup routine of `scalpel-open'; not an interactive command.
 Each call creates a new console buffer for the root -- re-running
 `scalpel-open' opens a new session rather than switching to an
 existing one -- and the buffer's name carries Emacs's standard
 uniqueness suffix when the name is taken (e.g. \"*scalpel: ~/proj*<2>\").
+When MNEMONIC is non-empty it is embedded in the buffer name just
+before the trailing star (e.g. MNEMONIC \"fix\" yields
+\"*scalpel: ~/proj/fix*\"); when it is nil or empty the default
+name is unchanged.
 The console is anchored to `default-directory' at call time: the
 buffer name embeds the path and the buffer's `default-directory' is
 pinned to it, so any file-system command run inside the console uses
 that path."
   (let* ((root (file-name-as-directory (expand-file-name default-directory)))
-         (buf (get-buffer-create (generate-new-buffer-name (scalpel-console--buffer-name root)))))
+         (mnemonic (or mnemonic ""))
+         (buf (get-buffer-create
+               (generate-new-buffer-name (scalpel-console--buffer-name root mnemonic)))))
     (switch-to-buffer buf)
     (setq buffer-read-only nil)
     (unless (eq major-mode 'scalpel-console-mode)
