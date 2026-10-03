@@ -199,6 +199,15 @@ Drop: verbose tool outputs, redundant back-and-forth, and superseded attempts.
 Respond with the summary only."
   "Instruction sent with the history when the console offers compression.")
 
+(defconst scalpel-prompt--history-compress-preamble
+  "State that this text is a compressed report of the earlier
+conversation and needs no reply.  Kept in English because it is read
+by the model."
+  "This is the fixed preamble for the compressed conversation history.
+It states that the following text is a compressed report of the
+earlier conversation and needs no reply.  It is kept in English
+because it is read by the model.")
+
 (defconst scalpel-prompt--project-rules-header
   "Project user prompt rules:\n%s\n\n"
   "Header introducing the project user prompt rules.

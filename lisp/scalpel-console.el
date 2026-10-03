@@ -1353,20 +1353,34 @@ anything while growth stays below
 token count (not the cumulative token total) is used because each
 round re-uploads the whole conversation, so the cumulative total
 grows by roughly the whole history every round and cannot gate the
-offer.  Otherwise the baseline is advanced first, the user is
-asked whether to compress the history, and nil is returned on
-decline (after a display-only note).  On acceptance the current
-conversation is sent to the LLM for a factual summary; the symbol
-`deferred' is returned immediately so the caller can hold back the
-pending instruction while the request runs.  In the success callback
-the tagged conversation regions that existed before the summary are
-cleared the same way `scalpel-console-forget-history' clears them,
-the summary is left as the new conversation body, and
-`scalpel-console-send-line' is re-entered so the pending
-instruction goes out with the compressed history.  On an LLM error
-only a display-only note is appended, the roles are left
-untouched, and `scalpel-console-send-line' is re-entered so the
-user's instruction is not swallowed."
+offer.  Otherwise the user is asked whether to compress the
+history; the baseline is advanced only once the answer is known --
+right after the `y-or-n-p' returns, in both the declined and the
+accepted case -- so a keyboard quit during the prompt leaves the
+baseline untouched, while the ask itself counts as the reset for
+both the answered cases.  All display-only notes (declined offer,
+failed compression, and the compression connector) are inserted
+via `scalpel-console--insert-compression-note', so every note
+carries `scalpel-console-output' and is never counted as pending
+input.  Nil is returned on decline (after a display-only note).
+On acceptance the busy flag is set so RET is blocked while the
+request runs, the current conversation is sent to the LLM for a
+factual summary, and the symbol `deferred' is returned immediately
+so the caller can hold back the pending instruction.  In the
+success callback the summary is held in a local first; a
+non-string or whitespace-only summary is treated as a failure with
+a display-only note only.  Otherwise the old history is forgotten
+exactly the way `scalpel-console-forget-history' forgets it, the
+held summary is appended as a user turn prefixed by
+`scalpel-prompt--history-compress-preamble', the consumed-body
+markers are refreshed, the compression baseline is reset to the
+token count of the new (compressed) history so subsequent growth
+is measured from the small compressed history, the busy flag is
+cleared, and the user is told to press RET again to send the
+pending instruction with the compressed history.  The error
+callback clears the busy flag and leaves a display-only note only.
+Neither callback re-enters the send path; the user always confirms
+the resend."
   (let* ((history-tokens (scalpel-llm--count-tokens
                           (scalpel-console--history)))
          ;; Sanitize the baseline: session snapshots restored by
@@ -1378,23 +1392,25 @@ user's instruction is not swallowed."
                      0))
          (growth (- history-tokens baseline)))
     (when (>= growth scalpel-console-compression-offer-growth-threshold)
-      ;; Advance the baseline before asking so a declined offer still
-      ;; requires another threshold of growth before the next offer.
-      (setq scalpel-console--compression-baseline history-tokens)
       (if (not (y-or-n-p
                 (format "Compress the conversation history into a summary \
 (history: %d tokens)? "
                         history-tokens)))
-          ;; Declined: leave a display-only note, touch nothing else.
-          (let ((inhibit-read-only t))
-            (save-excursion
-              (goto-char (point-max))
-              (insert (propertize "\n[history compression offer declined]\n"
-                                  'face 'shadow))))
-        ;; Accepted: ask the LLM for a summary of the conversation and
-        ;; hold the pending instruction until the rewrite finishes.
-        ;; Return `deferred' immediately via prog1 while the request
-        ;; runs in the background.
+          ;; Declined: advance the baseline now that the answer is known,
+          ;; so a declined offer still requires another threshold of
+          ;; growth before the next offer; a C-g during the prompt quits
+          ;; before this and leaves the baseline untouched.  Then leave a
+          ;; display-only note and touch nothing else.
+          (progn
+            (setq scalpel-console--compression-baseline history-tokens)
+            (scalpel-console--insert-compression-note
+             "history compression offer declined"))
+        ;; Accepted: advance the baseline now that the answer is known
+        ;; (a C-g during the prompt quits before this), then block RET
+        ;; while the summary request runs and send the history for a
+        ;; summary.  Return `deferred' immediately via prog1 while the
+        ;; request runs in the background.
+        (setq scalpel-console--compression-baseline history-tokens)
         (let ((console-buffer (current-buffer))
               (prompt
                (concat
@@ -1402,6 +1418,7 @@ user's instruction is not swallowed."
                 "\n\n"
                 (scalpel-console--history)
                 "\n")))
+          (setq scalpel-console--busy t)
           (prog1 'deferred
             (scalpel-llm-request-async
              prompt
@@ -1409,62 +1426,84 @@ user's instruction is not swallowed."
              (lambda (summary)
                (when (buffer-live-p console-buffer)
                  (with-current-buffer console-buffer
-                   ;; Collect the role-tagged ranges up front, before any
-                   ;; insertion, so the rewrite below is independent of how
-                   ;; the buffer changes while the summary is appended.
-                   (let ((ranges nil)
-                         (pos (point-min)))
-                     (while (< pos (point-max))
-                       (let ((next (next-single-property-change
-                                    pos 'scalpel-console-role nil (point-max))))
-                         (when (get-text-property pos 'scalpel-console-role)
-                           (push (cons pos next) ranges))
-                         (setq pos next)))
-                     (setq ranges (nreverse ranges))
-                     ;; Capture the summary's start position before the
-                     ;; append so the before/after split stays correct.
-                     (let ((summary-start (copy-marker (point-max) nil)))
-                       (scalpel-console--append summary "assistant")
-                       (let ((inhibit-read-only t))
-                         ;; Clear roles and mute every range that lies
-                         ;; entirely before the appended summary turn.
-                         (dolist (range ranges)
-                           (when (< (cdr range) summary-start)
-                             (remove-text-properties
-                              (car range) (cdr range)
-                              '(scalpel-console-role nil))
-                             (add-text-properties
-                              (car range) (cdr range)
-                              '(scalpel-console-output t face shadow)))))
+                   (if (or (not (stringp summary))
+                           (string-match-p "\\`[[:space:]]*\\'" summary))
+                       ;; Treated as failure: display-only note only,
+                       ;; roles untouched, busy cleared.
+                       (progn
+                         (scalpel-console--insert-compression-note
+                          "history compression failed: empty summary")
+                         (setq scalpel-console--busy nil)
+                         (message "History compression failed; press RET \
+to resend the instruction."))
+                     ;; Hold the summary in a local before mutating the
+                     ;; buffer, so the rewrite below is independent of
+                     ;; how the buffer changes during insertion.
+                     (let ((held summary))
+                       ;; Forget the old history exactly the way
+                       ;; `scalpel-console-forget-history' forgets it.
+                       (scalpel-console-forget-history)
+                       ;; Connector note between the old conversation and
+                       ;; the compressed summary.
+                       (scalpel-console--insert-compression-note
+                        "the conversation above was compressed into the \
+summary below")
+                       ;; Append the held summary as a user turn, prefixed
+                       ;; by the compression preamble.
+                       (scalpel-console--append
+                        (concat scalpel-prompt--history-compress-preamble
+                                "\n"
+                                held)
+                        "user")
                        ;; Keep the consumed-body marks in sync with the
                        ;; rewritten buffer.
                        (scalpel-console--refresh-consumed-body-markers)
-                       ;; Leave a display-only note above the summary.
-                       (let ((inhibit-read-only t))
-                         (save-excursion
-                           (goto-char summary-start)
-                           (insert
-                            (propertize
-                             "\n[the conversation above was compressed into the summary below]\n"
-                             'face 'shadow)))))
-                     ;; Re-enter the send path so the pending instruction
-                     ;; goes out with the compressed history.
-                     (scalpel-console-send-line)))))
+                       ;; Reset the baseline to the compressed history's
+                       ;; token count so growth is measured from the small
+                       ;; compressed history, not the old long one.
+                       (setq scalpel-console--compression-baseline
+                             (scalpel-llm--count-tokens
+                              (scalpel-console--history)))
+                       ;; Unblock RET and tell the user to confirm the
+                       ;; resend; never re-enter the send path here.
+                       (setq scalpel-console--busy nil)
+                       (message "History compressed; press RET to resend \
+the instruction."))))))
              ;; Error callback.
              (lambda (error)
                (when (buffer-live-p console-buffer)
                  (with-current-buffer console-buffer
                    ;; Failure: display-only note only; roles untouched.
-                   (let ((inhibit-read-only t))
-                     (save-excursion
-                       (goto-char (point-max))
-                       (insert
-                        (propertize
-                         (format "\n[history compression failed: %s]\n" error)
-                         'face 'shadow)))))
-                 ;; Re-enter the send path so the user's instruction is
-                 ;; not swallowed by the failed compression.
-                 (scalpel-console-send-line))))))))))
+                   (scalpel-console--insert-compression-note
+                    (format "history compression failed: %s" error)))
+                 ;; Unblock RET; the user re-sends by pressing RET.
+                 (setq scalpel-console--busy nil)
+                 (message "History compression failed; press RET to resend \
+the instruction."))))))))))
+
+(defun scalpel-console--insert-compression-note (text)
+  "Insert a display-only compression note TEXT into the console's target buffer.
+
+The note is framed with a leading and trailing newline so it never
+glues onto the pending input line before it or the summary turn after
+it.  It is tagged with the `scalpel-console-output' text property so
+that `scalpel-console--pending-input-regions' and the history
+projection skip it, given the `shadow' face, and its last character is
+marked `rear-nonsticky' so subsequently typed text inherits none of
+these properties."
+  (with-current-buffer (scalpel-console--target-buffer)
+    (goto-char (point-max))
+    (let ((inhibit-read-only t)
+          (start (point)))
+      (insert-before-markers "\n")
+      (insert-before-markers text)
+      (insert-before-markers "\n")
+      (add-text-properties
+       start (point)
+       '(scalpel-console-output t face shadow))
+      ;; Make the final character rear-nonsticky so text typed right
+      ;; after the note does not pick up the note's properties.
+      (put-text-property (1- (point)) (point) 'rear-nonsticky t))))
 
 (defun scalpel-console-reset-context ()
   "Clear the agent context.
