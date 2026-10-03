@@ -1364,14 +1364,15 @@ via `scalpel-console--insert-compression-note', so every note
 carries `scalpel-console-output' and is never counted as pending
 input.  Nil is returned on decline (after a display-only note).
 On acceptance the busy flag is set so RET is blocked while the
-request runs, the current conversation is sent to the LLM for a
-factual summary, and the symbol `deferred' is returned immediately
-so the caller can hold back the pending instruction.  In the
-success callback the summary is held in a local first; a
-non-string or whitespace-only summary is treated as a failure with
-a display-only note only.  Otherwise the old history is forgotten
-exactly the way `scalpel-console-forget-history' forgets it, the
-held summary is appended as a user turn prefixed by
+request runs, a progress message is printed, the current
+conversation is sent to the LLM for a factual summary, and the
+symbol `deferred' is returned immediately so the caller can hold
+back the pending instruction.  In the success callback the
+summary is held in a local first; a non-string or whitespace-only
+summary is treated as a failure with a display-only note only.
+Otherwise the old history is forgotten exactly the way
+`scalpel-console-forget-history' forgets it, the held summary is
+appended as a user turn prefixed by
 `scalpel-prompt--history-compress-preamble', the consumed-body
 markers are refreshed, the compression baseline is reset to the
 token count of the new (compressed) history so subsequent growth
@@ -1419,6 +1420,7 @@ the resend."
                 (scalpel-console--history)
                 "\n")))
           (setq scalpel-console--busy t)
+          (message "Compressing conversation history...")
           (prog1 'deferred
             (scalpel-llm-request-async
              prompt
