@@ -477,7 +477,7 @@ it did."
   "A round carries few actions; the budget discards the overflow.")
 
 (defconst scalpel-prompt-rule--reply-language-format
-  "Natural-language reply text must be written in %s."
+  "The following must all be written in %s: the text of reply actions, the reason field of shell actions, and any compressed history summary."
   "State which language natural-language replies are written in.
 The reply text includes reply actions, the reason field of shell
 actions, and any compressed history summary.

@@ -1624,10 +1624,10 @@ holds the real paths the user typed."
           (with-current-buffer target
             (list :system (scalpel-llm--count-tokens
                            (if scalpel-agent-cod-enabled
-                               (concat scalpel-prompt-system-prompt
+                               (concat (scalpel-prompt-system-prompt)
                                        "\n\n"
                                        scalpel-prompt-cod-prompt)
-                             scalpel-prompt-system-prompt))
+                             (scalpel-prompt-system-prompt)))
                   :context (scalpel-llm--count-tokens
                             (scalpel-agent-context))
                   :history (scalpel-llm--count-tokens (or history ""))

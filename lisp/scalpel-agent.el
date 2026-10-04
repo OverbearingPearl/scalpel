@@ -832,8 +832,8 @@ planner error."
          (funcall on-success (cdr parsed)))))
    on-error
    (if scalpel-agent-cod-enabled
-       (concat scalpel-prompt-system-prompt "\n\n" scalpel-prompt-cod-prompt)
-     scalpel-prompt-system-prompt)))
+       (concat (scalpel-prompt-system-prompt) "\n\n" scalpel-prompt-cod-prompt)
+     (scalpel-prompt-system-prompt))))
 
 (defun scalpel-agent--locate-candidates (symbol)
   "Return one (FILE . RANGE) per context file that define SYMBOL.

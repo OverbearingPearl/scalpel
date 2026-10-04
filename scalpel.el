@@ -45,6 +45,7 @@
     (add-to-list 'load-path lisp-dir)))
 
 (require 'scalpel-console)
+(require 'scalpel-locate-elisp-ert-gwt)
 
 (defgroup scalpel nil
   "Deterministic Emacs-native coding agent."

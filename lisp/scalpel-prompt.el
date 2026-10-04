@@ -311,7 +311,19 @@ the structural contract shared with
 `scalpel-agent--no-change-sentinel': an LLM response consisting
 exactly of that token signals that nothing should be created.")
 
-(defconst scalpel-prompt-system-prompt
+(defun scalpel-prompt-system-prompt ()
+  "Return the system prompt for the Scalpel agent planner.
+Formerly a `defconst', now a defun that recomputes the prompt on
+every call so the current value of `scalpel-prompt-reply-language'
+is read at call time rather than being frozen at load time; the
+reply-language rule is appended only when that variable is non-nil
+at that moment.
+This controls only the wording sent to the LLM; the action schema
+is fixed by `scalpel-agent--tool-fields' and
+`scalpel-agent--tool-vocabulary' and must not be overridden here.
+Whether a reply language is imposed is controlled by
+`scalpel-prompt-reply-language'; nil there leaves the prompt
+unchanged."
   (concat
    scalpel-prompt-rule--no-wrapper "\n"
    scalpel-prompt-rule--document "\n"
@@ -338,14 +350,7 @@ exactly of that token signals that nothing should be created.")
        (concat "\n" (scalpel-prompt--reply-language-rule))
      "")
    "\n"
-   scalpel-prompt-rule--no-wrapper)
-  "System prompt for the Scalpel agent planner.
-This controls only the wording sent to the LLM; the action schema
-is fixed by `scalpel-agent--tool-fields' and
-`scalpel-agent--tool-vocabulary' and must not be overridden here.
-Whether a reply language is imposed is controlled by
-`scalpel-prompt-reply-language'; nil there leaves the prompt
-unchanged.")
+   scalpel-prompt-rule--no-wrapper))
 
 (provide 'scalpel-prompt)
 
