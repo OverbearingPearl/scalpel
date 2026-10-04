@@ -286,13 +286,33 @@ Runs from the console's buffer-local `kill-buffer-hook': killing the
 console kills its reasoning buffer and removes its entry (keyed by
 its buffer name) from variable `scalpel-token--console-totals', so
 neither reasoning buffers nor token totals linger after the session
-is gone.
-Safe when the reasoning buffer does not exist."
+is gone.  When the session ends, the session review (via
+`scalpel-review-open') is offered exactly once, only if the session
+actually recorded changes; lineage state is reset afterwards so a
+later session starts clean.  Everything stays silent when there is
+no change.  Safe when the reasoning buffer does not exist."
   (let ((buf (get-buffer (scalpel-llm--reasoning-buffer-name (current-buffer)))))
     (when (buffer-live-p buf)
       (kill-buffer buf)))
   (when (hash-table-p scalpel-token--console-totals)
-    (remhash (buffer-name) scalpel-token--console-totals)))
+    (remhash (buffer-name) scalpel-token--console-totals))
+  (condition-case nil
+      (progn
+        (require 'scalpel-lineage)
+        (require 'scalpel-review))
+    (error nil))
+  (when (and (fboundp 'scalpel-lineage-session-changed-p)
+             (condition-case nil
+                 (scalpel-lineage-session-changed-p)
+               (error nil)))
+    (when (fboundp 'scalpel-review-open)
+      (condition-case nil
+          (scalpel-review-open)
+        (error nil)))
+    (when (fboundp 'scalpel-lineage-reset-session)
+      (condition-case nil
+          (scalpel-lineage-reset-session)
+        (error nil)))))
 
 (defconst scalpel-console--session-variables
   '(scalpel-console--root
@@ -533,6 +553,10 @@ later ones are removed.  Must be called inside the console buffer."
     (define-key map (kbd "C-c C-c") #'scalpel-commit-run)
     map)
   "Keymap used in Scalpel console buffers.")
+
+(require 'scalpel-review)
+
+(require 'scalpel-lineage)
 
 (defconst scalpel-console--retry-advice
   (concat "(the model's reply was not usable; nothing was executed.  "
@@ -1552,6 +1576,15 @@ that path."
       (goto-char (point-max)))
     (scalpel-agent-context-reset)
     (scalpel-console--show-context)
+    ;; Session-start lineage anchoring: each new console session begins
+    ;; with a clean lineage state and a freshly pinned git baseline.
+    ;; Errors are ignored so consoles in non-git directories still open.
+    (require 'scalpel-lineage)
+    (condition-case nil
+        (progn
+          (scalpel-lineage-reset)
+          (scalpel-lineage-start))
+      (error nil))
     (goto-char (point-max))))
 
 (defun scalpel-console--run-round (instruction history on-complete)
@@ -1944,9 +1977,13 @@ unattended run name how long the run lasted, not only when it
 ended.  `scalpel-console--busy' is set here and cleared at every
 terminal point, so a second RET during a round is refused.  When
 an operation ends, the cursor in the target buffer is also moved
-to `point-max', signalling that the answer is finished.  The
-completion acknowledgement is only shown for a successful final
-round.  An interactive
+to `point-max', signalling that the answer is finished.  At every
+terminal point the session review buffer is opened exactly once
+per operation via `scalpel-review-open', whether the operation
+completed successfully or was ended by an error; the call is
+guarded so consoles in non-git or lineage-less setups still end
+cleanly.  The completion acknowledgement is only shown for a
+successful final round.  An interactive
 operation ends with a compression offer once the cumulative token
 growth since the last offer reaches
 `scalpel-console-compression-offer-growth-threshold'; a declined
@@ -1963,9 +2000,18 @@ further growth."
           (conversation history)
           (next-instruction instruction)
           (self-heal-total 0)
-          (self-heal-by-type nil))
+          (self-heal-by-type nil)
+          (review-opened nil))
       (cl-labels
           ((unattended-p () scalpel-console--unattended-p)
+           (open-session-review ()
+             (unless review-opened
+               (setq review-opened t)
+               (condition-case nil
+                   (progn
+                     (require 'scalpel-lineage)
+                     (scalpel-review-open))
+                 (error nil))))
            (stale-file-error-p (err-plist)
              (eq (plist-get err-plist :type) 'stale-file))
            (substitute-error-p (err-plist)
@@ -2045,6 +2091,7 @@ after %s: %s."
                     "Scalpel: Mission complete, over."))
                   ((unattended-p)
                    (stop-unattended "error ended the run")))
+                 (open-session-review)
                  (goto-char (point-max)))))
            (run-next ()
              (when (unattended-p)
@@ -2544,7 +2591,6 @@ one console cannot clobber another."
      (format "Scalpel: Unattended begin at %s. Auto-stop after %d rounds."
              (format-time-string "%H:%M")
              scalpel-console--unattended-limit))))
-
 (defun scalpel-console-unload-function ()
   "Suppress `unload-feature's default cleanup for this module.
 The default cleanup kills every buffer whose major mode is defined

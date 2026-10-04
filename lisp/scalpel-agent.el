@@ -1304,6 +1304,15 @@ region was modified while an LLM request was in flight."
   (with-current-buffer (find-file-noselect file)
     (let ((range (scalpel-agent--verified-range file symbol expected-body)))
       (scalpel-execute-replace (car range) (cdr range) new-text)
+      (condition-case nil
+          (progn
+            (require 'scalpel-lineage nil t)
+            (when (fboundp 'scalpel-lineage-note)
+              (scalpel-lineage-note 'block-edit
+                                    file
+                                    (buffer-substring-no-properties (car range) (cdr range))
+                                    new-text)))
+        (error nil))
       (let ((renamed (scalpel-agent--replacement-name new-text)))
         (if (and renamed (not (string= renamed symbol)))
             (format "Edited %s in %s; the definition is now named %s"
@@ -1509,13 +1518,27 @@ malformed action or an existing file."
     (user-error "Scalpel: malformed file-create action"))
   (when (file-exists-p file)
     (user-error "Scalpel: can't create %s: already exists" file))
-  (let ((dir (file-name-directory (expand-file-name file))))
-    (when dir (make-directory dir t)))
-  (with-temp-file file (insert text))
-  ;; The context follows the disk: FILE exists now, and nothing else would
-  ;; ever put it in reach of a read, an edit or the sandbox.
-  (concat (format "Created file %s" file)
-          (or (scalpel-agent--context-track file) "")))
+  (let ((dir (file-name-directory (expand-file-name file)))
+        (lineage-note ""))
+    (when dir (make-directory dir t))
+    (with-temp-file file (insert text))
+    ;; Guarded lineage note: sessions without the lineage module loaded
+    ;; still work, matching the pattern in
+    ;; `scalpel-agent--apply-if-unchanged'.
+    (condition-case nil
+        (progn
+          (require 'scalpel-lineage nil t)
+          (when (fboundp 'scalpel-lineage-note)
+            (setq lineage-note
+                  (or (scalpel-lineage-note
+                       "file-create" file nil text)
+                      ""))))
+      (error nil))
+    ;; The context follows the disk: FILE exists now, and nothing else would
+    ;; ever put it in reach of a read, an edit or the sandbox.
+    (concat (format "Created file %s" file)
+            lineage-note
+            (or (scalpel-agent--context-track file) ""))))
 
 (defun scalpel-agent-block-delete (file symbol)
   "Delete SYMBOL in FILE through the boundary-locked deletion.
@@ -1556,9 +1579,21 @@ action or a missing file."
     (user-error "Scalpel: malformed file-delete action"))
   (unless (file-exists-p file)
     (user-error "Scalpel: can't delete %s: no such file" file))
-  (let ((buffer (find-buffer-visiting file)))
+  (let ((buffer (find-buffer-visiting file))
+        (contents nil))
     (when (and buffer (buffer-modified-p buffer))
       (user-error "Scalpel: %s has unsaved changes; not deleting" file))
+    ;; Capture the file's full text before removing it, so the lineage
+    ;; note can record what was lost even if the visiting buffer dies.
+    (when (and buffer (buffer-live-p buffer))
+      (setq contents (with-current-buffer buffer
+                       (buffer-substring-no-properties (point-min)
+                                                       (point-max)))))
+    (unless contents
+      (setq contents (with-temp-buffer
+                       (insert-file-contents file)
+                       (buffer-substring-no-properties (point-min)
+                                                       (point-max)))))
     (when (and buffer (buffer-live-p buffer))
       (kill-buffer buffer))
     (delete-file file)
@@ -1567,6 +1602,12 @@ action or a missing file."
     ;; a file with no symbols rather than the absence the session should
     ;; have recorded.
     (scalpel-agent--context-untrack file)
+    (condition-case nil
+        (progn
+          (require 'scalpel-lineage nil t)
+          (when (fboundp 'scalpel-lineage-note)
+            (scalpel-lineage-note 'file-delete file contents nil)))
+      (error nil))
     (format "Deleted file %s" file)))
 
 (defun scalpel-agent-file-rename (file to)
@@ -1608,6 +1649,15 @@ existing destination."
     (when tracked
       (scalpel-agent--context-untrack file)
       (scalpel-agent--context-track to))
+    (condition-case nil
+        (let ((feature (require 'scalpel-lineage nil t)))
+          (when (and feature (fboundp 'scalpel-lineage-note))
+            (scalpel-lineage-note
+             'file-rename
+             to
+             (if (stringp file) file (format "%s" file))
+             nil)))
+      (error nil))
     (format "Renamed %s to %s" file to)))
 
 (defun scalpel-agent--printable-output (text)
@@ -2823,6 +2873,38 @@ can offer block-edit as the retry."
                 (erase-buffer)
                 (insert new))
               (save-buffer))
+            ;; Record lineage for this rewrite so the session-end review can
+            ;; restore it: each occurrence is noted as one pair of pre-image and
+            ;; post-image texts, scanned in the same forward order in OLD and NEW
+            ;; and paired by index, so the Nth pair is the same occurrence before
+            ;; and after the rewrite. Lineage is optional machinery: a missing
+            ;; module or a failing recorder never breaks the substitute itself.
+            (when (> count 0)
+              (condition-case nil
+                  (progn
+                    (require 'scalpel-lineage nil t)
+                    (when (fboundp 'scalpel-lineage-note)
+                      (let ((case-fold-search nil)
+                            (old-texts nil)
+                            (new-texts nil)
+                            (pos 0))
+                        (while (string-match pattern new pos)
+                          (push (match-string 0 new) new-texts)
+                          (setq pos (match-end 0)))
+                        (setq new-texts (nreverse new-texts))
+                        (setq pos 0)
+                        (while (string-match pattern old pos)
+                          (push (match-string 0 old) old-texts)
+                          (setq pos (match-end 0)))
+                        (setq old-texts (nreverse old-texts))
+                        (cl-loop for old-text in old-texts
+                                 for new-text in new-texts
+                                 do (funcall 'scalpel-lineage-note
+                                             'file-substitute
+                                             resolved
+                                             old-text
+                                             new-text)))))
+                (error nil)))
             (push (format "Rewrote %d occurrence(s) in %s" count resolved) lines)
             (dolist (pair excerpts)
               (push (format "  %s -> %s"
