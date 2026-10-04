@@ -35,9 +35,8 @@
           ;; Given a temp root holding old.el with content old newline
           ;; and scalpel-agent--context-files nil, when the planner
           ;; renames old.el to new.el with scalpel-agent-file-rename.
-          (should (equal (scalpel-agent-file-rename old new)
-                         (setq scalpel-story-files-test-report
-                               (scalpel-agent-file-rename old new))))
+          (setq scalpel-story-files-test-report
+                (scalpel-agent-file-rename old new))
           ;; Then the report mentions Renamed.
           (should (string-match-p "\\`.*Renamed.*\\'" scalpel-story-files-test-report))
           ;; And new.el exists on disk with the old content.
@@ -47,7 +46,9 @@
                            "old\n"))
           ;; And old.el no longer exists.
           (should-not (file-exists-p old)))
-      (delete-directory root t))))
+      (condition-case nil
+          (delete-directory root t)
+        (error nil)))))
 
 ;; Story B: renaming onto an existing file is refused.
 (ert-deftest scalpel-story-files-test-rename-refuses-existing-target ()
@@ -87,22 +88,24 @@
         (scalpel-story-files-test-refusal nil)
         (scalpel-agent--context-files nil))
     (unwind-protect
-        (let* ((doomed (expand-file-name "doomed.el" root))
-               (path doomed))
+        (let (doomed truename)
+          (setq doomed (expand-file-name "doomed.el" root))
           (with-temp-file doomed (insert "bye\n"))
-          (setq scalpel-agent--context-files (list path))
+          (setq truename (file-truename doomed))
+          (setq scalpel-agent--context-files (list truename))
           ;; Given a temp root holding doomed.el with content bye
-          ;; newline and scalpel-agent--context-files nil with
-          ;; doomed.el added to the context, when the planner deletes
-          ;; doomed.el with scalpel-agent-file-delete.
+          ;; newline and scalpel-agent--context-files containing the
+          ;; doomed file's truename, when the planner deletes doomed.el
+          ;; with scalpel-agent-file-delete.
           (setq scalpel-story-files-test-report
-                (scalpel-agent-file-delete path))
+                (scalpel-agent-file-delete truename))
           ;; Then the report mentions Deleted file.
           (should (string-match-p "\\`.*Deleted file.*\\'" scalpel-story-files-test-report))
           ;; And the file is gone from disk.
           (should-not (file-exists-p doomed))
-          ;; And scalpel-agent--context-files no longer contains the path.
-          (should-not (member path scalpel-agent--context-files)))
+          ;; And scalpel-agent--context-files no longer contains the
+          ;; doomed file's truename.
+          (should-not (member truename scalpel-agent--context-files)))
       (condition-case nil (delete-directory root t) (error nil))
       (setq scalpel-agent--context-files nil))))
 
