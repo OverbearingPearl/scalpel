@@ -288,7 +288,8 @@ its buffer name) from variable `scalpel-token--console-totals', so
 neither reasoning buffers nor token totals linger after the session
 is gone.  When the session ends, the session review (via
 `scalpel-review-open') is offered exactly once, only if the session
-actually recorded changes; lineage state is reset afterwards so a
+actually recorded changes (checked with `scalpel-lineage-clean-p');
+lineage state is reset afterwards via `scalpel-lineage-reset' so a
 later session starts clean.  Everything stays silent when there is
 no change.  Safe when the reasoning buffer does not exist."
   (let ((buf (get-buffer (scalpel-llm--reasoning-buffer-name (current-buffer)))))
@@ -301,17 +302,17 @@ no change.  Safe when the reasoning buffer does not exist."
         (require 'scalpel-lineage)
         (require 'scalpel-review))
     (error nil))
-  (when (and (fboundp 'scalpel-lineage-session-changed-p)
+  (when (and (fboundp 'scalpel-lineage-clean-p)
              (condition-case nil
-                 (scalpel-lineage-session-changed-p)
+                 (not (scalpel-lineage-clean-p))
                (error nil)))
     (when (fboundp 'scalpel-review-open)
       (condition-case nil
           (scalpel-review-open)
         (error nil)))
-    (when (fboundp 'scalpel-lineage-reset-session)
+    (when (fboundp 'scalpel-lineage-reset)
       (condition-case nil
-          (scalpel-lineage-reset-session)
+          (scalpel-lineage-reset)
         (error nil)))))
 
 (defconst scalpel-console--session-variables

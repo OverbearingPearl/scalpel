@@ -25,6 +25,7 @@
     (define-key map (kbd "q") #'scalpel-review-accept-all)
     map)
   "Keymap for session review buffers.")
+(require 'diff)
 
 (require 'scalpel-lineage)
 
@@ -70,8 +71,40 @@
           (setq groups (append groups (list (cons file (list record))))))))
     groups))
 
+(defun scalpel-review--insert-record (record)
+  "Insert one RECORD into the review buffer.
+Render a header line followed by a unified diff of the record's
+old-text versus new-text; rename records (detected by :tool being
+`file-rename') show a rename line instead.
+The whole block is tagged with the `scalpel-review-record' text property."
+  (let* ((inhibit-read-only t)
+         (beg (point))
+         (old-text (plist-get record :old-text))
+         (new-text (plist-get record :new-text))
+         (file (plist-get record :file))
+         (tool (plist-get record :tool))
+         (old-buf (get-buffer-create " *scalpel-review-old*"))
+         (new-buf (get-buffer-create " *scalpel-review-new*")))
+    (unwind-protect
+        (progn
+          (if (eq tool 'file-rename)
+              (insert (format "Rename: %s -> %s\n" old-text file))
+            (progn
+              (insert (format "File: %s\n" file))
+              (with-current-buffer old-buf
+                (erase-buffer)
+                (insert (or old-text "")))
+              (with-current-buffer new-buf
+                (erase-buffer)
+                (insert (or new-text "")))
+              (diff-no-select old-buf new-buf nil 'noasync)))
+          (put-text-property beg (point) 'scalpel-review-record record))
+      (kill-buffer old-buf)
+      (kill-buffer new-buf))))
+
 (defun scalpel-review--render ()
-  "Fill the current buffer with the grouped review listing."
+  "Fill the current buffer with a unified-diff review listing."
+  (require 'diff)
   (let ((inhibit-read-only t)
         (records (scalpel-lineage-changes)))
     (erase-buffer)
@@ -87,12 +120,7 @@
                             "  [CONFLICT: file changed after the session]"
                           "")))
         (dolist (record recs)
-          (let ((begin (point)))
-            (insert (format "  round %d  %s\n"
-                            (plist-get record :round)
-                            (plist-get record :tool)))
-            (put-text-property begin (point)
-                               'scalpel-review-record record))))
+          (scalpel-review--insert-record record)))
       (insert "\nTAB next block, k reject block, q accept all and quit\n")))
   (goto-char (point-min)))
 

@@ -1524,15 +1524,17 @@ malformed action or an existing file."
     (with-temp-file file (insert text))
     ;; Guarded lineage note: sessions without the lineage module loaded
     ;; still work, matching the pattern in
-    ;; `scalpel-agent--apply-if-unchanged'.
+    ;; `scalpel-agent--apply-if-unchanged'.  The note function returns a
+    ;; record plist, so only a genuine string contribution is appended to
+    ;; the report; anything else (nil or a plist) contributes nothing.
     (condition-case nil
         (progn
           (require 'scalpel-lineage nil t)
           (when (fboundp 'scalpel-lineage-note)
-            (setq lineage-note
-                  (or (scalpel-lineage-note
-                       "file-create" file nil text)
-                      ""))))
+            (let ((note (scalpel-lineage-note
+                         'file-create file nil text)))
+              (when (stringp note)
+                (setq lineage-note note)))))
       (error nil))
     ;; The context follows the disk: FILE exists now, and nothing else would
     ;; ever put it in reach of a read, an edit or the sandbox.

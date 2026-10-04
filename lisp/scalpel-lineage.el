@@ -68,19 +68,29 @@ the session-level diff degrades to per-record restore only."
 (defun scalpel-lineage-note (tool file old-text new-text)
   "Record one change: TOOL touched FILE turning OLD-TEXT into NEW-TEXT.
 For file-rename, FILE is the new path and OLD-TEXT holds the old
-path.  Hashes let a later restore detect that the file moved on
-since the change, so it refuses instead of clobbering user edits."
-  (let ((record
-         (list :tool tool
-               :file file
-               :old-text old-text
-               :new-text new-text
-               :round scalpel-lineage-round
-               :old-hash (when old-text (secure-hash 'sha1 old-text))
-               :new-hash (when new-text (secure-hash 'sha1 new-text)))))
-    (setq scalpel-lineage--records
-          (append scalpel-lineage--records (list record)))
-    record))
+path with NEW-TEXT nil; such renames are always recorded.
+Writes that are a no-op are not recorded at all: when both
+OLD-TEXT and NEW-TEXT are strings and equal, or when both are
+nil, return nil without creating a record, so sessions whose
+every write left content identical stay clean-p true and the
+session-end review stays silent.  Hashes let a later restore
+detect that the file moved on since the change, so it refuses
+instead of clobbering user edits."
+  (if (or (and (stringp old-text) (stringp new-text)
+               (string= old-text new-text))
+          (and (null old-text) (null new-text)))
+      nil
+    (let ((record
+           (list :tool tool
+                 :file file
+                 :old-text old-text
+                 :new-text new-text
+                 :round scalpel-lineage-round
+                 :old-hash (when old-text (secure-hash 'sha1 old-text))
+                 :new-hash (when new-text (secure-hash 'sha1 new-text)))))
+      (setq scalpel-lineage--records
+            (append scalpel-lineage--records (list record)))
+      record)))
 
 (defun scalpel-lineage-changes ()
   "Return this session's change records, oldest first."
