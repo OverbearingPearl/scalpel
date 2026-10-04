@@ -2018,11 +2018,12 @@ the same pattern unchanged.\n"
 
 (defun scalpel-agent--perlre-toc-for-refusal ()
   "Return the perlre table of contents for a zero-match refusal.
-Delegates to the prompt layer's `scalpel-prompt--perlre-toc'.
+Delegates to the advice layer's `scalpel-diagnose-advice-perlre-toc',
+which is the single owner of TOC extraction.
 If perldoc is unavailable or errors, return the empty string so the
 refusal assembly is never blocked."
   (condition-case nil
-      (or (scalpel-prompt--perlre-toc) "")
+      (or (scalpel-diagnose-advice-perlre-toc) "")
     (error "")))
 
 (defun scalpel-agent--substitute-invocation (pattern replacement)
@@ -2761,18 +2762,18 @@ can offer block-edit as the retry."
         (signal 'scalpel-planner-error
                 (list :type 'pattern-no-match
                       :message (concat
-                                (format "Scalpel: file-substitute matched nothing in any of the %d file(s) (%s); refusing\\n%s"
+                                (format "Scalpel: file-substitute matched nothing in any of the %d file(s) (%s); refusing\n%s"
                                         (length staged)
                                         (string-join (mapcar (lambda (entry) (nth 0 entry)) staged) ", ")
                                         (scalpel-agent--substitute-invocation pattern replacement))
-                                "\\n"
+                                "\n"
                                 (scalpel-agent--perl-invocation pattern replacement)
                                 (if (equal note "")
-                                    "\\nNo line in any of the files even begins like the pattern, so the files are likely already in the target state or were rewritten by an earlier round; resending the identical action is pointless."
+                                    "\nNo line in any of the files even begins like the pattern, so the files are likely already in the target state or were rewritten by an earlier round; resending the identical action is pointless."
                                   note)
                                 (if (equal perlre "")
                                     ""
-                                  (concat "\\n" perlre)))))))
+                                  (concat "\n" perlre)))))))
     ;; Second pass: apply through the visiting buffers and save, the way
     ;; `scalpel-execute' writes.
     (let ((lines nil))

@@ -128,45 +128,6 @@ unrelated modification beyond the new attempt.")
 (defconst scalpel-prompt--retry
   "Retry prompt text used when an operation must be attempted again.")
 
-(defvar scalpel-prompt--perlre-toc-cache nil
-  "Cached table of contents of the perlre manual, or nil before first use.")
-
-(defun scalpel-prompt--perlre-toc ()
-  "Return the table of contents of the perlre manual.
-
-On first call, locate the POD source with `perldoc -l perlre',
-insert that file into a temp buffer, extract the titles of
-`=head1'..`=head4' sections, cache the result in
-`scalpel-prompt--perlre-toc-cache', and return it.  Subsequent calls
-return the cached value directly.  If perldoc is missing or anything
-fails, the empty string is computed and cached so that prompt building
-is never blocked."
-  (or scalpel-prompt--perlre-toc-cache
-      (setq scalpel-prompt--perlre-toc-cache
-            (condition-case nil
-                (with-temp-buffer
-                  (call-process "perldoc" nil t nil "-l" "perlre")
-                  (let ((pod-file
-                         (string-trim
-                          (buffer-substring-no-properties
-                           (point-min) (point-max)))))
-                    (erase-buffer)
-                    (insert-file-contents pod-file)
-                    (goto-char (point-min))
-                    (let ((lines nil))
-                      (while (not (eobp))
-                        (let ((line
-                               (buffer-substring-no-properties
-                                (line-beginning-position)
-                                (line-end-position))))
-                          (when (string-match
-                                 "\\`=[ \t]*head[1-4][ \t]+\\(.+\\)[ \t]*\\'"
-                                 line)
-                            (push (match-string 1 line) lines)))
-                        (forward-line 1))
-                      (string-join (nreverse lines) "\n"))))
-              (error "")))))
-
 (defun scalpel-prompt--stale-file-retry-instruction ()
   "Return the dedicated retry instruction for stale-file errors.
 

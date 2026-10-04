@@ -98,6 +98,60 @@ types fall to the executor entry, which that table always holds."
       (cdr (assq (scalpel-diagnose-category type)
                  scalpel-diagnose-advice-category-table))))
 
+(defvar scalpel-diagnose-advice--perlre-toc-cache nil
+  "Cache of the perlre POD table of contents.
+Nil means not yet computed; the empty string means extraction was
+attempted and failed, so failures are not retried needlessly.")
+
+(defvar scalpel-diagnose-advice--perlre-toc-cache nil
+  "Cached table of contents for the perlre POD.
+Populated once by `scalpel-diagnose-advice-perlre-toc' and reused
+on every subsequent call so that POD extraction is not repeated.")
+
+(defun scalpel-diagnose-advice-perlre-toc ()
+  "Return the cached perlre POD table of contents.
+This is the single, self-contained advice-layer owner of TOC
+extraction.  On the first call the perlre POD file is located via
+`perldoc -l perlre', the file is read, and every =head1..=head4
+title is collected and indented according to its heading level.
+The joined string is cached in
+`scalpel-diagnose-advice--perlre-toc-cache' and returned on all
+later calls without re-extraction.  Consumers (console error
+rendering, agent refusal assembly) rely on this advice-layer
+entry point instead of the prompt layer owning the TOC.  Returns
+the empty string on any failure; never returns nil."
+  (or scalpel-diagnose-advice--perlre-toc-cache
+      (let ((raw (condition-case nil
+                     (with-temp-buffer
+                       (call-process "perldoc" nil t nil "-l" "perlre")
+                       (let ((path (string-trim (buffer-string))))
+                         (when (and (string-match-p "\\`/.*\\'" path)
+                                    (file-readable-p path))
+                           (with-current-buffer (find-file-noselect path)
+                             (unwind-protect
+                                 (buffer-string)
+                               (kill-buffer))))))
+                   (error nil))))
+        (setq scalpel-diagnose-advice--perlre-toc-cache
+              (if (not raw)
+                  ""
+                (with-temp-buffer
+                  (insert raw)
+                  (goto-char (point-min))
+                  (let ((lines nil)
+                        (case-fold-search nil))
+                    (while (re-search-forward
+                            "^=head\\([1-4]\\)[ \t]+\\([^\n]+\\)" nil t)
+                      (let ((level (string-to-number (match-string 1)))
+                            (title (string-trim (match-string 2))))
+                        (push (concat (make-string (* (1- level) 2)
+                                                   ?\s)
+                                      title)
+                              lines)))
+                    (if lines
+                        (string-join (nreverse lines) "\n")
+                      ""))))))))
+
 (defun scalpel-diagnose-advice-plist (error-plist)
   "Extract :type from ERROR-PLIST and delegate to `scalpel-diagnose-advice-for'."
   (scalpel-diagnose-advice-for (plist-get error-plist :type)))
