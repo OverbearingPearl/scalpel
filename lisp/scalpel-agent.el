@@ -2105,7 +2105,10 @@ Runs the same `process-environment' trick as
 `scalpel-agent--perl-substitute', but only compiles the pattern
 with qr// and exits.  Signals `user-error' with the concrete perl
 message plus a pasteable replay command when compilation fails or
-the marker output is missing.  Returns nil on success."
+the marker output is missing; the message also appends the perlre
+table of contents from `scalpel-agent--perlre-toc-for-refusal' so
+the LLM receives learning material alongside the error.  Returns
+nil on success."
   (let* ((script scalpel-agent--perl-compile-check-script)
          exit-code
          output)
@@ -2130,9 +2133,10 @@ the marker output is missing.  Returns nil on success."
                 (format "unexpected perl output (exit %d): %s"
                         exit-code trimmed)))
         (user-error
-         "Perl cannot compile the pattern: %s\nReplay with: %s"
+         "Perl cannot compile the pattern: %s\nReplay with: %s\n%s"
          reason
-         (scalpel-agent--perl-compile-check-invocation pattern))))
+         (scalpel-agent--perl-compile-check-invocation pattern)
+         (scalpel-agent--perlre-toc-for-refusal))))
     nil))
 
 (defun scalpel-agent--perl-invocation (pattern replacement)
