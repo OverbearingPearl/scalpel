@@ -396,8 +396,16 @@ names compare case-insensitively."
      (t (string< (downcase (car a)) (downcase (car b)))))))
 
 (defun scalpel-agent--context-marker (node)
-  "Return the attribute suffix for file NODE, e.g. \" (gitignored)\"."
-  (if (plist-get node :ignored) " (gitignored)" ""))
+  "Return attribute suffix for NODE, e.g. \" (gitignored) (1.2 kB) (12 symbols)\"."
+  (concat (if (plist-get node :ignored) " (gitignored)" "")
+          (let ((size (plist-get node :size)))
+            (if size
+                (format " (%s)" (file-size-human-readable size))
+              ""))
+          (let ((symbols (plist-get node :symbols)))
+            (if symbols
+                (format " (%d symbol%s)" symbols (if (= symbols 1) "" "s"))
+              ""))))
 
 (defun scalpel-agent--context-tree-insert (tree components flags)
   "Insert COMPONENTS into TREE, marking the leaf with FLAGS.
@@ -529,13 +537,24 @@ no subprocess; each repository is queried once."
   "Return one (FILE . FLAGS) entry per file in the session context.
 IGNORED-FILES lists absolute names that git ignores; matching
 entries get :ignored set.  FLAGS is the plist consumed by the tree
-builder: :ignored, plus :status once a caller has annotated the
-entry."
+builder: :ignored, :size, :symbols, plus :status once a caller has
+annotated the entry.  :size is the file size in bytes, or nil when
+the file cannot be stat'ed.  :symbols is the number of top-level
+symbols in the file, or nil when no provider exists for the file
+or the count fails."
   (mapcar
    (lambda (file)
-     (let ((file (expand-file-name file)))
+     (let* ((file (expand-file-name file))
+            (attrs (file-attributes file))
+            (provider (scalpel-locate-provider-for-file file))
+            (symbols (when provider
+                       (condition-case nil
+                           (length (scalpel-locate-list-symbols file))
+                         (error nil)))))
        (cons file
-             (list :ignored (and (member file ignored-files) t)))))
+             (list :ignored (and (member file ignored-files) t)
+                   :size (when attrs (nth 7 attrs))
+                   :symbols symbols))))
    scalpel-agent--context-files))
 
 (defun scalpel-agent--context-tree-mark-dirs (tree)
