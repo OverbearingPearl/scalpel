@@ -1401,7 +1401,7 @@ the resend."
         (let ((console-buffer (current-buffer))
               (prompt
                (concat
-                scalpel-prompt--history-compress-instruction
+                (scalpel-prompt--history-compress-instruction)
                 "\n\n"
                 (scalpel-console--history)
                 "\n")))

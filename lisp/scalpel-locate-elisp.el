@@ -329,7 +329,7 @@ Independently of the registry, a load-free source-level fallback
 walks the top-level forms of the buffer one at a time: any form
 whose head is a member of `scalpel-locate-elisp--defining-forms'
 but whose second element is a list rather than a symbol or string
-\(e.g. an ert-gwt-deftest call like (ert-gwt-deftest (:given ...)
+\(e.g. an `ert-gwt-deftest' call like (ert-gwt-deftest (:given ...)
 ...) whose clauses follow the head directly) carries no name in
 the usual place and counts as an anonymous use; such calls are
 counted per definer in source order and synthesized as

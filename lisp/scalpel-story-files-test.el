@@ -20,6 +20,92 @@
 (defvar scalpel-story-files-test-refusal nil
   "Holds a refusal message captured inside a story.")
 
+(defvar scalpel-story-files-test-refusal nil)
+
+;; Story A: renaming old.el to new.el renames the file on disk.
+(ert-deftest scalpel-story-files-test-rename-succeeds ()
+  (let ((root (make-temp-file "scalpel-story-files-" t))
+        (scalpel-story-files-test-report nil)
+        (scalpel-story-files-test-refusal nil)
+        (scalpel-agent--context-files nil))
+    (unwind-protect
+        (let ((old (expand-file-name "old.el" root))
+              (new (expand-file-name "new.el" root)))
+          (with-temp-file old (insert "old\n"))
+          ;; Given a temp root holding old.el with content old newline
+          ;; and scalpel-agent--context-files nil, when the planner
+          ;; renames old.el to new.el with scalpel-agent-file-rename.
+          (should (equal (scalpel-agent-file-rename old new)
+                         (setq scalpel-story-files-test-report
+                               (scalpel-agent-file-rename old new))))
+          ;; Then the report mentions Renamed.
+          (should (string-match-p "\\`.*Renamed.*\\'" scalpel-story-files-test-report))
+          ;; And new.el exists on disk with the old content.
+          (should (file-exists-p new))
+          (should (string= (with-temp-buffer (insert-file-contents new)
+                                             (buffer-string))
+                           "old\n"))
+          ;; And old.el no longer exists.
+          (should-not (file-exists-p old)))
+      (delete-directory root t))))
+
+;; Story B: renaming onto an existing file is refused.
+(ert-deftest scalpel-story-files-test-rename-refuses-existing-target ()
+  (let ((root (make-temp-file "scalpel-story-files-" t))
+        (scalpel-story-files-test-report nil)
+        (scalpel-story-files-test-refusal nil))
+    (unwind-protect
+        (let ((old (expand-file-name "old.el" root))
+              (other (expand-file-name "other.el" root)))
+          (with-temp-file old (insert "old\n"))
+          (with-temp-file other (insert "other\n"))
+          ;; Given a temp root holding both old.el and other.el, when
+          ;; the rename to the already-existing other.el is attempted
+          ;; inside a condition-case capturing user-error.
+          (setq scalpel-story-files-test-refusal
+                (condition-case err
+                    (progn (scalpel-agent-file-rename old other) nil)
+                  (user-error (cadr err))))
+          ;; Then the refusal message mentions already exists.
+          (should (string-match-p "\\`.*already exists.*\\'"
+                                  (or scalpel-story-files-test-refusal "")))
+          ;; And both files still exist on disk unchanged.
+          (should (file-exists-p old))
+          (should (file-exists-p other))
+          (should (string= (with-temp-buffer (insert-file-contents old)
+                                             (buffer-string))
+                           "old\n"))
+          (should (string= (with-temp-buffer (insert-file-contents other)
+                                             (buffer-string))
+                           "other\n")))
+      (delete-directory root t))))
+
+;; Story C: deleting a context file removes it from disk and context.
+(ert-deftest scalpel-story-files-test-delete-removes-from-context ()
+  (let ((root (make-temp-file "scalpel-story-files-" t))
+        (scalpel-story-files-test-report nil)
+        (scalpel-story-files-test-refusal nil)
+        (scalpel-agent--context-files nil))
+    (unwind-protect
+        (let* ((doomed (expand-file-name "doomed.el" root))
+               (path doomed))
+          (with-temp-file doomed (insert "bye\n"))
+          (setq scalpel-agent--context-files (list path))
+          ;; Given a temp root holding doomed.el with content bye
+          ;; newline and scalpel-agent--context-files nil with
+          ;; doomed.el added to the context, when the planner deletes
+          ;; doomed.el with scalpel-agent-file-delete.
+          (setq scalpel-story-files-test-report
+                (scalpel-agent-file-delete path))
+          ;; Then the report mentions Deleted file.
+          (should (string-match-p "\\`.*Deleted file.*\\'" scalpel-story-files-test-report))
+          ;; And the file is gone from disk.
+          (should-not (file-exists-p doomed))
+          ;; And scalpel-agent--context-files no longer contains the path.
+          (should-not (member path scalpel-agent--context-files)))
+      (condition-case nil (delete-directory root t) (error nil))
+      (setq scalpel-agent--context-files nil))))
+
 (ert-gwt-deftest
   (:given ((root (make-temp-file "scalpel-story-" t))
            (scalpel-agent--context-files nil))

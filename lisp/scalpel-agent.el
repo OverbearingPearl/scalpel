@@ -889,7 +889,12 @@ kept turning on differ from the file's by separators alone: asked for
 `llm-pick-view-cache-dir', and a prefix comparison saw only the part
 both spellings share.  A name that matches under that reading is
 reported first and as the file writes it, since it is the spelling
-the planner can actually use."
+the planner can actually use.
+
+When the file lists SYMBOL itself, the name is not the problem: the
+locator reads it but could not resolve it to a location, which is
+what a definer registered under no name -- an anonymous or unbound
+one -- keeps producing.  That cause gets its own line."
   (let ((provider (scalpel-locate-provider-for-file file)))
     (cond
      ((null provider)
@@ -918,6 +923,7 @@ the planner can actually use."
                           (string= (scalpel-agent--symbol-skeleton name)
                                    skeleton))
                         symbols))
+                 (verbatim (member symbol symbols))
                  (near (cl-remove-if
                         (lambda (name) (member name same))
                         (cl-remove-if-not
@@ -934,11 +940,25 @@ the planner can actually use."
              (format (concat "\nNote: %s is in the context and defines %d "
                              "definition(s); %s is not one of them.")
                      file (length symbols) symbol)
-             (when same
+             (cond
+              ;; The name is listed exactly as asked.  Spelling is not
+              ;; the cause, so the separator-differs line must not
+              ;; fire -- "the file spells X where X was asked for"
+              ;; said nothing.  What remains is a definition the
+              ;; locator reads but cannot resolve to a place, which a
+              ;; definer registered under no name keeps producing.
+              (verbatim
+               (format (concat "\n  The locator reads %s itself but could not "
+                               "locate it; the definer that writes it is "
+                               "likely registered under no name.")
+                       symbol))
+              ;; Same skeleton, different spelling: the separators
+              ;; alone differ, and a name is taken literally.
+              (same
                (format (concat "\n  The file spells %s where %s was asked "
                                "for; only the separators differ, and a name "
                                "is taken literally.")
-                       (string-join same ", ") symbol))
+                       (string-join same ", ") symbol)))
              ;; The line is printed only when it narrows the list.  Its
              ;; point is to make the gap visible without reading the
              ;; list; a file whose every name is spelled like the asked
