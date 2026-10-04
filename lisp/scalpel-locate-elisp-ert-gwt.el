@@ -22,30 +22,30 @@
 (require 'ert-gwt)
 
 (defun scalpel-locate-elisp-ert-gwt--names (file)
-  "Return, in call order, the ert-gwt test names defined in FILE.
-Generated symbols carry the defining file in the property
-`ert-gwt--defining-file'; collect the interned symbols whose
-property equals the truename of FILE and sort them by numeric
-suffix, which preserves the order of the deftest calls in the file,
-the order the anonymous range lookup relies on.  Return nil when
-FILE is nil or no symbol was recorded for it."
-  (when file
-    (let ((truename (file-truename file))
-          (names nil))
-      (mapatoms
-       (lambda (sym)
-         (when (equal (get sym 'ert-gwt--defining-file) truename)
-           (push (symbol-name sym) names))))
-      (when names
-        (sort names
-              (lambda (a b)
-                (let ((sa (if (string-match "[0-9]+\\'" a)
-                              (match-string 0 a)
-                            "0"))
-                      (sb (if (string-match "[0-9]+\\'" b)
-                              (match-string 0 b)
-                            "0")))
-                  (< (string-to-number sa) (string-to-number sb)))))))))
+  "Return, in source order, the ert-gwt test names defined in FILE.
+Read FILE into a temp buffer and walk its top-level forms with
+`read'; for each (`ert-gwt-deftest' ...) call synthesize the symbol
+name ert-gwt-deftest-N, where N is the 1-based ordinal of the call
+in the file, matching the numbering the list-symbols fallback
+uses.  This derives the names from the source itself, so the file
+does not need to have been loaded and the result survives the test
+runner unloading features.  Return nil when FILE is nil or the
+file contains no `ert-gwt-deftest' call."
+  (when (and file (file-readable-p file))
+    (let ((names nil)
+          (count 0))
+      (with-temp-buffer
+        (insert-file-contents file)
+        (condition-case nil
+            (let (form)
+              (while t
+                (setq form (read (current-buffer)))
+                (when (and (consp form)
+                           (eq (car form) 'ert-gwt-deftest))
+                  (setq count (1+ count))
+                  (push (format "ert-gwt-deftest-%d" count) names))))
+          (end-of-file nil)))
+      (nreverse names))))
 
 (scalpel-locate-elisp-register-anonymous-definer
  'ert-gwt-deftest #'scalpel-locate-elisp-ert-gwt--names)

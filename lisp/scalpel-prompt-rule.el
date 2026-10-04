@@ -477,16 +477,63 @@ it did."
   "A round carries few actions; the budget discards the overflow.")
 
 (defconst scalpel-prompt-rule--reply-language-format
-  "The following must all be written in %s: the text of reply actions, the reason field of shell actions, and any compressed history summary."
-  "State which language natural-language replies are written in.
-The reply text includes reply actions, the reason field of shell
-actions, and any compressed history summary.
+  "The text of reply actions must be written in %s."
+  "State which language the text of reply actions is written in.
 The format string is filled with the required language name.")
+
+(defconst scalpel-prompt-rule--shell-reason-language-format
+  "The `reason' field of shell actions must be written in %s."
+  "Format string for the shell-reason language rule.")
+
+(defconst scalpel-prompt-rule--compress-reason-language-format
+  "The compressed history summary must be written in %s."
+  "Format string for the summary language rule.")
+
+(defun scalpel-prompt-rule--compress-language-rule (language)
+  "Return the rule that the compressed history summary is written in LANGUAGE.
+Return nil when LANGUAGE is nil."
+  (when language
+    (format scalpel-prompt-rule--compress-reason-language-format language)))
+
+(defun scalpel-prompt-rule--shell-reason-language-rule (language)
+  "Return a rule stating shell action reasons are written in LANGUAGE.
+Return nil when LANGUAGE is nil."
+  (when language
+    (format scalpel-prompt-rule--shell-reason-language-format language)))
 
 (defun scalpel-prompt-rule--reply-language-rule (language)
   "Return the natural-language rule for LANGUAGE, or nil if LANGUAGE is nil."
   (when language
     (format scalpel-prompt-rule--reply-language-format language)))
+
+(defun scalpel-prompt-rule--shell-action-reason-language-rule (language)
+  "Return a natural-language rule for shell action reasons.
+The rule requires the reason field of shell actions to be written in
+LANGUAGE.
+LANGUAGE is a string naming a natural language (e.g. \"English\")."
+  (format "The reason field of every shell action must be written in %s." language))
+
+(defun scalpel-prompt-rule--compress-reason-language-rule (language)
+  "Return a rule stating the compressed history summary must be in LANGUAGE.
+
+This mirrors `scalpel-prompt-rule--shell-action-reason-language-rule':
+it produces a one-sentence requirement built by formatting
+`scalpel-prompt-rule--compress-reason-language-format' with LANGUAGE."
+  (format scalpel-prompt-rule--compress-reason-language-format language))
+
+(defconst scalpel-prompt-rule--thinking-language-format
+  "Your private thinking and reasoning must be written in %s."
+  "Format string for the thinking-language prompt rule.
+Takes one argument, the language name, and yields a single sentence
+instructing the model that its private thinking and reasoning must be
+written in that language.")
+
+(defun scalpel-prompt-rule--thinking-language-rule (language)
+  "Return the prompt rule demanding thinking be written in LANGUAGE.
+LANGUAGE is a language name string; when nil, return nil so callers
+can simply omit the rule, mirroring the other language-rule helpers."
+  (when language
+    (format scalpel-prompt-rule--thinking-language-format language)))
 
 (provide 'scalpel-prompt-rule)
 

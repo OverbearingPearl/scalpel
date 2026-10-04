@@ -53,6 +53,25 @@ user option `scalpel-prompt-reply-language'."
     (scalpel-prompt-rule--reply-language-rule
      scalpel-prompt-reply-language)))
 
+(defun scalpel-prompt--thinking-language-rule ()
+  "Return the rule constraining the language of the model's private thinking.
+The result is appended to the system prompt so that, when
+`scalpel-thinking-language' is non-nil, the model's private
+thinking/reasoning is written in that language.  Returns nil when
+`scalpel-thinking-language' is nil, meaning no thinking-language
+constraint is imposed."
+  (when scalpel-thinking-language
+    (scalpel-prompt-rule--thinking-language-rule
+     scalpel-thinking-language)))
+
+(defcustom scalpel-thinking-language nil
+  "Optional language the model's reasoning/thinking output is written in.
+When nil, the model chooses the language freely.
+This variable is read by a later prompt rule."
+  :type '(choice (const :tag "Model chooses freely" nil)
+                 (string :tag "Language"))
+  :group 'scalpel)
+
 (defconst scalpel-prompt--decide-for-me
   "The choice is yours: if you've reached a conclusion and judge
 the fix safe, implement it now; if a choice remains open, pick
@@ -322,8 +341,20 @@ This controls only the wording sent to the LLM; the action schema
 is fixed by `scalpel-agent--tool-fields' and
 `scalpel-agent--tool-vocabulary' and must not be overridden here.
 Whether a reply language is imposed is controlled by
-`scalpel-prompt-reply-language'; nil there leaves the prompt
-unchanged."
+`scalpel-prompt-reply-language'; when non-nil, the reply-language
+rule is appended together with the shell-action-reason-language
+rule (from `scalpel-prompt-rule--shell-action-reason-language-rule'
+called with `scalpel-prompt-reply-language') and the
+compress-reason-language rule (from
+`scalpel-prompt-rule--compress-reason-language-rule' likewise), so
+that the shell reason field and the compressed history summary also
+follow the reply language.  When it is nil, none of the three rules
+appear and the model chooses those languages freely.
+Independently of the reply language, when `scalpel-thinking-language'
+is non-nil the thinking-language rule (from
+`scalpel-prompt--thinking-language-rule', defined next to
+`scalpel-prompt--reply-language-rule') is appended so that the
+model's thinking follows that language."
   (concat
    scalpel-prompt-rule--no-wrapper "\n"
    scalpel-prompt-rule--document "\n"
@@ -347,7 +378,17 @@ unchanged."
    scalpel-prompt-rule--no-tail "\n"
    scalpel-prompt-rule--action-budget
    (if scalpel-prompt-reply-language
-       (concat "\n" (scalpel-prompt--reply-language-rule))
+       (concat "\n"
+               (scalpel-prompt--reply-language-rule)
+               "\n"
+               (scalpel-prompt-rule--shell-action-reason-language-rule
+                scalpel-prompt-reply-language)
+               "\n"
+               (scalpel-prompt-rule--compress-reason-language-rule
+                scalpel-prompt-reply-language))
+     "")
+   (if scalpel-thinking-language
+       (concat "\n" (scalpel-prompt--thinking-language-rule))
      "")
    "\n"
    scalpel-prompt-rule--no-wrapper))
