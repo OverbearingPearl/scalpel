@@ -105,6 +105,51 @@ section."
         (push (match-string-no-properties 2) syms)))
     (nreverse syms)))
 
+(defconst scalpel-locate-markdown--definer-line-regexp
+  "- \\([^[:space]:\n]+\\):[^\n]*"
+  "Regexp matching a Markdown definer line like \"- NAME: REST\".
+The leading dash and space are literal.  Group 1 captures the
+definer name, i.e. a run of characters excluding whitespace,
+colon and newline.  The rest of the line is matched with a
+negated character class since `.' does not cross newlines.")
+
+;; Scan the current buffer and return deduplicated definer names
+;; in file order.
+(defun scalpel-locate-markdown--definer-names ()
+  "Return deduplicated definer names in the current buffer.
+Scans from `point-min' and collects group 1 matches of
+`scalpel-locate-markdown--definer-line-regexp', preserving file
+order and removing duplicates."
+  (save-excursion
+    (goto-char (point-min))
+    (let ((seen (make-hash-table :test 'equal))
+          names)
+      (while (re-search-forward
+              scalpel-locate-markdown--definer-line-regexp nil t)
+        (let ((name (match-string 1)))
+          (unless (gethash name seen)
+            (puthash name t seen)
+            (push name names))))
+      (nreverse names))))
+
+;; Public entry: sync FILE into a buffer and extract definer names.
+(defun scalpel-locate-markdown-definer-names (file)
+  "Return the deduplicated definer names found in FILE.
+The file is synced into a temporary buffer via
+`scalpel-locate--sync-buffer', then scanned in file order."
+  (with-temp-buffer
+    (scalpel-locate--sync-buffer file)
+    (scalpel-locate-markdown--definer-names)))
+
+(defun scalpel-locate-markdown-register-provider ()
+  "Register the markdown locate provider with Scalpel."
+  (scalpel-locate-register-provider
+   "\\.\\(?:md\\|markdown\\)\\'"
+   (list :locate 'scalpel-locate-markdown-range
+         :list-symbols 'scalpel-locate-markdown-list-symbols
+         :single-definition-p 'scalpel-locate-markdown--single-definition-p
+         :definer-names 'scalpel-locate-markdown-definer-names)))
+
 (provide 'scalpel-locate-markdown)
 
 ;;; scalpel-locate-markdown.el ends here

@@ -47,6 +47,9 @@ shape must not be reported as having a bracket problem.")
 (defun scalpel-locate-register-provider (regexp provider)
   "Register PROVIDER for file names matching REGEXP.
 PROVIDER is a plist with :locate and :list-symbols entries.
+It may also carry :definer-names, used by the agent layer to ask a
+dialect for the definer names its text declares, without the agent
+knowing any line format.
 Registering the same REGEXP replaces the previous provider."
   (setq scalpel-locate-providers
         (cons (cons regexp provider)
@@ -202,7 +205,8 @@ larger than the number of names the file holds."
  "\\.md\\'"
  (list :locate #'scalpel-locate-markdown-range
        :list-symbols #'scalpel-locate-markdown-list-symbols
-       :single-definition-p #'scalpel-locate-markdown--single-definition-p))
+       :single-definition-p #'scalpel-locate-markdown--single-definition-p
+       :definer-names #'scalpel-locate-markdown-definer-names))
 
 (provide 'scalpel-locate)
 
