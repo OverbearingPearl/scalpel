@@ -78,6 +78,63 @@ rules out both, whatever `regexp-opt' emits inside.")
           "\\([^ \t\n()]+\\)")
   "Regex matching a top-level Emacs Lisp definer and capturing its name.")
 
+(defconst scalpel-locate-elisp--anonymous-definer-registry
+  '()
+  "Alist mapping definer symbols to locator functions for anonymous definitions.
+
+Each entry maps a definer symbol (e.g. `cl-defmethod' with an implicit
+name, or macros that generate definitions without writing the name in
+the source) to a function taking a FILE argument and returning, in
+call order, the list of definition names that definer expands to in
+that file.
+
+This registry is needed because anonymous names never appear in the
+source text: `scalpel-locate-elisp--def-name-regex' and literal name
+searches cannot see them, so expansion-time bookkeeping is the only
+reliable way to locate such definitions.")
+
+(defun scalpel-locate-elisp-count-definer-forms (definer)
+  "Count top-level forms in the current buffer headed by DEFINER.
+DEFINER is a symbol naming a definer macro.  Scan using `forward-sexp'
+so that only top-level forms are considered.  Read errors and end of
+buffer are handled gracefully; this function never signals."
+  (save-excursion
+    (save-restriction
+      (widen)
+      (goto-char (point-min))
+      (let ((count 0)
+            (definer-name (symbol-name definer)))
+        (while (condition-case nil
+                   (progn (forward-sexp) t)
+                 (scan-error nil)
+                 (invalid-regexp nil)
+                 (args-out-of-range nil))
+          (condition-case nil
+              (save-excursion
+                (backward-sexp)
+                (forward-comment (point-max))
+                (when (looking-at (concat "(" (regexp-quote definer-name)
+                                          "\\(?:[ \t\n\r]\\|)\\)"))
+                  (setq count (1+ count))))
+            (error nil)))
+        count))))
+
+(defun scalpel-locate-elisp-register-anonymous-definer (symbol function)
+  "Register SYMBOL as an anonymous definer whose names FUNCTION supplies.
+
+FUNCTION is called with the file path and must return, in call
+order, the definition names the calls of SYMBOL in that file
+generate at macro-expansion time.  Re-registering a symbol
+replaces its function.  Registration belongs to the package that
+defines the macro, because only it knows how the names come
+about.  Returns nil."
+  (setq scalpel-locate-elisp--anonymous-definer-registry
+        (assq-delete-all
+         symbol scalpel-locate-elisp--anonymous-definer-registry))
+  (push (cons symbol function)
+        scalpel-locate-elisp--anonymous-definer-registry)
+  nil)
+
 (defun scalpel-locate-elisp--top-definition-range (symbol)
   "Return (BEG . END) of top-level form named SYMBOL in current buffer.
 Return nil when SYMBOL is absent."
@@ -93,10 +150,51 @@ Return nil when SYMBOL is absent."
           (forward-list 1)
           (cons beg (point)))))))
 
-(defun scalpel-locate-elisp-range (_file symbol)
+(defun scalpel-locate-elisp--top-definition-anonymous-range (symbol file)
+  "Locate the range of the anonymous top-level definition of SYMBOL.
+Walk the anonymous definer registry: for the first entry whose
+function, called with FILE, returns a name list containing SYMBOL,
+compute SYMBOL's index in that list, then scan the current buffer's
+top-level forms with `read'.  Return (BEG . END) of the definer call
+whose occurrence index matches, where BEG is the form start after
+leading whitespace and END is point after `read' consumed the form.
+Return nil when no registered definer accounts for SYMBOL or when the
+walk ends early on a read error."
+  (let ((target nil))
+    (dolist (entry scalpel-locate-elisp--anonymous-definer-registry)
+      (unless target
+        (let ((names (funcall (cdr entry) file)))
+          (when (member symbol names)
+            (setq target (cons (car entry)
+                               (- (length names)
+                                  (length (member symbol names)))))))))
+    (when target
+      (let ((definer (car target))
+            (index (cdr target))
+            (seen 0))
+        (save-excursion
+          (save-restriction
+            (widen)
+            (goto-char (point-min))
+            (condition-case nil
+                (catch 'done
+                  (while t
+                    (forward-comment (buffer-size))
+                    (let ((beg (point))
+                          (form (read (current-buffer))))
+                      (when (and (consp form) (eq (car form) definer))
+                        (if (eq seen index)
+                            (throw 'done (cons beg (point)))
+                          (setq seen (1+ seen)))))))
+              (error nil))))))))
+
+(defun scalpel-locate-elisp-range (file symbol)
   "Return byte range of SYMBOL definition as (BEG . END) in current buffer.
-Current buffer is the Emacs Lisp file referenced by FILE."
-  (scalpel-locate-elisp--top-definition-range symbol))
+Current buffer is the Emacs Lisp file referenced by FILE.  A
+symbol the literal search cannot find may still be generated by a
+registered anonymous definer; that case is tried as a fallback."
+  (or (scalpel-locate-elisp--top-definition-range symbol)
+      (scalpel-locate-elisp--top-definition-anonymous-range file symbol)))
 
 (defun scalpel-locate-elisp--single-definition-p (text)
   "Return non-nil when TEXT is one or more complete defining forms.
@@ -220,15 +318,67 @@ about explaining one."
   (and (eql 1 (scalpel-locate-elisp--form-count text))
        (consp (car (read-from-string text)))))
 
-(defun scalpel-locate-elisp-list-symbols (_file)
-  "Return a list of top-level definition names in current buffer."
+(defun scalpel-locate-elisp-list-symbols (file)
+  "Return a list of top-level definition names in current buffer.
+
+Literal names come from `scalpel-locate-elisp--def-name-regex'.
+Names a registered anonymous definer generates are asked from its
+registry function and merged in, so macros whose definitions carry
+no source-level name still answer when the file has been loaded.
+Independently of the registry, a load-free source-level fallback
+walks the top-level forms of the buffer one at a time: any form
+whose head is a member of `scalpel-locate-elisp--defining-forms'
+but whose second element is a list rather than a symbol or string
+\(e.g. an ert-gwt-deftest call like (ert-gwt-deftest (:given ...)
+...) whose clauses follow the head directly) carries no name in
+the usual place and counts as an anonymous use; such calls are
+counted per definer in source order and synthesized as
+\"<definer>-1\", \"<definer>-2\", ..., so even never-loaded files
+still contribute a stable count.  FILE is the path the caller
+names; anonymous-definer functions receive it unchanged."
   (let ((case-fold-search nil)
         syms)
+    ;; Literal names via the source-level regex scan.
     (save-excursion
       (goto-char (point-min))
       (while (re-search-forward scalpel-locate-elisp--def-name-regex nil t)
         (push (match-string-no-properties 2) syms)))
-    (nreverse syms)))
+    (setq syms (nreverse syms))
+    ;; Names generated by registered anonymous definers (needs the
+    ;; file to have been loaded; failure or nil is tolerated here,
+    ;; the source-level fallback below covers those cases).
+    (dolist (entry scalpel-locate-elisp--anonymous-definer-registry)
+      (let ((names (condition-case nil
+                       (funcall (cdr entry) file)
+                     (error nil))))
+        (when names
+          (dolist (name names)
+            (push name syms)))))
+    ;; Source-level fallback needing no registration: walk the
+    ;; top-level forms and synthesize placeholder names for
+    ;; anonymous defining calls.
+    (save-excursion
+      (goto-char (point-min))
+      (let ((anon-counts (make-hash-table :test #'eq)))
+        (condition-case nil
+            (while (not (eobp))
+              (let ((form (read (current-buffer))))
+                (let ((head (car-safe form)))
+                  (when (and (symbolp head)
+                             (memq head scalpel-locate-elisp--defining-forms)
+                             ;; Anonymous use: no name in the usual
+                             ;; place -- the second element is itself
+                             ;; a list, e.g. (ert-gwt-deftest (:given
+                             ;; ...) ...) with clauses after the head.
+                             (consp (cadr form)))
+                    (let ((n (1+ (gethash head anon-counts 0))))
+                      (puthash head n anon-counts)
+                      (push (format "%s-%d" (symbol-name head) n) syms))))))
+          ;; A malformed or truncated file still yields whatever we
+          ;; managed to read so far.
+          (invalid-read-syntax nil)
+          (end-of-file nil))))
+    (delete-dups (nreverse syms))))
 
 (defun scalpel-locate-elisp-undefined-definers (_file)
   "Scan the current buffer for defining-form heads missing registration.
