@@ -212,6 +212,18 @@ Drop: verbose tool outputs, redundant back-and-forth, and superseded attempts.
 Respond with the summary only."
   "Instruction sent with the history when the console offers compression.")
 
+(defun scalpel-prompt--history-compress-instruction ()
+  "Return the fixed history-compression instruction.
+When `scalpel-prompt-reply-language' is non-nil, append a rule on
+its own line telling the summarizer to write the summary in that
+language."
+  (if scalpel-prompt-reply-language
+      (concat scalpel-prompt--history-compress-instruction
+              "\nWrite the summary in "
+              scalpel-prompt-reply-language
+              ".")
+    scalpel-prompt--history-compress-instruction))
+
 (defconst scalpel-prompt--history-compress-preamble
   "State that this text is a compressed report of the earlier
 conversation and needs no reply.  Kept in English because it is read

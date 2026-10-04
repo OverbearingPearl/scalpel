@@ -477,8 +477,11 @@ it did."
   "A round carries few actions; the budget discards the overflow.")
 
 (defconst scalpel-prompt-rule--reply-language-format
-  "Natural-language rule: all natural-language reply text must be written in %s."
-  "Format string stating which natural language reply actions are written in.")
+  "Natural-language reply text must be written in %s."
+  "State which language natural-language replies are written in.
+The reply text includes reply actions, the reason field of shell
+actions, and any compressed history summary.
+The format string is filled with the required language name.")
 
 (defun scalpel-prompt-rule--reply-language-rule (language)
   "Return the natural-language rule for LANGUAGE, or nil if LANGUAGE is nil."
