@@ -2016,6 +2016,15 @@ the same pattern unchanged.\n"
                 blocks))))
     (apply #'string-join (list (nreverse blocks) ""))))
 
+(defun scalpel-agent--perlre-toc-for-refusal ()
+  "Return the perlre table of contents for a zero-match refusal.
+Delegates to the prompt layer's `scalpel-prompt--perlre-toc'.
+If perldoc is unavailable or errors, return the empty string so the
+refusal assembly is never blocked."
+  (condition-case nil
+      (or (scalpel-prompt--perlre-toc) "")
+    (error "")))
+
 (defun scalpel-agent--substitute-invocation (pattern replacement)
   "Return the pattern and the replacement of a file-substitute, on one line.
 Both halves are named whatever the refusal's cause was: a pattern and
@@ -2642,7 +2651,10 @@ because a bulk rename leaves the old name in the planner's hands and the
 next round's locate failure explains nothing on its own.
 A zero-match refusal quotes the lines that begin like the pattern when
 Emacs can read it, so the planner can correct the pattern it wrote.  The
-report quotes before/after lines for the first occurrences, so a
+zero-match refusal also carries a perlre learning hint through
+`scalpel-agent--perlre-toc-for-refusal', so the next pattern attempt can
+correct the perl regexp dialect itself rather than re-deriving it from
+memory.  The report quotes before/after lines for the first occurrences, so a
 prose-damaging replacement is visible, not just counted.  Every refusal
 states the pattern and the replacement together, through
 `scalpel-agent--substitute-invocation', because the two are one action:
@@ -2725,7 +2737,10 @@ can offer block-edit as the retry."
     (unless (cl-some (lambda (entry) (> (nth 3 entry) 0)) staged)
       (let ((note (condition-case nil
                       (scalpel-agent--substitute-near-miss-note staged pattern)
-                    (error ""))))
+                    (error "")))
+            (perlre (condition-case nil
+                        (scalpel-agent--perlre-toc-for-refusal)
+                      (error ""))))
         (signal 'scalpel-planner-error
                 (list :type 'pattern-no-match
                       :message (concat
@@ -2737,7 +2752,10 @@ can offer block-edit as the retry."
                                 (scalpel-agent--perl-invocation pattern replacement)
                                 (if (equal note "")
                                     "\\nNo line in any of the files even begins like the pattern, so the files are likely already in the target state or were rewritten by an earlier round; resending the identical action is pointless."
-                                  note))))))
+                                  note)
+                                (if (equal perlre "")
+                                    ""
+                                  (concat "\\n" perlre)))))))
     ;; Second pass: apply through the visiting buffers and save, the way
     ;; `scalpel-execute' writes.
     (let ((lines nil))
