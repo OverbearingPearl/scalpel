@@ -230,6 +230,47 @@ about explaining one."
         (push (match-string-no-properties 2) syms)))
     (nreverse syms)))
 
+(defun scalpel-locate-elisp-undefined-definers (_file)
+  "Scan the current buffer for defining-form heads missing registration.
+
+Read each top-level form and report its head symbol when all of
+the following hold: the symbol is not registered in
+`scalpel-locate-elisp--defining-forms'; its name contains the
+definer morpheme \"def\" (covering \"def-*\", \"define-*\",
+\"cl-def*\", \"transient-define-*\" and \"ert-deftest\"); and the
+second element of the form is an unquoted symbol, so forms whose
+name argument is quoted (such as \"defalias\" calls) are skipped,
+matching the registry's own policy.
+
+Return the deduplicated list of such symbol names, in order of
+first appearance, so that a missed registration is discoverable
+instead of silent.  The scan stops cleanly on a read error at end
+of buffer or on an unbalanced file, keeping the symbols collected
+so far."
+  (save-excursion
+    (goto-char (point-min))
+    (let ((seen (make-hash-table :test #'equal))
+          result)
+      (catch 'done
+        (while t
+          (let ((form (condition-case nil
+                          (read (current-buffer))
+                        (end-of-file (throw 'done nil))
+                        (invalid-read-syntax (throw 'done nil))
+                        (scan-error (throw 'done nil)))))
+            (when (consp form)
+              (let ((head (car form)))
+                (when (and (symbolp head)
+                           (string-match-p "def" (symbol-name head))
+                           (not (member head
+                                        scalpel-locate-elisp--defining-forms))
+                           (symbolp (cadr form)))
+                  (let ((name (symbol-name head)))
+                    (unless (gethash name seen)
+                      (puthash name t seen)
+                      (push name result)))))))))
+      (nreverse result))))
+
 (provide 'scalpel-locate-elisp)
 
 ;;; scalpel-locate-elisp.el ends here

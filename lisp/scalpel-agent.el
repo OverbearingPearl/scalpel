@@ -670,13 +670,57 @@ names that git ignores, marked \"(gitignored)\".  Return the string
       "No files in context."
     (string-join
      (mapcar (lambda (file)
-               (if (scalpel-locate-provider-for-file file)
-                   (format "FILE: %s\nSYMBOLS: %s"
-                           file
-                           (string-join (scalpel-locate-list-symbols file) ", "))
-                 (format "FILE: %s" file)))
+               (let ((base (if (scalpel-locate-provider-for-file file)
+                               (format "FILE: %s\nSYMBOLS: %s"
+                                       file
+                                       (string-join (scalpel-locate-list-symbols file) ", "))
+                             (format "FILE: %s" file))))
+                 (if-let ((note (scalpel-agent-unregistered-definers-note file)))
+                     (concat base "\n" note)
+                   base)))
              scalpel-agent--context-files)
      "\n\n")))
+
+(defvar scalpel-agent-definer-registry nil
+  "Alist mapping definer name strings to their description strings.
+Generated context files may declare definers with \"- NAME: DESCRIPTION\"
+lines; names missing from this registry are reported as unregistered.")
+
+(defun scalpel-agent-unregistered-definers-note (context-file)
+  "Return the UNREGISTERED-DEFINERS note for CONTEXT-FILE, or nil.
+CONTEXT-FILE is a generated context file that may declare definers
+with lines of the form \"- NAME: DESCRIPTION\".  Every definer name
+found in the file is checked against `scalpel-agent-definer-registry';
+names that are missing from the registry are collected into a note
+telling the agent that those definers exist but are not registered.
+When CONTEXT-FILE does not exist, or when every definer found in it
+is registered, return nil so the caller can omit the note entirely."
+  (when (and context-file (file-exists-p context-file))
+    (let ((unregistered '()))
+      (with-temp-buffer
+        (insert-file-contents context-file)
+        (goto-char (point-min))
+        ;; Match "- NAME: REST-OF-LINE".  The leading "- " is matched
+        ;; literally; the parenthesized group is a grouping construct and
+        ;; must not be escaped.  NAME is captured with a negated character
+        ;; class excluding whitespace, colon and newline, which stops the
+        ;; match at the colon without relying on non-greedy repetition
+        ;; (Emacs regexps have no lazy quantifiers).  The description part
+        ;; uses "\\(?:.*\\)" which, by default, does not cross newlines,
+        ;; so each line is matched independently.
+        (while (re-search-forward
+                "^- \\([^ \t\n:]+\\)[ \t]*:[ \t]*\\(.*\\)$" nil t)
+          (let ((name (match-string 1)))
+            (unless (assoc name scalpel-agent-definer-registry)
+              (cl-pushnew name unregistered :test #'equal)))))
+      (when unregistered
+        (setq unregistered (nreverse unregistered))
+        (concat
+         "UNREGISTERED-DEFINERS: the following definers appear in "
+         (file-name-nondirectory context-file)
+         " but are not registered in `scalpel-agent-definer-registry': "
+         (string-join unregistered ", ")
+         ". Treat them as unverified until registered.")))))
 
 (defun scalpel-agent--project-actions (actions)
   "Project parsed ACTIONS plists onto each tool's field contract.
