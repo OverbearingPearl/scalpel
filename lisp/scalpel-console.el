@@ -1252,67 +1252,73 @@ expansion through gitignore rules."
           (scalpel-console--show-context))))))
 
 (defun scalpel-console-forget-history ()
-  "Stop sending the current conversation to the agent.
-Every prior turn keeps its place in the buffer but loses its
-`scalpel-console-role' tag, so `scalpel-console--history' no
-longer returns it.  Forgetting is about what the agent reads, not
-about what the user sees: the turns stay on screen and can still
-be reviewed.  The next instruction is sent as the first turn of a
-new session, so the request no longer grows with the length of the
-session.  The header, the context tree and the file list are kept:
-the context is input, not memory — to reset it use
+  "Stop sending the current conversation to the agent, asking for confirmation.
+Since forgetting is destructive to the session history, the command
+prompts with `y-or-n-p' before dropping anything; answering no
+leaves everything untouched and only reports that nothing was
+forgotten.  Every prior turn keeps its place in the buffer but
+loses its `scalpel-console-role' tag, so
+`scalpel-console--history' no longer returns it.  Forgetting is
+about what the agent reads, not about what the user sees: the
+turns stay on screen and can still be reviewed.  The next
+instruction is sent as the first turn of a new session, so the
+request no longer grows with the length of the session.  The
+header, the context tree and the file list are kept: the context
+is input, not memory — to reset it use
 `scalpel-console-reset-context'.  The consumed-body marks go with
 the turns: a forgotten turn is not read at all, so a mark saying its
 body was dropped would describe the wrong thing."
   (interactive)
-  (with-current-buffer (scalpel-console--target-buffer)
-    (let ((inhibit-read-only t)
-          (pos (point-min))
-          ranges)
-      ;; Collect every conversation region before touching anything:
-      ;; clearing the role places a new property boundary, and
-      ;; `next-single-property-change' below must see the original
-      ;; layout.
-      (while (< pos (point-max))
-        (let ((next (next-single-property-change
-                     pos 'scalpel-console-role nil (point-max))))
-          (when (get-text-property pos 'scalpel-console-role)
-            (push (cons pos next) ranges))
-          (setq pos next)))
-      ;; Drop the role tag instead of the text: `scalpel-console--history'
-      ;; reads only tagged regions, so clearing the tag removes the turn
-      ;; from the conversation while leaving it visible in the buffer.
-      (dolist (range ranges)
-        (put-text-property (car range) (cdr range)
-                           'scalpel-console-role nil)
-        ;; A forgotten turn is history on screen, not an instruction
-        ;; still to send: tag it so it never reads back as input.
-        (put-text-property (car range) (cdr range)
-                           'scalpel-console-output t))
-      ;; Clear the consumed-body marks before coloring: with the roles
-      ;; cleared above, no turn is an assistant turn any more, so
-      ;; re-deriving the marks clears them without re-applying any.
-      (scalpel-console--refresh-consumed-body-markers)
-      ;; Dim the text last: the shadow face says at a glance that what
-      ;; the user sees is history, not the live conversation.  Applying
-      ;; it after the refresh above means every forgotten turn,
-      ;; including the old report headers, ends up shadowed.
-      (dolist (range ranges)
-        (put-text-property (car range) (cdr range)
-                           'face 'shadow))
-      ;; Leave a display-only note at the end of the buffer.  It carries
-      ;; `scalpel-console-output' and no role, so it never reads back as
-      ;; conversation or input; it only tells the user where the old
-      ;; conversation ends.
-      (goto-char (point-max))
-      (let ((inhibit-read-only nil))
-        (insert (propertize
-                 "\nScalpel: the conversation above was forgotten; it stays visible but is no longer part of what the agent reads.\n\n"
-                 'face 'shadow
-                 'scalpel-console-output t
-                 'rear-nonsticky t)))
-      (goto-char (point-max))
-      (message "Scalpel: conversation forgotten; the text stays on screen."))))
+  (if (not (y-or-n-p "Forget the whole Scalpel conversation history? "))
+      (message "Scalpel: conversation history kept; nothing was forgotten.")
+    (with-current-buffer (scalpel-console--target-buffer)
+      (let ((inhibit-read-only t)
+            (pos (point-min))
+            ranges)
+        ;; Collect every conversation region before touching anything:
+        ;; clearing the role places a new property boundary, and
+        ;; `next-single-property-change' below must see the original
+        ;; layout.
+        (while (< pos (point-max))
+          (let ((next (next-single-property-change
+                       pos 'scalpel-console-role nil (point-max))))
+            (when (get-text-property pos 'scalpel-console-role)
+              (push (cons pos next) ranges))
+            (setq pos next)))
+        ;; Drop the role tag instead of the text: `scalpel-console--history'
+        ;; reads only tagged regions, so clearing the tag removes the turn
+        ;; from the conversation while leaving it visible in the buffer.
+        (dolist (range ranges)
+          (put-text-property (car range) (cdr range)
+                             'scalpel-console-role nil)
+          ;; A forgotten turn is history on screen, not an instruction
+          ;; still to send: tag it so it never reads back as input.
+          (put-text-property (car range) (cdr range)
+                             'scalpel-console-output t))
+        ;; Clear the consumed-body marks before coloring: with the roles
+        ;; cleared above, no turn is an assistant turn any more, so
+        ;; re-deriving the marks clears them without re-applying any.
+        (scalpel-console--refresh-consumed-body-markers)
+        ;; Dim the text last: the shadow face says at a glance that what
+        ;; the user sees is history, not the live conversation.  Applying
+        ;; it after the refresh above means every forgotten turn,
+        ;; including the old report headers, ends up shadowed.
+        (dolist (range ranges)
+          (put-text-property (car range) (cdr range)
+                             'face 'shadow))
+        ;; Leave a display-only note at the end of the buffer.  It carries
+        ;; `scalpel-console-output' and no role, so it never reads back as
+        ;; conversation or input; it only tells the user where the old
+        ;; conversation ends.
+        (goto-char (point-max))
+        (let ((inhibit-read-only nil))
+          (insert (propertize
+                   "\nScalpel: the conversation above was forgotten; it stays visible but is no longer part of what the agent reads.\n\n"
+                   'face 'shadow
+                   'scalpel-console-output t
+                   'rear-nonsticky t)))
+        (goto-char (point-max))
+        (message "Scalpel: conversation forgotten; the text stays on screen.")))))
 
 (defvar-local scalpel-console--compression-baseline 0
   "Cumulative token total (uploaded plus received) at the last compression offer.

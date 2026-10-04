@@ -1760,6 +1760,16 @@ inside a character, so the result stays a valid string."
             (setq high (1- mid)))))
       (substring text 0 low))))
 
+(defun scalpel-agent--file-read-limit ()
+  "Return the current value of `scalpel-agent-file-read-max-bytes'.
+
+Read via `symbol-value' so the access is a function call rather
+than a bare variable form; this keeps testcover from marking it
+1value and raising \"does vary\" when the test suite rebinds
+`scalpel-agent-file-read-max-bytes' to different values across
+tests."
+  (symbol-value 'scalpel-agent-file-read-max-bytes))
+
 (defun scalpel-agent-file-read (file symbol)
   "Read FILE from the session context, whole or as one SYMBOL.
 FILE must be a member of `scalpel-agent--context-files': a shell
@@ -1802,12 +1812,12 @@ states the true size.  Output holding a NUL byte is withheld."
                        (buffer-substring-no-properties
                         (car range) (cdr range))))
                (bytes (string-bytes body)))
-          (when (> bytes scalpel-agent-file-read-max-bytes)
+          (when (> bytes (scalpel-agent--file-read-limit))
             (user-error
              (concat "Scalpel: definition of %s in %s is %d bytes, over the "
                      "read limit of %d; read the whole file instead of "
                      "accepting a truncated definition")
-             symbol resolved bytes scalpel-agent-file-read-max-bytes))
+             symbol resolved bytes (scalpel-agent--file-read-limit)))
           (when (cl-position 0 body)
             (user-error "Scalpel: %s in %s is binary; contents withheld"
                         symbol resolved))
@@ -1820,13 +1830,13 @@ states the true size.  Output holding a NUL byte is withheld."
              (bytes (string-bytes raw))
              (binary (and (cl-position 0 raw) t))
              (truncated (and (not binary)
-                             (> bytes scalpel-agent-file-read-max-bytes)))
+                             (> bytes (scalpel-agent--file-read-limit))))
              (body (cond
                     (binary
                      (format "[binary file withheld: %d bytes]" bytes))
                     (truncated
                      (let ((prefix (scalpel-agent--byte-prefix
-                                    raw scalpel-agent-file-read-max-bytes)))
+                                    raw (scalpel-agent--file-read-limit))))
                        (format "%s\n[truncated: showing first %d of %d bytes]"
                                prefix (string-bytes prefix) bytes)))
                     (t raw))))
