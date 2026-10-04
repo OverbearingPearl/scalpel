@@ -39,8 +39,13 @@
 Staged and unstaged tracked changes are committed; untracked files
 are left alone.  The first commit from a console asks for a style
 and a language and keeps both as that console's defaults; later
-commits reuse them.  The message is shown in the commit buffer for
-confirmation."
+commits reuse them.  Before generating the message, the command
+asks whether unstaged changes to tracked files should be included:
+answering yes stages all tracked changes (git add -u) before
+committing, while answering no commits only what is already
+staged.  The choice is remembered per console in the buffer-local
+variable `scalpel-commit--stage-all' and reused on later commits.
+The message is shown in the commit buffer for confirmation."
   (interactive)
   (unless (bound-and-true-p scalpel-console--root)
     (user-error "Scalpel: run this from a scalpel console"))
@@ -49,6 +54,10 @@ confirmation."
     (scalpel-commit--style)
     (scalpel-commit--language)
     (with-current-buffer console
+      (setq scalpel-commit--stage-all
+            (y-or-n-p "Include unstaged tracked changes? "))
+      (when scalpel-commit--stage-all
+        (scalpel-commit--git (list "add" "-u") workdir))
       (when scalpel-commit--busy
         (message "Scalpel: request rejected; another commit message generation is already in progress in this console")
         (user-error "Scalpel: a commit is already running in this console"))
@@ -137,6 +146,12 @@ Captured in the commit buffer at generation time, so regeneration
 and confirming the commit never depend on the console buffer still
 being alive.  Nil until a message is generated.")
 
+(defvar-local scalpel-commit--stage-all nil
+  "Controls whether unstaged tracked changes are staged before committing.
+Non-nil means unstaged tracked changes are staged with `git add -u'
+before the commit message is generated; nil means only
+already-staged content is committed.")
+
 (defvar-local scalpel-commit--untracked-files nil
   "List of untracked path strings captured when the commit message was generated.
 Display-only; these files are never staged or included in the commit.
@@ -179,11 +194,17 @@ message may no longer describe the tree."
 
 (defun scalpel-commit--diff (workdir)
   "Return the diff the message must describe for WORKDIR.
-Only changes already staged for commit are covered: the message
-must describe the staged diff exactly.  Unstaged and untracked
-changes stay out of the diff entirely.
+Honor the per-console choice in `scalpel-commit--stage-all', read
+buffer-locally from the caller's current buffer (the console) at
+call time.  When non-nil, run \"git add -u\" first so the diff
+covers staged and unstaged tracked changes together; when nil,
+stage nothing and the diff covers only what is already staged.
+Unstaged and untracked changes stay out of the diff in that mode.
 Function context and a wide -U are on the diff so a hunk always
 names the function it touches; the message must never guess."
+  (when (buffer-local-value 'scalpel-commit--stage-all
+                            (current-buffer))
+    (scalpel-commit--git (list "add" "-u") workdir))
   (scalpel-commit--git (list "diff" "--cached"
                              "-U10" "--function-context"
                              "--no-color" "--no-ext-diff")
@@ -364,14 +385,20 @@ message.  Everything outside the message body is shadow-faced."
   "Ask the LLM for a message and show it in the commit buffer.
 CONSOLE is the console that owns the choices; WORKDIR is the
 working directory to diff; EXTRA is the regeneration instruction
-or nil."
+or nil.  The per-console stage-all choice is honored when
+building the diff."
   (let* ((style (if (buffer-live-p console)
                     (buffer-local-value 'scalpel-commit--style console)
                   nil))
          (language (if (buffer-live-p console)
                        (buffer-local-value 'scalpel-commit--language console)
                      nil))
-         (diff (when workdir (scalpel-commit--diff workdir))))
+         (stage-all (if (buffer-live-p console)
+                        (buffer-local-value 'scalpel-commit--stage-all console)
+                      nil))
+         (diff (when workdir
+                 (let ((scalpel-commit--stage-all stage-all))
+                   (scalpel-commit--diff workdir)))))
     (unless workdir
       (user-error "Scalpel: console has no root directory"))
     (unless (and diff (not (string-empty-p diff)))
@@ -457,58 +484,61 @@ Use EXTRA as the new instruction."
     (kill-buffer buffer)))
 
 (defun scalpel-commit--commit ()
-  "Run `git commit' with the message shown in the buffer.
+"Run `git commit' with the message shown in the buffer.
 The buffer content is validated first: both the \"--- BEGIN COMMIT
 MESSAGE ---\" and \"--- END COMMIT MESSAGE ---\" marker lines must be
 present, with BEGIN before END; a missing marker is reported as a
 user-error naming it.
 The tree is re-checked next: a file changed since the message was
 generated means the message may be stale, and the user is told to
-regenerate rather than commit something undescribed.  The commit
-carries only what is already staged; unstaged changes to tracked
-files are never staged automatically, and untracked files stay out
-of the commit as before, matching the diff that is now a plain
+regenerate rather than commit something undescribed.  What the
+commit carries depends on the per-console `scalpel-commit--stage-all'
+choice made when the message was generated: when non-nil, unstaged
+tracked changes were staged with `git add -u' beforehand and the
+commit includes staged plus unstaged tracked changes; when nil, only
+what was already staged is committed.  Untracked files stay out of
+the commit either way, matching the diff that is now a plain
 `git diff --cached'.
 After committing, the status is re-read: only a non-nil status that
 still reports a tracked change (a line not starting with `??') means
 the commit failed; a nil status (git error or a stubbed read in
 tests) counts as success and the user is never asked to commit
 manually on its account."
-  (interactive)
-  (let ((workdir (scalpel-commit--workdir))
-        (begin-marker "--- BEGIN COMMIT MESSAGE ---")
-        (end-marker "--- END COMMIT MESSAGE ---"))
-    (message "Scalpel: committing...")
-    (let ((begin-pos (save-excursion
-                       (goto-char (point-min))
-                       (re-search-forward
-                        (concat "^" (regexp-quote begin-marker) "$") nil t))))
-      (unless begin-pos
-        (user-error "Scalpel: missing marker line: %s" begin-marker))
-      (let ((end-pos (save-excursion
-                       (goto-char begin-pos)
-                       (re-search-forward
-                        (concat "^" (regexp-quote end-marker) "$") nil t))))
-        (unless end-pos
-          (user-error "Scalpel: missing marker line: %s" end-marker))))
-    (when (scalpel-commit--tree-changed-p workdir)
-      (user-error
-       (concat "Scalpel: the working tree changed since this message "
-               "was generated; regenerate with C-c C-n first")))
-    (let ((message (scalpel-commit--message-text)))
-      (unless (and message (not (string-empty-p message)))
-        (user-error "Scalpel: no commit message to commit"))
-      (unless (scalpel-commit--git
-               (list "commit" "-m" message)
-               workdir)
-        (let ((err (with-temp-buffer
-                     (apply #'call-process "git" nil t nil
-                            (append (list "-C" workdir
-                                          "commit" "-m" message)))
-                     (buffer-string))))
-          (user-error "Scalpel: git commit failed:\n%s" err)))
-      (message "Scalpel: committed")
-      (scalpel-commit--abort))))
+(interactive)
+(let ((workdir (scalpel-commit--workdir))
+(begin-marker "--- BEGIN COMMIT MESSAGE ---")
+(end-marker "--- END COMMIT MESSAGE ---"))
+(message "Scalpel: committing...")
+(let ((begin-pos (save-excursion
+(goto-char (point-min))
+(re-search-forward
+(concat "^" (regexp-quote begin-marker) "$") nil t))))
+(unless begin-pos
+(user-error "Scalpel: missing marker line: %s" begin-marker))
+(let ((end-pos (save-excursion
+(goto-char begin-pos)
+(re-search-forward
+(concat "^" (regexp-quote end-marker) "$") nil t))))
+(unless end-pos
+(user-error "Scalpel: missing marker line: %s" end-marker))))
+(when (scalpel-commit--tree-changed-p workdir)
+(user-error
+(concat "Scalpel: the working tree changed since this message "
+"was generated; regenerate with C-c C-n first")))
+(let ((message (scalpel-commit--message-text)))
+(unless (and message (not (string-empty-p message)))
+(user-error "Scalpel: no commit message to commit"))
+(unless (scalpel-commit--git
+(list "commit" "-m" message)
+workdir)
+(let ((err (with-temp-buffer
+(apply #'call-process "git" nil t nil
+(append (list "-C" workdir
+"commit" "-m" message)))
+(buffer-string))))
+(user-error "Scalpel: git commit failed:\n%s" err)))
+(message "Scalpel: committed")
+(scalpel-commit--abort))))
 
 (defun scalpel-commit--message-text ()
   "Return the message body between the begin/end commit message markers, or nil."
