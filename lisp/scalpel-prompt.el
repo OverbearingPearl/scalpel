@@ -148,14 +148,20 @@ is never blocked."
                       (string-join (nreverse lines) "\n"))))
               (error "")))))
 
-(defun scalpel-prompt--substitute-retry-instruction ()
-  "Return the unified exit for all substitute-related retry wording.
+(defun scalpel-prompt--stale-file-retry-instruction ()
+  "Return the dedicated retry instruction for stale-file errors.
 
-Formats `scalpel-prompt-rule--substitute-retry' with the Perl-regexp
-table of contents produced by `scalpel-prompt--perlre-toc' as its
-single %s argument."
-  (format scalpel-prompt-rule--substitute-retry
-          (scalpel-prompt--perlre-toc)))
+Supplies the wording used by the console self-heal loop when a
+stale-file error is detected, returning the constant
+`scalpel-prompt-rule--stale-file-retry' unchanged."
+  scalpel-prompt-rule--stale-file-retry)
+
+(defun scalpel-prompt--substitute-retry-instruction ()
+  "Return the stale-file retry instruction wording.
+The wording itself lives in `scalpel-prompt-rule--stale-file-retry'; this
+function is only the selection/formatting layer.  The rule text contains
+no %s placeholders, so `format' is called without extra arguments."
+  (format scalpel-prompt-rule--stale-file-retry))
 
 (defconst scalpel-prompt--resume
   "The previous round was cut off by an interruption outside

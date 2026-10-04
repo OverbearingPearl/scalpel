@@ -2779,6 +2779,31 @@ no target."
         (format "%s: %s" tool detail)
       detail)))
 
+(defun scalpel-agent-run--changing-p (action)
+  "Return non-nil when ACTION's :tool is one of `scalpel-agent--change-tools'."
+  (member (plist-get action :tool) scalpel-agent--change-tools))
+
+(defun scalpel-agent-run--action-targets (action)
+  "Return the list of file paths ACTION may write, dropping nils.
+Includes its :file, its :to, and every entry of its :files."
+  (delq nil (append (when (plist-get action :file) (list (plist-get action :file)))
+                    (when (plist-get action :to) (list (plist-get action :to)))
+                    (plist-get action :files))))
+
+(defun scalpel-agent-run--mtime-of (path)
+  "Return PATH's modification time, or nil when it does not exist."
+  (let ((attrs (file-attributes path)))
+    (when attrs (file-attribute-modification-time attrs))))
+
+(defun scalpel-agent-run--stalep (path baseline)
+  "Return non-nil when PATH's mtime differs from its entry in BASELINE.
+BASELINE is an alist of (PATH . MTIME) entries; PATH must currently
+exist and have an entry in BASELINE for the check to apply."
+  (and (file-exists-p path)
+       (cdr (assoc path baseline))
+       (not (equal (scalpel-agent-run--mtime-of path)
+                   (cdr (assoc path baseline))))))
+
 (defun scalpel-agent-execute-action (action on-success on-error)
   "Execute a single ACTION plist, without blocking.
 ON-SUCCESS receives the report string.  ON-ERROR receives a plist
@@ -3102,7 +3127,21 @@ request/execute cycle, not a whole conversation: the caller owns
 the loop and the history.  If the buffer this function was called
 in is killed while a request is in flight, the round stops and
 ON-ERROR is called with :type `session', so a caller holding a
-busy flag still gets a chance to release it."
+busy flag still gets a chance to release it.
+
+Before executing the first changing action, the runner records a
+write-before staleness baseline: for every target path of every
+changing action in the plan, the file's current modification time
+is captured (unless already captured) before any action runs.  Just
+before each changing action executes, every target is checked
+against this baseline; if any target's mtime differs from the
+baseline -- meaning the file was written after the round began but
+before this action, most plausibly by another console working on
+the same project root -- the action is refused with ON-ERROR and
+:type `stale-file', and the remaining actions in the round are not
+run.  After one of the session's own changing actions succeeds, the
+baseline entries for its targets are refreshed to the current
+mtime, so the session's own writes never trip a later check."
   (let ((session (current-buffer)))
     (cl-macrolet
         ((in-session (&rest body)
@@ -3124,7 +3163,8 @@ busy flag still gets a chance to release it."
            (let ((reports nil)
                  (shells nil)
                  (reads nil)
-                 (changes nil))
+                 (changes nil)
+                 (baseline nil))
              (cl-labels
                  ((finish ()
                     (funcall on-done
@@ -3133,36 +3173,69 @@ busy flag still gets a chance to release it."
                                    :shells (nreverse shells)
                                    :reads (nreverse reads)
                                    :changes (nreverse changes))))
+                  (note-stale (targets)
+                    (funcall on-error
+                             (list :type 'stale-file
+                                   :files targets
+                                   :message
+                                   (format "Scalpel: refusing to write; these files were just changed, likely by another console on the same root: %s. Re-read them and re-plan."
+                                           (string-join targets ", ")))))
                   (step (rest)
                     (if (null rest)
                         (finish)
                       (let ((action (car rest)))
                         (setq scalpel-agent--shell-output nil)
-                        (scalpel-agent-execute-action
-                         action
-                         (lambda (report)
-                           (in-session
-                            (push report reports)
-                            (cond
-                             ((equal (plist-get action :tool) "shell")
-                              (push (append (list :command
-                                                  (plist-get action :command))
-                                            scalpel-agent--shell-output)
-                                    shells))
-                             ((equal (plist-get action :tool) "file-peek")
-                              (push (list :file (plist-get action :file)
-                                          :symbol (plist-get action :symbol))
-                                    reads))
-                             ((equal (plist-get action :tool)
-                                     "file-substitute-dry-run")
-                              (push report changes))
-                             ((member (plist-get action :tool)
-                                      scalpel-agent--change-tools)
-                              (push report changes)))
-                            (step (cdr rest))))
-                         (lambda (err)
-                           (in-session
-                            (funcall on-error err))))))))
+                        (if (and (scalpel-agent-run--changing-p action)
+                                 (seq-find
+                                  (lambda (target)
+                                    (scalpel-agent-run--stalep target baseline))
+                                  (scalpel-agent-run--action-targets action)))
+                            (note-stale
+                             (scalpel-agent-run--action-targets action))
+                          (scalpel-agent-execute-action
+                           action
+                           (lambda (report)
+                             (in-session
+                              (push report reports)
+                              (cond
+                               ((equal (plist-get action :tool) "shell")
+                                (push (append (list :command
+                                                    (plist-get action :command))
+                                              scalpel-agent--shell-output)
+                                      shells))
+                               ((equal (plist-get action :tool) "file-peek")
+                                (push (list :file (plist-get action :file)
+                                            :symbol (plist-get action :symbol))
+                                      reads))
+                               ((equal (plist-get action :tool)
+                                       "file-substitute-dry-run")
+                                (push report changes))
+                               ((member (plist-get action :tool)
+                                        scalpel-agent--change-tools)
+                                (push report changes)))
+                              (when (scalpel-agent-run--changing-p action)
+                                (dolist (target
+                                         (scalpel-agent-run--action-targets action))
+                                  (setq baseline
+                                        (cons (cons target
+                                                    (scalpel-agent-run--mtime-of target))
+                                              (assq-delete-all
+                                               target baseline)))))
+                              (step (cdr rest))))
+                           (lambda (err)
+                             (in-session
+                              (funcall on-error err)))))))))
+               ;; Seed the staleness baseline before running anything:
+               ;; capture each changing action's target mtimes so a
+               ;; concurrent writer between plan and execute is caught.
+               (dolist (action actions)
+                 (when (scalpel-agent-run--changing-p action)
+                   (dolist (target (scalpel-agent-run--action-targets action))
+                     (unless (assq target baseline)
+                       (push (cons target
+                                   (scalpel-agent-run--mtime-of target))
+                             baseline)))))
+               (setq baseline (nreverse baseline))
                (step actions)))))
        (lambda (err)
          (in-session

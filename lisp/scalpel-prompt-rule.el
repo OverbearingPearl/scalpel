@@ -356,6 +356,19 @@ states how the table of contents is fetched.
 %s"
   "Substitute-retry wording rule.")
 
+(defconst scalpel-prompt-rule--stale-file-retry
+  "Your last action was refused.
+The files it targeted have been modified by another console working on
+the same root since this round began. Do not resend the action
+unchanged. Instead, re-read every affected file with file-peek to
+obtain its current content, reassess your plan against the fresh
+state, and only then decide what to do next."
+  "Tell the model the refused action targeted stale files.
+Explain that another console working on the same root has modified the
+affected files since the round began.  The model must not resend the
+action unchanged; instead it should re-read the affected files with
+file-peek and re-plan before acting again.")
+
 (defconst scalpel-prompt-rule--symbol-name
   "A definition's name is taken literally, character for character.
 Two names differing only by an extra pair of dashes are two

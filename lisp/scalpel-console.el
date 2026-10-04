@@ -1922,7 +1922,9 @@ retries per error type and at most `scalpel-console-self-heal-max'
 retries in total are allowed, and both counters reset with each
 invocation of this function.  A substitute-related self-heal error
 retries with the perlre TOC embedded so the model can study the
-relevant section first.  An unattended run also arms
+relevant section first.  A stale-file self-heal error retries with
+the dedicated stale-file instruction from scalpel-prompt.el.
+An unattended run also arms
 `scalpel-agent-unattended-confirm', so no action confirms, and
 stops at its own round limit with a timestamped mark instead of
 the interactive round-limit notice.  Closing marks for an
@@ -1932,8 +1934,9 @@ terminal point, so a second RET during a round is refused.  When
 an operation ends, the cursor in the target buffer is also moved
 to `point-max', signalling that the answer is finished.  The
 completion acknowledgement is only shown for a successful final
-round.  An interactive operation ends with a compression offer
-once the cumulative token growth since the last offer reaches
+round.  An interactive
+operation ends with a compression offer once the cumulative token
+growth since the last offer reaches
 `scalpel-console-compression-offer-growth-threshold'; a declined
 offer still advances the baseline, so the next offer waits for
 further growth."
@@ -1951,6 +1954,8 @@ further growth."
           (self-heal-by-type nil))
       (cl-labels
           ((unattended-p () scalpel-console--unattended-p)
+           (stale-file-error-p (err-plist)
+             (eq (plist-get err-plist :type) 'stale-file))
            (substitute-error-p (err-plist)
              (let ((err-type (plist-get err-plist :type))
                    (err-message (plist-get err-plist :message)))
@@ -2103,9 +2108,13 @@ after %s: %s."
                                    self-heal-total)
                                 scalpel-console-self-heal-max))
                               (setq next-instruction
-                                    (if (substitute-error-p round-error)
-                                        (scalpel-prompt--substitute-retry-instruction)
-                                      (phase-line)))
+                                    (cond
+                                     ((stale-file-error-p round-error)
+                                      (scalpel-prompt--stale-file-retry-instruction))
+                                     ((substitute-error-p round-error)
+                                      (scalpel-prompt--substitute-retry-instruction))
+                                     (t
+                                      (phase-line))))
                               (run-next)))
                            ((not
                              (and round-result
@@ -2258,11 +2267,11 @@ message, so the user sees both before the synchronous work of the
 round starts; the acknowledgement is removed by the first round once
 the status spinner takes over, so it never accumulates in the
 conversation.
-A send is refused while another console anchored to the same root
-has a round in flight -- two consoles on one root serialize their
-writes instead of interleaving them.  The gate reads only
-buffer-local busy state, so a sibling that aborts or whose buffer
-is killed releases its hold with no separate lock cleanup."
+Concurrent consoles anchored to the same root are allowed to
+interleave freely, because the write-before mtime staleness check in
+`scalpel-agent-run' refuses any action whose target file changed
+since round start, so conflicts surface as a stale-file self-heal
+retry instead of a send refusal."
   (interactive)
   (if (scalpel-console--busy-p)
       (progn
@@ -2280,78 +2289,63 @@ is killed releases its hold with no separate lock cleanup."
           (scalpel-console--show-context)
           (message "Scalpel: pruned missing context file(s): %s"
                    (mapconcat #'identity dropped ", "))))
-      (let ((sibling
-             (cl-find-if
-              (lambda (b)
-                (and (buffer-live-p b)
-                     (not (eq b buf))
-                     (buffer-local-value 'scalpel-console--busy b)
-                     (equal (buffer-local-value 'scalpel-console--root buf)
-                            (buffer-local-value 'scalpel-console--root b))))
-              (buffer-list))))
-        (if sibling
-            (progn
-              (message "Scalpel: console %s is working on the same root %s; wait for it to settle or abort it there."
-                       (buffer-name sibling)
-                       (buffer-local-value 'scalpel-console--root buf))
-              (ding))
-          (let* ((regions (scalpel-console--pending-input-regions))
-                 (instr (string-trim
-                         (mapconcat
-                          (lambda (region)
-                            (buffer-substring-no-properties
-                             (car region) (cdr region)))
-                          regions
-                          ""))))
-            (unless (string-empty-p instr)
-              ;; Offer history compression before the send is committed; a
-              ;; deferred offer holds the send entirely, leaving the pending
-              ;; input in the buffer -- the compression callback re-enters
-              ;; this command when it is done.
-              (when (eq (scalpel-console--offer-history-compression) 'deferred)
-                (cl-return-from scalpel-console-send-line))
-              ;; Read the conversation before this instruction joins it.
-              (let ((history (scalpel-console--history)))
-                ;; Remember the instruction so `scalpel-console-repeat' can
-                ;; resubmit it verbatim after a planner-output failure.
-                (setq scalpel-console--last-instruction instr)
-                ;; Rewrite the typed input into the logged user message, so the
-                ;; instruction is not shown twice (once raw, once prefixed).
-                ;; Regions are deleted back to front so positions stay valid.
-                (let ((inhibit-read-only t))
-                  (dolist (region (reverse regions))
-                    (delete-region (car region) (cdr region)))
-                  (goto-char (point-max))
-                  (scalpel-console--insert-tagged
-                   (format "User: %s\n" instr) 'user))
-                ;; Display-only acknowledgement on the line after the logged
-                ;; user message, so the user sees the round was accepted
-                ;; before the spinner appears.  It carries
-                ;; `scalpel-console-ack' and a dim `shadow' face, so it reads
-                ;; as secondary feedback, and is deleted by the first round
-                ;; once the status line replaces it.  The
-                ;; `scalpel-console-output' property makes both
-                ;; `scalpel-console--history' and
-                ;; `scalpel-console--pending-input-regions' skip this line;
-                ;; rear-nonsticky keeps later text from inheriting the face or
-                ;; anything else into typed input.
-                (let ((inhibit-read-only t))
-                  (goto-char (point-max))
-                  ;; The marker must not advance on insert, so it stays at the
-                  ;; start of the Roger line for --run-round to delete.
-                  (setq scalpel-console--roger-marker (copy-marker (point)))
-                  (insert (propertize "Scalpel: Roger. Working...\n"
-                                      'face 'shadow
-                                      'scalpel-console-ack t
-                                      'scalpel-console-output t
-                                      'rear-nonsticky '(scalpel-console-output face))))
-                ;; Paint the logged user message and the acknowledgement now,
-                ;; so they are visible before the synchronous work inside
-                ;; --run-rounds (e.g. token counting) hogs the display.
-                (redisplay)
-                (scalpel-console--run-rounds instr history)
-                (goto-char (point-max))
-                (message "Scalpel: instruction sent.")))))))))
+      (let* ((regions (scalpel-console--pending-input-regions))
+             (instr (string-trim
+                     (mapconcat
+                      (lambda (region)
+                        (buffer-substring-no-properties
+                         (car region) (cdr region)))
+                      regions
+                      ""))))
+        (unless (string-empty-p instr)
+          ;; Offer history compression before the send is committed; a
+          ;; deferred offer holds the send entirely, leaving the pending
+          ;; input in the buffer -- the compression callback re-enters
+          ;; this command when it is done.
+          (when (eq (scalpel-console--offer-history-compression) 'deferred)
+            (cl-return-from scalpel-console-send-line))
+          ;; Read the conversation before this instruction joins it.
+          (let ((history (scalpel-console--history)))
+            ;; Remember the instruction so `scalpel-console-repeat' can
+            ;; resubmit it verbatim after a planner-output failure.
+            (setq scalpel-console--last-instruction instr)
+            ;; Rewrite the typed input into the logged user message, so the
+            ;; instruction is not shown twice (once raw, once prefixed).
+            ;; Regions are deleted back to front so positions stay valid.
+            (let ((inhibit-read-only t))
+              (dolist (region (reverse regions))
+                (delete-region (car region) (cdr region)))
+              (goto-char (point-max))
+              (scalpel-console--insert-tagged
+               (format "User: %s\n" instr) 'user))
+            ;; Display-only acknowledgement on the line after the logged
+            ;; user message, so the user sees the round was accepted
+            ;; before the spinner appears.  It carries
+            ;; `scalpel-console-ack' and a dim `shadow' face, so it reads
+            ;; as secondary feedback, and is deleted by the first round
+            ;; once the status line replaces it.  The
+            ;; `scalpel-console-output' property makes both
+            ;; `scalpel-console--history' and
+            ;; `scalpel-console--pending-input-regions' skip this line;
+            ;; rear-nonsticky keeps later text from inheriting the face or
+            ;; anything else into typed input.
+            (let ((inhibit-read-only t))
+              (goto-char (point-max))
+              ;; The marker must not advance on insert, so it stays at the
+              ;; start of the Roger line for --run-round to delete.
+              (setq scalpel-console--roger-marker (copy-marker (point)))
+              (insert (propertize "Scalpel: Roger. Working...\n"
+                                  'face 'shadow
+                                  'scalpel-console-ack t
+                                  'scalpel-console-output t
+                                  'rear-nonsticky '(scalpel-console-output face))))
+            ;; Paint the logged user message and the acknowledgement now,
+            ;; so they are visible before the synchronous work inside
+            ;; --run-rounds (e.g. token counting) hogs the display.
+            (redisplay)
+            (scalpel-console--run-rounds instr history)
+            (goto-char (point-max))
+            (message "Scalpel: instruction sent.")))))))
 (defun scalpel-console-abort ()
   "Cancel the operation currently in flight for this console, if any.
 This cancels the whole console operation -- not only the current
