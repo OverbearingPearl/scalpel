@@ -219,13 +219,19 @@ entirely and must stay loud."
 ROOT is expanded, normalized with `file-name-as-directory' and
 `directory-file-name', then abbreviated with `abbreviate-file-name'.
 When MNEMONIC is non-nil and non-empty, it is embedded in the
-buffer name right before the closing star."
+buffer name by deriving the prefix from
+`scalpel-console-buffer-name-format': the trailing `*' of the
+format is replaced with \" %s*\" so that the defcustom remains the
+single source of the name shape, e.g. a format of \"*%s*\" yields
+\"*BASE MNEMONIC*\"."
   (let ((base (abbreviate-file-name
                (directory-file-name
                 (file-name-as-directory (expand-file-name root))))))
     (if (and mnemonic (not (string-empty-p mnemonic)))
-        (format "*%s %s*" base mnemonic)
-      (format "*%s*" base))))
+        (format (replace-regexp-in-string "\\*\\'" " %s*"
+                                          scalpel-console-buffer-name-format)
+                base mnemonic)
+      (format scalpel-console-buffer-name-format base))))
 
 (defun scalpel-console--target-buffer ()
   "Return the console buffer the current command should write to.
