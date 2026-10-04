@@ -2496,7 +2496,12 @@ stripping an optional leading \"Review:\" marker, the response is
 treated as approval when it begins with the word APPROVE.  The
 word is word-bounded so DISAPPROVED does not count; if the whole
 response also mentions REJECT or \"Do not apply\", the verdict is
-instead a denial."
+instead a denial.  When the verdict is a denial, the denial text
+passed to CALLBACK is augmented with the perlre table of contents
+via `scalpel-agent--perlre-toc-for-refusal', so a rejected
+substitution review carries the same learning material a perl
+compile failure does.  This toc lookup is failure-safe and yields
+an empty string on error, leaving the denial text unchanged."
   (let* ((files (plist-get action :files))
          (pattern (plist-get action :pattern))
          (replacement (plist-get action :replacement))
@@ -2536,6 +2541,14 @@ that word.  Otherwise explain the concrete problems you found.")
                         text))
                 (and (string-match-p "\\`APPROVE\\>" text)
                      (not (string-match-p "\\<REJECT\\>\\|Do not apply" text)))))))
+         (denial-text
+          (lambda (response)
+            (if (stringp response)
+                (concat response
+                        (condition-case nil
+                            (scalpel-agent--perlre-toc-for-refusal)
+                          (error "")))
+              response)))
          (request-review
           (lambda ()
             (scalpel-llm-request-async
@@ -2543,7 +2556,7 @@ that word.  Otherwise explain the concrete problems you found.")
              (lambda (response)
                (if (funcall approved-p response)
                    (funcall callback t response)
-                 (funcall callback nil response)))
+                 (funcall callback nil (funcall denial-text response))))
              (lambda (error)
                (funcall callback nil
                         (format "LLM request failed: %s"

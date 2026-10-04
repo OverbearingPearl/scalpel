@@ -96,6 +96,21 @@ before the unload and put back afterwards.  The conversation itself needs
 no snapshot because it lives in the buffer text, which unloading does not
 touch.
 
+User-set customizations are preserved generically: just before the
+modules unload, every bound symbol whose name starts with `scalpel-'
+and whose customized value is recorded in its symbol plist (that is,
+variables the user set this session via `setopt', `customize-set-variable'
+or a :custom form -- not variables merely holding their standard value)
+is snapshotted as a symbol-to-current-value pair.
+On Emacs versions older than 30 the predicate `customized-variable-p' is
+missing, so the customization snapshot is simply skipped there and the
+reload proceeds without it.
+After all reload `load-file' calls have finished, each snapshotted value
+is put back only when the variable is still bound after reload, so
+re-declared defcustoms do not wipe the user's settings back to their
+defaults.  No per-variable list needs maintenance as modules come and
+go.
+
 Reloading is refused while any console has a round in flight, because
 redefining the functions that round is running under would strand its
 async callback on a mix of old and new definitions.  Wait for the round
@@ -137,7 +152,19 @@ to end or abort it with `scalpel-console-abort`."
                        "session state of every open console is dropped, and "
                        "a console may need `scalpel-open' again")
                (error-message-string err))
-              nil)))))
+              nil))))
+        custom-snapshot)
+    ;; Snapshot user-set customizations generically: only variables with a
+    ;; recorded customized value in their symbol plist (set this session via
+    ;; setopt/customize-set-variable/:custom), never variables holding their
+    ;; standard value.  `customized-variable-p' exists only since Emacs 30;
+    ;; on older versions the snapshot is skipped and the reload proceeds.
+    (mapatoms (lambda (sym)
+                (when (and (string-prefix-p "scalpel-" (symbol-name sym))
+                           (boundp sym)
+                           (fboundp 'customized-variable-p)
+                           (customized-variable-p sym))
+                  (push (cons sym (symbol-value sym)) custom-snapshot))))
     ;; Unload every module feature derived from the lisp directory.
     (dolist (feat (scalpel-test--module-features))
       (when (featurep feat)
@@ -152,7 +179,7 @@ to end or abort it with `scalpel-console-abort`."
     ;; bindings would otherwise survive.  User configuration (defcustom etc.)
     ;; is intentionally left untouched.
     (mapatoms (lambda (sym)
-                (when (and (string-match-p "^scalpel-.*-map$" (symbol-name sym))
+                (when (and (string-match-p "\\`scalpel-.*-map\\'" (symbol-name sym))
                            (boundp sym))
                   (makunbound sym))))
     ;; Load main module, then lisp sources (tests are excluded here; they are
@@ -165,9 +192,17 @@ to end or abort it with `scalpel-console-abort`."
         (load-file (expand-file-name file
                                      (expand-file-name "lisp"
                                                        scalpel-test--package-root)))))
+    ;; Restore user-set customizations after reload: only when the variable
+    ;; is still bound, so defcustoms re-declared by load-file do not wipe the
+    ;; user's settings back to their defaults.
+    (dolist (entry custom-snapshot)
+      (when (boundp (car entry))
+        (set (car entry) (cdr entry))
+        (put (car entry) 'saved-value nil)
+        (put (car entry) 'customized-value
+             (list (custom-quote (cdr entry))))))
     (when scalpel-console-session-snapshot
-      (scalpel-console--session-restore scalpel-console-session-snapshot)))
-  (message "Scalpel modules reloaded."))
+      (scalpel-console--session-restore scalpel-console-session-snapshot))))
 
 (defun scalpel-test--load-test-files ()
   "Load each `*-test.el' file under `lisp', once and from disk.

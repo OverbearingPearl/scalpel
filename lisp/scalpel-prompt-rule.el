@@ -482,7 +482,11 @@ it did."
 The format string is filled with the required language name.")
 
 (defconst scalpel-prompt-rule--shell-reason-language-format
-  "The `reason' field of shell actions must be written in %s."
+  "The `reason' field of shell actions must be written in %s.
+Regardless of the language used, the reason text must never drop,
+truncate, or otherwise break the triple-quoted multiline delimiters
+of string values, and the reply must never be wrapped in tool-call
+markup."
   "Format string for the shell-reason language rule.")
 
 (defconst scalpel-prompt-rule--compress-reason-language-format

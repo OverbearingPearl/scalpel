@@ -179,13 +179,12 @@ message may no longer describe the tree."
 
 (defun scalpel-commit--diff (workdir)
   "Return the diff the message must describe for WORKDIR.
-Staged and unstaged changes to tracked files, together, are what
-the commit will carry: `git add -u' first stages them, so one diff
-covers both.  Untracked files are left alone by -u and so stay out.
+Only changes already staged for commit are covered: the message
+must describe the staged diff exactly.  Unstaged and untracked
+changes stay out of the diff entirely.
 Function context and a wide -U are on the diff so a hunk always
 names the function it touches; the message must never guess."
-  (scalpel-commit--git (list "add" "-u") workdir)
-  (scalpel-commit--git (list "diff" "--staged" "--cached"
+  (scalpel-commit--git (list "diff" "--cached"
                              "-U10" "--function-context"
                              "--no-color" "--no-ext-diff")
                        workdir))
@@ -466,8 +465,10 @@ user-error naming it.
 The tree is re-checked next: a file changed since the message was
 generated means the message may be stale, and the user is told to
 regenerate rather than commit something undescribed.  The commit
-carries staged and unstaged tracked changes (the diff ran
-`git add -u'); untracked files stay out, as the feature promises.
+carries only what is already staged; unstaged changes to tracked
+files are never staged automatically, and untracked files stay out
+of the commit as before, matching the diff that is now a plain
+`git diff --cached'.
 After committing, the status is re-read: only a non-nil status that
 still reports a tracked change (a line not starting with `??') means
 the commit failed; a nil status (git error or a stubbed read in
