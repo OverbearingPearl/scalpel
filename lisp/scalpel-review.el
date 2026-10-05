@@ -130,11 +130,13 @@ Signal with a message when there is no earlier block."
 Render a header line followed by a unified diff of the record's
 old-text versus new-text, produced synchronously by the diff
 program; rename records (detected by :tool being `file-rename')
-show a rename line instead.  The diff program's own header lines
-\(\"--- before/<name>\" and \"+++ after/<name>\") are removed, so
-the diff output shows only the @@ hunk line and the +/- content
-lines; the file header line (\"File: <path>\") is the only label
-for the block.
+show a rename line instead.  The record's :session value, when
+present, is shown in a bracketed suffix on the header line;
+records without a :session render as before.  The diff program's
+own header lines (\"--- before/<name>\" and \"+++ after/<name>\")
+are removed, so the diff output shows only the @@ hunk line and
+the +/- content lines; the file header line (\"File: <path>\") is
+the only label for the block.
 Header lines get a distinctive face and diff output lines get
 `diff-added'/`diff-removed'/`diff-hunk-header' faces.  The whole
 block is tagged with the `scalpel-review-record' text property."
@@ -144,17 +146,22 @@ block is tagged with the `scalpel-review-record' text property."
          (new-text (plist-get record :new-text))
          (file (plist-get record :file))
          (tool (plist-get record :tool))
+         (session (plist-get record :session))
+         (session-suffix (if session
+                             (format "  [session: %s]" session)
+                           ""))
          (program (if (boundp 'diff-command) diff-command "diff"))
          old-file new-file)
     (unwind-protect
         (progn
           (if (eq tool 'file-rename)
               (progn
-                (insert (format "Rename: %s -> %s\n" old-text file))
+                (insert (format "Rename: %s -> %s%s\n"
+                                old-text file session-suffix))
                 ;; Highlight the rename header line.
                 (put-text-property beg (point) 'face 'diff-header))
             (progn
-              (insert (format "File: %s\n" file))
+              (insert (format "File: %s%s\n" file session-suffix))
               (when (scalpel-lineage-conflict-p record)
                 (save-excursion
                   (forward-line -1)
