@@ -286,6 +286,7 @@ Fall back to all records when the records variable is unbound.
 After popping to the review buffer, move its point and every
 displaying window's start back to the beginning on all frames, so
 a reused window never leaves the cursor at the end."
+  (interactive)
   (unless (scalpel-lineage-clean-p)
     (let ((buf (get-buffer-create "*scalpel session review*"))
           (context-files (if (boundp 'scalpel-agent--context-files)

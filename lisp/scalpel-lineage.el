@@ -205,8 +205,15 @@ aborted session cannot clear another console's registration."
   scalpel-lineage--records)
 
 (defun scalpel-lineage-clean-p ()
-  "Return t when this session recorded no change at all."
-  (null scalpel-lineage--records))
+  "Return t when this session recorded no change at all.
+
+Records live buffer-locally on the edited file's buffers, so a
+plain read of the caller's own binding usually misses them.  When
+`scalpel-review-session' is loaded, prefer the session-wide
+collection; otherwise fall back to the local variable."
+  (if (featurep 'scalpel-review-session)
+      (null (scalpel-review-session--collect-records))
+    (null scalpel-lineage--records)))
 
 (defun scalpel-lineage-reset ()
   "Hold no lineage state of this session."
