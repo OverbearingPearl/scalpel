@@ -105,7 +105,11 @@ Signal with a message when there is no earlier block."
 Render a header line followed by a unified diff of the record's
 old-text versus new-text, produced synchronously by the diff
 program; rename records (detected by :tool being `file-rename')
-show a rename line instead.
+show a rename line instead.  The diff program's own header lines
+\(\"--- before/<name>\" and \"+++ after/<name>\") are removed, so
+the diff output shows only the @@ hunk line and the +/- content
+lines; the file header line (\"File: <path>\") is the only label
+for the block.
 Header lines get a distinctive face and diff output lines get
 `diff-added'/`diff-removed'/`diff-hunk-header' faces.  The whole
 block is tagged with the `scalpel-review-record' text property."
@@ -156,6 +160,15 @@ block is tagged with the `scalpel-review-record' text property."
                                                  old-file new-file)
                                    (buffer-substring (point-min) (point-max)))))
                 (insert diff-output)
+                ;; Remove the diff program's own header lines
+                ;; ("--- before/<name>" and "+++ after/<name>") so
+                ;; only the @@ hunk line and +/- content lines remain.
+                (save-excursion
+                  (goto-char diff-start)
+                  (while (not (eobp))
+                    (if (looking-at "\\(?:---\\|\\+\\+\\+\\) ")
+                        (delete-region (point) (progn (forward-line 1) (point)))
+                      (forward-line 1))))
                 ;; Apply per-line faces to the diff output:
                 ;; "+" lines as added, "-" lines as removed, and
                 ;; "@@" lines as hunk headers.
@@ -175,7 +188,8 @@ block is tagged with the `scalpel-review-record' text property."
                         (put-text-property line-start line-end
                                            'face 'diff-hunk-header)))
                       (forward-line 1))))
-                (when (string-empty-p diff-output)
+                (when (string-empty-p
+                       (buffer-substring diff-start (point)))
                   (delete-region diff-start (point))
                   (insert "No differences\n")))))
           ;; Tag the entire block with the record property last so
