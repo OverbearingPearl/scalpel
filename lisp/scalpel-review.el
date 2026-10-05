@@ -21,10 +21,17 @@
 (defvar scalpel-review-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "TAB") #'scalpel-review-next-block)
+    (define-key map (kbd "<backtab>") #'scalpel-review-previous-block)
     (define-key map (kbd "k") #'scalpel-review-reject-block)
     (define-key map (kbd "q") #'scalpel-review-accept-all)
     map)
   "Keymap for session review buffers.")
+
+(defface scalpel-review-rejected
+  '((t (:strike-through t)))
+  "Face used to mark blocks the user has rejected with `k'."
+  :group 'scalpel)
+
 (require 'diff)
 
 (require 'scalpel-lineage)
@@ -36,11 +43,26 @@
 (defun scalpel-review-next-block ()
   "Move point to the beginning of the next review block."
   (interactive)
-  (let ((next (next-single-property-change
-               (point) 'scalpel-review-record nil (point-max))))
-    (if (and next (< next (point-max)))
-        (goto-char next)
+  (let ((pos (point))
+        (found nil))
+    (while (and pos (not found))
+      (setq pos (next-single-property-change pos 'scalpel-review-record
+                                             nil (point-max)))
+      (when (and pos (< pos (point-max))
+                 (get-text-property pos 'scalpel-review-record))
+        (setq found pos)))
+    (if found
+        (goto-char found)
       (message "No further block"))))
+
+(defun scalpel-review-previous-block ()
+  "Move point backward to the beginning of the previous block.
+Signal with a message when there is no earlier block."
+  (interactive)
+  (let ((pos (previous-single-property-change (point) 'scalpel-review-record)))
+    (if (and pos (/= pos (point-min)))
+        (goto-char pos)
+      (message "No earlier block"))))
 
 (defun scalpel-review--record-at-point ()
   "Return the lineage record under point, or nil."
@@ -54,7 +76,14 @@
         (message "No block under point")
       (pcase (scalpel-lineage-restore record)
         (`t
-         (scalpel-review--refresh)
+         (save-excursion
+           (let* ((beg (if (get-text-property (point) 'scalpel-review-record)
+                           (previous-single-property-change
+                            (point) 'scalpel-review-record nil (point-min))
+                         (point)))
+                  (end (next-single-property-change
+                        beg 'scalpel-review-record nil (point-max))))
+             (put-text-property beg end 'face 'scalpel-review-rejected)))
          (message "Restored one change"))
         (`conflict
          (message "Refused: the file changed since this change landed"))
@@ -77,7 +106,9 @@ Render a header line followed by a unified diff of the record's
 old-text versus new-text, produced synchronously by the diff
 program; rename records (detected by :tool being `file-rename')
 show a rename line instead.
-The whole block is tagged with the `scalpel-review-record' text property."
+Header lines get a distinctive face and diff output lines get
+`diff-added'/`diff-removed'/`diff-hunk-header' faces.  The whole
+block is tagged with the `scalpel-review-record' text property."
   (let* ((inhibit-read-only t)
          (beg (point))
          (old-text (plist-get record :old-text))
@@ -89,9 +120,19 @@ The whole block is tagged with the `scalpel-review-record' text property."
     (unwind-protect
         (progn
           (if (eq tool 'file-rename)
-              (insert (format "Rename: %s -> %s\n" old-text file))
+              (progn
+                (insert (format "Rename: %s -> %s\n" old-text file))
+                ;; Highlight the rename header line.
+                (put-text-property beg (point) 'face 'diff-header))
             (progn
               (insert (format "File: %s\n" file))
+              (when (scalpel-lineage-conflict-p record)
+                (save-excursion
+                  (forward-line -1)
+                  (end-of-line)
+                  (insert "  [CONFLICT: file changed after the session]")))
+              ;; Highlight the file header line.
+              (put-text-property beg (point) 'face 'diff-header)
               ;; Write old and new text to temporary files so the
               ;; external diff program can compare them synchronously.
               (setq old-file (make-temp-file "scalpel-review-old-"))
@@ -102,15 +143,45 @@ The whole block is tagged with the `scalpel-review-record' text property."
                 (insert (or new-text "")))
               ;; Run the diff program synchronously, capturing its
               ;; stdout into a temp buffer, then insert the full text
-              ;; at point under the File header.
-              (let ((diff-output (with-temp-buffer
+              ;; at point under the File header.  Pass the labels
+              ;; through two -L options before the two temp file
+              ;; operands, so the diff headers name the real file
+              ;; (before/after) rather than the temp file paths.
+              (let ((diff-start (point))
+                    (diff-output (with-temp-buffer
                                    (call-process program nil t nil
-                                                 "-u" old-file new-file)
+                                                 "-u"
+                                                 "-L" (concat "before/" (file-name-nondirectory file))
+                                                 "-L" (concat "after/" (file-name-nondirectory file))
+                                                 old-file new-file)
                                    (buffer-substring (point-min) (point-max)))))
-                (if (string-empty-p diff-output)
-                    (insert "No differences\n")
-                  (insert diff-output)))))
-          (put-text-property beg (point) 'scalpel-review-record record))
+                (insert diff-output)
+                ;; Apply per-line faces to the diff output:
+                ;; "+" lines as added, "-" lines as removed, and
+                ;; "@@" lines as hunk headers.
+                (save-excursion
+                  (goto-char diff-start)
+                  (while (not (eobp))
+                    (let ((line-start (point))
+                          (line-end (line-end-position)))
+                      (cond
+                       ((looking-at "\\+\\(?:\\+\\+\\)?")
+                        (put-text-property line-start line-end
+                                           'face 'diff-added))
+                       ((looking-at "-\\(?:--\\)?")
+                        (put-text-property line-start line-end
+                                           'face 'diff-removed))
+                       ((looking-at "@@")
+                        (put-text-property line-start line-end
+                                           'face 'diff-hunk-header)))
+                      (forward-line 1))))
+                (when (string-empty-p diff-output)
+                  (delete-region diff-start (point))
+                  (insert "No differences\n")))))
+          ;; Tag the entire block with the record property last so
+          ;; face properties applied above are preserved.
+          (let ((record-end (point)))
+            (put-text-property beg record-end 'scalpel-review-record record)))
       ;; Clean up the temporary files regardless of success or error.
       (when old-file
         (condition-case nil
@@ -122,26 +193,37 @@ The whole block is tagged with the `scalpel-review-record' text property."
           (error nil))))))
 
 (defun scalpel-review--render ()
-  "Fill the current buffer with a unified-diff review listing."
+  "Fill the current buffer with a unified-diff review listing.
+
+If the buffer-local variable `scalpel-agent--context-files' is bound
+and non-nil, only lineage records whose :file is a member of that list
+are shown; otherwise all recorded changes are rendered."
   (require 'diff)
   (let ((inhibit-read-only t)
         (records (scalpel-lineage-changes)))
+    ;; When session context files are known (the session-end hook runs in
+    ;; the console buffer), restrict the review to files in that context
+    ;; so test-run temp files never appear.  Compare through
+    ;; `file-truename' on both sides so resolved paths such as
+    ;; /private/var/folders/... match user-spelled /var/folders/... ones.
+    (when (and (boundp 'scalpel-agent--context-files)
+               scalpel-agent--context-files)
+      (let ((context-truenames
+             (mapcar #'file-truename scalpel-agent--context-files)))
+        (setq records
+              (cl-remove-if-not
+               (lambda (record)
+                 (member (file-truename (plist-get record :file))
+                         context-truenames))
+               records))))
+    (setq header-line-format " TAB next | Shift+TAB prev | k reject | q accept all & quit ")
     (erase-buffer)
     (insert "Session review: changes made this session.\n\n")
     (if (null records)
         (insert "No changes were recorded.\n")
-      (pcase-dolist (`(,file . ,recs) (scalpel-review--group-by-file records))
-        (insert (format "%s (%d change%s)%s\n"
-                        file
-                        (length recs)
-                        (if (= (length recs) 1) "" "s")
-                        (if (cl-some #'scalpel-lineage-conflict-p recs)
-                            "  [CONFLICT: file changed after the session]"
-                          "")))
-        (dolist (record recs)
-          (scalpel-review--insert-record record)))
-      (insert "\nTAB next block, k reject block, q accept all and quit\n")))
-  (goto-char (point-min)))
+      (dolist (record records)
+        (scalpel-review--insert-record record)))
+    (goto-char (point-min))))
 
 (defun scalpel-review--refresh ()
   "Re-render the review buffer after a block was restored."
@@ -168,7 +250,11 @@ Do nothing at all -- no buffer, no message -- when
             (use-local-map scalpel-review-mode-map)))
         (scalpel-review--render)
         (setq buffer-read-only t))
-      (pop-to-buffer buf))))
+      (pop-to-buffer buf)
+      (let ((win (get-buffer-window buf)))
+        (when win
+          (set-window-point win (point-min))
+          (set-window-start win (point-min)))))))
 
 (defun scalpel-review-session-ended ()
   "Session-end hook: open the review when the session changed files."
