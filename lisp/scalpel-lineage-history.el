@@ -59,7 +59,7 @@ An open dialogue (END nil) takes every record at or past START."
 (defun scalpel-lineage-history--truncate-question (question)
   "Trim QUESTION to one line of at most 60 visible characters."
   (when (stringp question)
-    (let ((text (car (split-string question "\\n" t))))
+    (let ((text (car (split-string question "\n" t))))
       (setq text (string-trim text))
       (when (> (length text) 60)
         (setq text (concat (substring text 0 60) "...")))
