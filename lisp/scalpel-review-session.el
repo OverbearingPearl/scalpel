@@ -103,6 +103,24 @@ changes show.  Do nothing when no record matches."
           (set-window-start win (point-min) t)
           (set-window-point win (point-min)))))))
 
+(defun scalpel-review-session--on-record-appended (_record)
+  "Silently re-render the existing review buffer after a change.
+Intended for `scalpel-lineage--record-appended-hook'; the record
+argument is ignored.  Do nothing unless the review buffer already
+exists, so no prompt, no `pop-to-buffer' and no creation ever
+happens from here."
+  (let ((buffer (get-buffer scalpel-review-session--buffer-name)))
+    (when (buffer-live-p buffer)
+      (with-current-buffer buffer
+        (let ((inhibit-read-only t)
+              (records (scalpel-review-session--collect-records)))
+          (setq scalpel-lineage--records records)
+          (scalpel-review--render)
+          (setq buffer-read-only t))))))
+
+(add-hook 'scalpel-lineage--record-appended-hook
+          #'scalpel-review-session--on-record-appended)
+
 (provide 'scalpel-review-session)
 
 ;;; scalpel-review-session.el ends here

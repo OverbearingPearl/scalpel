@@ -91,7 +91,9 @@ index order agree; and :session, the identity of the console
 session currently registered as producing changes, taken from
 `scalpel-lineage--current-session'.  When no session is currently
 registered, :session is stamped nil so old callers and tests keep
-working."
+working.  After each record is appended, the abnormal hook
+`scalpel-lineage--record-appended-hook' is run with the record as
+its sole argument."
   (if (or (and (stringp old-text) (stringp new-text)
                (string= old-text new-text))
           (and (null old-text) (null new-text)))
@@ -143,6 +145,7 @@ working."
             (plist-put record :session scalpel-lineage--current-session))
       (setq scalpel-lineage--records
             (append scalpel-lineage--records (list record)))
+      (run-hook-with-args 'scalpel-lineage--record-appended-hook record)
       record)))
 
 (defvar scalpel-lineage--record-counter 0
@@ -165,6 +168,13 @@ Each entry is a plist with :session, :start and :end, where
 :start and :end are sequence-index values bracketing one
 user-question-to-final-answer dialogue.  :end is nil while the
 dialogue is still open.")
+
+(defvar scalpel-lineage--record-appended-hook nil
+  "Abnormal hook run after each lineage record is appended.
+Each function is called with the record as the sole argument,
+in the buffer holding the record.  Intended for review-layer
+subscribers so they can react to changes without lineage code
+knowing about them.")
 
 (defun scalpel-lineage-session-begin (session &optional question)
   "Register SESSION as the console currently producing edits.
