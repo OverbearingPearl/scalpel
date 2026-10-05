@@ -94,7 +94,7 @@ roadmap reflects every dialogue the consoles opened."
         (nodes (scalpel-lineage-history--nodes)))
     (erase-buffer)
     (setq header-line-format
-          " n/p next/prev | j/k next/prev | h/l prev/next session | hjkl motion | f/b session | RET rollback | g refresh | q quit ")
+          " npjk node | fbhl session | RET rollback | g refresh | q quit ")
     (if (null nodes)
         (insert "No lineage dialogues recorded.\n")
       (cl-loop for node in nodes
