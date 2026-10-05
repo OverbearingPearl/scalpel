@@ -237,9 +237,18 @@ are shown; otherwise all recorded changes are rendered."
 (defun scalpel-review-open ()
   "Open the session review buffer when the session changed anything.
 Do nothing at all -- no buffer, no message -- when
-`scalpel-lineage-clean-p' reports no recorded change."
+`scalpel-lineage-clean-p' reports no recorded change.
+
+Capture `scalpel-agent--context-files' from the calling (console)
+buffer before switching, so the context filter applies during
+rendering even though the variable is not buffer-local in the
+review buffer.  Fall back to all records when the variable is
+unbound."
   (unless (scalpel-lineage-clean-p)
-    (let ((buf (get-buffer-create "*scalpel session review*")))
+    (let ((buf (get-buffer-create "*scalpel session review*"))
+          (context-files (if (boundp 'scalpel-agent--context-files)
+                             scalpel-agent--context-files
+                           nil)))
       (with-current-buffer buf
         (setq buffer-read-only nil)
         (unless (eq major-mode 'scalpel-review-mode)
@@ -248,7 +257,8 @@ Do nothing at all -- no buffer, no message -- when
             (setq major-mode 'scalpel-review-mode
                   mode-name "Scalpel-Review")
             (use-local-map scalpel-review-mode-map)))
-        (scalpel-review--render)
+        (let ((scalpel-agent--context-files context-files))
+          (scalpel-review--render))
         (setq buffer-read-only t))
       (pop-to-buffer buf)
       (let ((win (get-buffer-window buf)))
