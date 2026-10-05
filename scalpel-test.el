@@ -98,18 +98,26 @@ touch.
 
 User-set customizations are preserved generically: just before the
 modules unload, every bound symbol whose name starts with `scalpel-'
-and whose customized value is recorded in its symbol plist (that is,
-variables the user set this session via `setopt', `customize-set-variable'
-or a :custom form -- not variables merely holding their standard value)
-is snapshotted as a symbol-to-current-value pair.
-On Emacs versions older than 30 the predicate `customized-variable-p' is
-missing, so the customization snapshot is simply skipped there and the
-reload proceeds without it.
-After all reload `load-file' calls have finished, each snapshotted value
-is put back only when the variable is still bound after reload, so
-re-declared defcustoms do not wipe the user's settings back to their
-defaults.  No per-variable list needs maintenance as modules come and
-go.
+and whose customized value is recorded either in its symbol plist as
+`customized-value' (that is, variables the user set this session via
+`setopt', `customize-set-variable' or a :custom form) or as
+`saved-value' (variables saved through customize's saved-value path,
+for example a `use-package' :custom form, which records saved-value
+rather than customized-value) is snapshotted as a
+symbol-to-current-value pair together with which of the two cases
+applies.  Variables merely holding their standard value are not
+touched.  On Emacs versions older than 30 the predicate
+`customized-variable-p' is missing, so the customization snapshot is
+simply skipped there and the reload proceeds without it.
+After all reload `load-file' calls have finished, each snapshotted
+value is put back only when the variable is still bound after reload,
+so re-declared defcustoms do not wipe the user's settings back to
+their defaults.  Customized variables are restored exactly as before:
+the value is set back and the customized-value plist is rewritten.
+Saved-value-only variables have only their value set back, and the
+saved-value property is left untouched, so the variable stays
+registered in the customize system as before.  No per-variable list
+needs maintenance as modules come and go.
 
 Reloading is refused while any console has a round in flight, because
 redefining the functions that round is running under would strand its
@@ -154,17 +162,24 @@ to end or abort it with `scalpel-console-abort`."
                (error-message-string err))
               nil))))
         custom-snapshot)
-    ;; Snapshot user-set customizations generically: only variables with a
-    ;; recorded customized value in their symbol plist (set this session via
-    ;; setopt/customize-set-variable/:custom), never variables holding their
-    ;; standard value.  `customized-variable-p' exists only since Emacs 30;
-    ;; on older versions the snapshot is skipped and the reload proceeds.
+    ;; Snapshot user-set customizations generically: variables with a
+    ;; recorded customized value in their symbol plist (set this session
+    ;; via setopt/customize-set-variable/:custom), or with a recorded
+    ;; saved-value (set through customize's saved-value path, e.g. a
+    ;; use-package :custom form).  Never variables holding their standard
+    ;; value.  `customized-variable-p' exists only since Emacs 30; on older
+    ;; versions the snapshot is skipped and the reload proceeds.
     (mapatoms (lambda (sym)
                 (when (and (string-prefix-p "scalpel-" (symbol-name sym))
                            (boundp sym)
                            (fboundp 'customized-variable-p)
-                           (customized-variable-p sym))
-                  (push (cons sym (symbol-value sym)) custom-snapshot))))
+                           (or (customized-variable-p sym)
+                               (get sym 'saved-value)))
+                  (push (cons sym (cons (symbol-value sym)
+                                        (if (customized-variable-p sym)
+                                            'customized
+                                          'saved)))
+                        custom-snapshot))))
     ;; Unload every module feature derived from the lisp directory.
     (dolist (feat (scalpel-test--module-features))
       (when (featurep feat)
@@ -194,13 +209,20 @@ to end or abort it with `scalpel-console-abort`."
                                                        scalpel-test--package-root)))))
     ;; Restore user-set customizations after reload: only when the variable
     ;; is still bound, so defcustoms re-declared by load-file do not wipe the
-    ;; user's settings back to their defaults.
+    ;; user's settings back to their defaults.  Customized variables are
+    ;; restored as before (value plus customized-value plist); saved-value
+    ;; variables get only their value back, leaving the saved-value property
+    ;; untouched so they stay registered with the customize system.
     (dolist (entry custom-snapshot)
-      (when (boundp (car entry))
-        (set (car entry) (cdr entry))
-        (put (car entry) 'saved-value nil)
-        (put (car entry) 'customized-value
-             (list (custom-quote (cdr entry))))))
+      (let ((sym (car entry))
+            (val (caar (cdr entry)))
+            (kind (cdar (cdr entry))))
+        (when (boundp sym)
+          (set sym val)
+          (when (eq kind 'customized)
+            (put sym 'saved-value nil)
+            (put sym 'customized-value
+                 (list (custom-quote val)))))))
     (when scalpel-console-session-snapshot
       (scalpel-console--session-restore scalpel-console-session-snapshot))))
 
