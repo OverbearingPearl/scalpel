@@ -113,15 +113,19 @@ changes show.  Do nothing when no record matches."
 Intended for `scalpel-lineage--record-appended-hook'; the record
 argument is ignored.  Do nothing unless the review buffer already
 exists, so no prompt, no `pop-to-buffer' and no creation ever
-happens from here."
+happens from here.  When collection yields nothing (for example a
+not-yet-registered console appended a record), the re-render is
+skipped and the existing buffer content is left untouched."
   (let ((buffer (get-buffer scalpel-review-session--buffer-name)))
     (when (buffer-live-p buffer)
-      (with-current-buffer buffer
-        (let ((inhibit-read-only t)
-              (records (scalpel-review-session--collect-records)))
-          (setq scalpel-lineage--records records)
-          (scalpel-review--render)
-          (setq buffer-read-only t))))))
+      (let ((records (with-current-buffer buffer
+                       (scalpel-review-session--collect-records))))
+        (when (and records (not (null records)))
+          (with-current-buffer buffer
+            (let ((inhibit-read-only t))
+              (setq scalpel-lineage--records records)
+              (scalpel-review--render)
+              (setq buffer-read-only t))))))))
 
 (add-hook 'scalpel-lineage--record-appended-hook
           #'scalpel-review-session--on-record-appended)
