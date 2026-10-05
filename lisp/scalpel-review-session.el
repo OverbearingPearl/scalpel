@@ -24,35 +24,52 @@ all of their work.")
 (defvar scalpel-review-session--buffer-name "*scalpel session review*"
   "Name of the single global review buffer.")
 
-(defun scalpel-review-session-register (console)
-  "Add CONSOLE to the review participant list and offer an update.
-Return non-nil when the review was refreshed.  A declined update
-only defers: CONSOLE stays in the list and is picked up by the
-next refresh."
-  (unless (member console scalpel-review-session--consoles)
-    (setq scalpel-review-session--consoles
-          (append scalpel-review-session--consoles (list console))))
-  (when (y-or-n-p
-         (format "Console %s finished with changes; update the review buffer? "
-                 console))
-    (scalpel-review-session-refresh)
-    t))
+(require 'scalpel-review)
 
-(defun scalpel-review-session--index-range ()
-  "Return \\(START . END) covering all registered consoles' dialogues.
-START is the smallest dialogue :start and END the largest :end, or
-the current record counter for still-open dialogues.  Nil when no
-registered console has a dialogue."
-  (let ((start nil) (end nil))
-    (dolist (entry (scalpel-lineage-dialogues))
-      (when (member (plist-get entry :session)
-                    scalpel-review-session--consoles)
-        (let ((s (plist-get entry :start))
-              (e (or (plist-get entry :end)
-                     (scalpel-lineage-record-counter))))
-          (setq start (if (or (null start) (< s start)) s start)
-                end (if (or (null end) (> e end)) e end)))))
-    (when start (cons start end))))
+(defun scalpel-review-session-offer ()
+  "Update or create the session review buffer with the latest diff.
+The review buffer always shows the diff between two adjacent lineage
+indices that have file changes, snapshotting the current record
+counter at dialogue end.  Collect records via
+`scalpel-review-session--collect-records'; when the result is empty,
+do nothing and return nil.  Otherwise build or reuse the buffer named
+`scalpel-review-session--buffer-name': set up the review major mode
+manually, bind `scalpel-lineage--records' to the
+collected records and `scalpel-agent--context-files' to nil while
+calling `scalpel-review--render', make the buffer read-only and move
+point to `point-min'.  When the buffer did not previously exist, pop
+to it and return t.  When it did exist, ask \"Review buffer exists;
+update it with the latest dialogue diff? \": on a no answer kill the
+review buffer and return nil, on a yes pop to it and return t."
+  (let ((records (scalpel-review-session--collect-records)))
+    (if (not records)
+        nil
+      (let* ((existed (and (get-buffer scalpel-review-session--buffer-name)
+                           (buffer-live-p
+                            (get-buffer scalpel-review-session--buffer-name))))
+             (buffer (get-buffer-create scalpel-review-session--buffer-name)))
+        (with-current-buffer buffer
+          (let ((inhibit-read-only t))
+            (kill-all-local-variables)
+            (setq major-mode 'scalpel-review-mode
+                  mode-name "Scalpel-Review")
+            (use-local-map scalpel-review-mode-map)
+            (let ((scalpel-lineage--records records)
+                  (scalpel-agent--context-files nil))
+              (ignore scalpel-lineage--records scalpel-agent--context-files)
+              (scalpel-review--render))
+            (setq buffer-read-only t)
+            (goto-char (point-min))))
+        (if (not existed)
+            (progn (pop-to-buffer buffer) t)
+          (if (y-or-n-p "Review buffer exists; update it with the latest dialogue diff? ")
+              (progn (pop-to-buffer buffer) t)
+            (kill-buffer buffer)
+            nil))))))
+
+(defun scalpel-review-session-refresh ()
+  "Refresh the session review buffer.  A thin alias of\n`scalpel-review-session-offer`."
+  (scalpel-review-session-offer))
 
 (defun scalpel-review-session--collect-records ()
   "Collect lineage records made by registered consoles.
@@ -64,7 +81,7 @@ are kept when their :session matches.  The review buffer itself
 \(named `scalpel-review-session--buffer-name') is skipped: it
 holds a buffer-local copy of the records from the last render,
 and including it would list every record twice."
-  (let ((range (scalpel-review-session--index-range))
+  (let ((range (scalpel-review-session--collect-indices))
         (result nil))
     (when range
       (dolist (buffer (buffer-list))
@@ -83,52 +100,26 @@ and including it would list every record twice."
                 (push record result)))))))
     (nreverse result)))
 
-(defun scalpel-review-session-refresh ()
-  "Re-render the single review buffer over the widest index range.
-Bind the collected records as the lineage records the renderer
-sees and clear the context filter, so every registered console's
-changes show.  Do nothing when no record matches."
-  (let ((records (scalpel-review-session--collect-records)))
-    (when records
-      (let ((buf (get-buffer-create scalpel-review-session--buffer-name)))
-        (with-current-buffer buf
-          (setq buffer-read-only nil)
-          (unless (eq major-mode 'scalpel-review-mode)
-            (kill-all-local-variables)
-            (setq major-mode 'scalpel-review-mode
-                  mode-name "Scalpel-Review")
-            (use-local-map scalpel-review-mode-map))
-          (let ((scalpel-lineage--records records)
-                (scalpel-agent--context-files nil))
-            (scalpel-review--render))
-          (setq buffer-read-only t)
-          (goto-char (point-min)))
-        (pop-to-buffer buf)
-        (dolist (win (get-buffer-window-list buf nil t))
-          (set-window-start win (point-min) t)
-          (set-window-point win (point-min)))))))
-
-(defun scalpel-review-session--on-record-appended (_record)
-  "Silently re-render the existing review buffer after a change.
-Intended for `scalpel-lineage--record-appended-hook'; the record
-argument is ignored.  Do nothing unless the review buffer already
-exists, so no prompt, no `pop-to-buffer' and no creation ever
-happens from here.  When collection yields nothing (for example a
-not-yet-registered console appended a record), the re-render is
-skipped and the existing buffer content is left untouched."
-  (let ((buffer (get-buffer scalpel-review-session--buffer-name)))
-    (when (buffer-live-p buffer)
-      (let ((records (with-current-buffer buffer
-                       (scalpel-review-session--collect-records))))
-        (when (and records (not (null records)))
-          (with-current-buffer buffer
-            (let ((inhibit-read-only t))
-              (setq scalpel-lineage--records records)
-              (scalpel-review--render)
-              (setq buffer-read-only t))))))))
-
-(add-hook 'scalpel-lineage--record-appended-hook
-          #'scalpel-review-session--on-record-appended)
+(defun scalpel-review-session--collect-indices ()
+  "Collect :index values of records tied to registered review sessions.
+Scan every live buffer for a buffer-local `scalpel-lineage--records',
+gather the :index of each record whose :session is registered in
+`scalpel-review-session--consoles', and return an inclusive (lo . hi)
+cons covering all such indices.
+Return nil when no qualifying index exists."
+  (let ((indices nil))
+    (dolist (buffer (buffer-list))
+      (when (and (buffer-live-p buffer)
+                 (local-variable-p 'scalpel-lineage--records buffer))
+        (dolist (record (buffer-local-value 'scalpel-lineage--records buffer))
+          (when (and (listp record)
+                     (plist-member record :session)
+                     (plist-member record :index)
+                     (member (plist-get record :session)
+                             scalpel-review-session--consoles))
+            (push (plist-get record :index) indices)))))
+    (when indices
+      (cons (apply #'min indices) (apply #'max indices)))))
 
 (provide 'scalpel-review-session)
 
