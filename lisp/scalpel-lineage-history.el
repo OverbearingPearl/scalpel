@@ -94,7 +94,7 @@ roadmap reflects every dialogue the consoles opened."
         (nodes (scalpel-lineage-history--nodes)))
     (erase-buffer)
     (setq header-line-format
-          " n/p next/prev | f/b session | RET rollback | g refresh | q quit ")
+          " n/p next/prev | j/k next/prev | h/l prev/next session | hjkl motion | f/b session | RET rollback | g refresh | q quit ")
     (if (null nodes)
         (insert "No lineage dialogues recorded.\n")
       (cl-loop for node in nodes
@@ -277,8 +277,8 @@ back to any point of the recorded history."
         (kill-all-local-variables)
         (setq major-mode 'scalpel-lineage-history-mode
               mode-name "Scalpel-Lineage-History")
-        (use-local-map scalpel-lineage-history-mode-map)
         (setq buffer-read-only t))
+      (use-local-map scalpel-lineage-history-mode-map)
       (scalpel-lineage-history--render))
     (pop-to-buffer buf)))
 
