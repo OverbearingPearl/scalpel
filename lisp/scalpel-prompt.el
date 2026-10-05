@@ -107,26 +107,8 @@ Structural contract shared by that command and
 `scalpel-console-mode-map', which binds it.")
 
 (defconst scalpel-prompt--retry
-  "The last change failed.  Do not change direction and do not replan:
-keep the original design.  Analyze more deeply why the last change
-failed, then continue with a more careful new attempt along the same
-line."
-  "Prompt instructing the agent to retry a failed change.
-The last change failed, and the agent must not change direction or
-replan; it should keep the original design, analyze more deeply why
-the last change failed, and continue with a more careful new attempt
-along the same line.
-
-Sent by the retry command bound in `scalpel-console-mode-map', via
-`scalpel-console-send-retry'.  Unlike `scalpel-prompt--replan', which
-abandons the current approach and reverts it, this prompt keeps the
-original design: the agent must stay on the same line and make a more
-careful attempt.  Like `scalpel-prompt--why' and
-`scalpel-prompt--summarize', the response must not include any
-unrelated modification beyond the new attempt.")
-
-(defconst scalpel-prompt--retry
-  "Retry prompt text used when an operation must be attempted again.")
+  "The last change failed.  Keep the original design -- do not change direction and do not replan.  Analyze more deeply why it failed, then continue with a more careful new attempt along the same line."
+  "Retry prompt sent by `scalpel-console-send-retry'.")
 
 (defun scalpel-prompt--stale-file-retry-instruction ()
   "Return the dedicated retry instruction for stale-file errors.
@@ -137,11 +119,10 @@ stale-file error is detected, returning the constant
   scalpel-prompt-rule--stale-file-retry)
 
 (defun scalpel-prompt--substitute-retry-instruction ()
-  "Return the stale-file retry instruction wording.
-The wording itself lives in `scalpel-prompt-rule--stale-file-retry'; this
-function is only the selection/formatting layer.  The rule text contains
-no %s placeholders, so `format' is called without extra arguments."
-  (format scalpel-prompt-rule--stale-file-retry))
+  "Return the substitute-retry instruction wording.
+The wording itself lives in `scalpel-prompt-rule--substitute-retry'; this
+function is only the selection layer."
+  scalpel-prompt-rule--substitute-retry)
 
 (defconst scalpel-prompt--resume
   "The previous round was cut off by an interruption outside
@@ -205,13 +186,8 @@ language."
     scalpel-prompt--history-compress-instruction))
 
 (defconst scalpel-prompt--history-compress-preamble
-  "State that this text is a compressed report of the earlier
-conversation and needs no reply.  Kept in English because it is read
-by the model."
-  "This is the fixed preamble for the compressed conversation history.
-It states that the following text is a compressed report of the
-earlier conversation and needs no reply.  It is kept in English
-because it is read by the model.")
+  "This text is a compressed report of the earlier conversation; it needs no reply."
+  "Preamble for compressed conversation history text.")
 
 (defconst scalpel-prompt--project-rules-header
   "Project user prompt rules:\n%s\n\n"
@@ -333,6 +309,8 @@ model's thinking follows that language."
    scalpel-prompt-rule--substitute-pattern "\n"
    scalpel-prompt-rule--redaction "\n"
    scalpel-prompt-rule--scope "\n"
+   scalpel-prompt-rule--confirm-placement "\n"
+   scalpel-prompt-rule--untrusted-output "\n"
    scalpel-prompt-rule--whole-block "\n"
    scalpel-prompt-rule--instruction "\n"
    scalpel-prompt-rule--reply-brevity "\n"

@@ -26,27 +26,10 @@
 (require 'cl-lib)
 
 (defconst scalpel-tool--perl-substitute-rule
-  "The target engine for a file-substitute pattern is Perl 5.x:
-write a Perl-compatible regular expression and do not use
-Emacs-only constructs.  Before writing the pattern, compile-test
-it in Perl itself with qr// or m//; if compilation fails, take
-the concrete error message Perl prints and fix the pattern next
-round rather than guessing.
-Write every literal as the exact characters to match.  The dot
-metacharacter excludes newlines by default, so handle newlines
-explicitly with a whitespace class.  There is no non-greedy
-matching guarantee across engines: constrain matches with negated
-character classes, anchors, or backtracking constraints instead
-of lazy quantifiers.  The replacement is exact replacement text
-where Perl's dollar-one style numbering is what the engine uses,
-and the ampersand form means the whole match.
-The common constructs are literals, character classes,
-non-capturing groups, capture groups, alternation, repetition,
-anchors, and word, whitespace and digit classes.
-A pattern is a plain regexp string, nothing else: output only the
-regexp text itself, with no quotes, no delimiters, no flags, no
-qr// or m// wrapper, and no prose."
-  "Prompt wording for perl as the substitute tool.")
+  "Substitute patterns are compiled by Perl 5, which is installed
+locally, so write them as Perl-compatible regexps rather than
+Emacs-only constructs.  When a pattern's semantics are uncertain,
+query the perlre manual through filtered perldoc.")
 
 (defconst scalpel-tool--rg-search-rule
   "Search with ripgrep.  Patterns are Rust regex syntax:

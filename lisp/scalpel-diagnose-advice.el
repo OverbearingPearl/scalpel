@@ -285,13 +285,6 @@ Applies `scalpel-redact-apply' before returning."
           (setq content (replace-regexp-in-string
                          (concat "\\b" (regexp-quote bad-symbol) "\\b")
                          good-symbol input t t)))))
-     ((eq type 'pattern-no-match)
-      (when (string-match
-             (rx "near-miss line:" (one-or-more blank)
-                 (group (one-or-more any)))
-             message)
-        (let ((line (match-string 1 message)))
-          (setq content (concat "; Hint: near-miss line: " line)))))
      ((eq type 'prose)
       (let ((idx (string-match "\\[\\[" input)))
         (when idx
