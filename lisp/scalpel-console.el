@@ -1276,12 +1276,15 @@ expansion through gitignore rules."
           (scalpel-agent-context-remove path)
           (scalpel-console--show-context))))))
 
-(defun scalpel-console-forget-history ()
+(defun scalpel-console-forget-history (&optional no-confirm)
   "Stop sending the current conversation to the agent, asking for confirmation.
 Since forgetting is destructive to the session history, the command
 prompts with `y-or-n-p' before dropping anything; answering no
 leaves everything untouched and only reports that nothing was
-forgotten.  Every prior turn keeps its place in the buffer but
+forgotten.  With optional NO-CONFIRM non-nil, the prompt is
+skipped and the history is forgotten directly; the compression
+flow passes non-nil there because the user already confirmed the
+compression.  Every prior turn keeps its place in the buffer but
 loses its `scalpel-console-role' tag, so
 `scalpel-console--history' no longer returns it.  Forgetting is
 about what the agent reads, not about what the user sees: the
@@ -1294,7 +1297,8 @@ is input, not memory — to reset it use
 the turns: a forgotten turn is not read at all, so a mark saying its
 body was dropped would describe the wrong thing."
   (interactive)
-  (if (not (y-or-n-p "Forget the whole Scalpel conversation history? "))
+  (if (and (not no-confirm)
+           (not (y-or-n-p "Forget the whole Scalpel conversation history? ")))
       (message "Scalpel: conversation history kept; nothing was forgotten.")
     (with-current-buffer (scalpel-console--target-buffer)
       (let ((inhibit-read-only t)
@@ -1387,8 +1391,10 @@ symbol `deferred' is returned immediately so the caller can hold
 back the pending instruction.  In the success callback the
 summary is held in a local first; a non-string or whitespace-only
 summary is treated as a failure with a display-only note only.
-Otherwise the old history is forgotten exactly the way
-`scalpel-console-forget-history' forgets it, the held summary is
+Otherwise the old history is forgotten by calling
+`scalpel-console-forget-history' with a non-nil argument, which
+skips its confirmation because the user already confirmed the
+compression by answering yes to the offer, the held summary is
 appended as a user turn prefixed by
 `scalpel-prompt--history-compress-preamble', the consumed-body
 markers are refreshed, the compression baseline is reset to the
@@ -1459,9 +1465,11 @@ to resend the instruction."))
                      ;; buffer, so the rewrite below is independent of
                      ;; how the buffer changes during insertion.
                      (let ((held summary))
-                       ;; Forget the old history exactly the way
-                       ;; `scalpel-console-forget-history' forgets it.
-                       (scalpel-console-forget-history)
+                       ;; Forget the old history, skipping the
+                       ;; confirmation because the user already
+                       ;; confirmed the compression by answering yes to
+                       ;; the offer.
+                       (scalpel-console-forget-history t)
                        ;; Connector note between the old conversation and
                        ;; the compressed summary.
                        (scalpel-console--insert-compression-note
