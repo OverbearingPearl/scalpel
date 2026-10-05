@@ -231,6 +231,112 @@ Paths are absolute.  Return nil when DIR is not inside a git tree."
             (mapcar (lambda (rel) (expand-file-name rel default-directory))
                     (split-string (buffer-string) "\0" t))))))))
 
+(defun scalpel-agent--scalpel-ignore-regexp (pattern)
+  "Convert one .scalpelignore PATTERN into a regexp.
+Blank lines and comments starting with `#' return nil.  The
+pattern always matches a path relative to the ignore file's
+directory; that directory itself is not part of the regexp.
+A trailing slash restricts the match to directories.  `*' matches
+within one path segment, `**' matches across segments; every other
+character is regexp-quoted."
+  (when (stringp pattern)
+    (setq pattern (string-trim pattern))
+    (when (and (not (string-empty-p pattern))
+               (/= (aref pattern 0) ?#))
+      (let ((dir-only nil)
+            (segments nil)
+            (i 0)
+            (seg ()))
+        ;; detect trailing slash
+        (when (string-suffix-p "/" pattern)
+          (setq dir-only t
+                pattern (substring pattern 0 -1)))
+        ;; split on "/" building a segment list
+        (while (< i (length pattern))
+          (let ((ch (aref pattern i)))
+            (if (eq ch ?/)
+                (push (apply #'concat (nreverse seg)) segments)
+              (cond
+               ;; "**" across segments
+               ((and (eq ch ?*)
+                     (< (1+ i) (length pattern))
+                     (eq (aref pattern (1+ i)) ?*))
+                (push ".*" seg)
+                (setq i (1+ i)))
+               ;; "*" within one segment
+               ((eq ch ?*)
+                (push "[^/]*" seg))
+               (t
+                (push (regexp-quote (string ch)) seg)))))
+          (setq i (1+ i)))
+        (push (apply #'concat (nreverse seg)) segments)
+        (let* ((joined (string-join (nreverse segments) "/"))
+               ;; anchor both ends; match a full relative path
+               (base (concat "\\`" joined "\\'"))
+               ;; allow an optional extra path for a directory rule
+               (rx (if dir-only
+                       (concat "\\`" joined "\\(?:/.*\\)?\\'")
+                     base)))
+          rx)))))
+
+(defun scalpel-agent--scalpel-ignore-files (files dir)
+  "Return FILES whose path relative to DIR matches a .scalpelignore pattern.
+These are the files to drop; callers must remove them from their list.
+Read DIR/.scalpelignore if it exists; skip blank and hash-comment lines.
+Each line is translated via `scalpel-agent--scalpel-ignore-regexp'.
+Return nil when the ignore file is absent."
+  (let ((ignore-file (expand-file-name ".scalpelignore" dir)))
+    (when (file-exists-p ignore-file)
+      (let ((patterns
+             (delq nil
+                   (mapcar
+                    (lambda (line)
+                      (setq line (string-trim line))
+                      (unless (or (string-empty-p line)
+                                  (eq (aref line 0) ?#))
+                        (scalpel-agent--scalpel-ignore-regexp line)))
+                    (split-string
+                     (with-temp-buffer
+                       (insert-file-contents ignore-file)
+                       (buffer-string))
+                     "\n")))))
+        (cl-remove-if
+         (lambda (file)
+           (let ((rel (file-relative-name (expand-file-name file) dir)))
+             (cl-some (lambda (re) (string-match-p re rel)) patterns)))
+         files)))))
+
+(defun scalpel-agent--scalpel-ignored-files (dir files)
+  "Return the subset of FILES ignored by DIR/.scalpelignore.
+FILES are paths relative to DIR.  A file is ignored when any pattern
+matches its relative path.  Return nil when the ignore file is absent."
+  (when (file-exists-p (expand-file-name ".scalpelignore" dir))
+    (let ((patterns nil)
+          (rules nil))
+      (with-temp-buffer
+        (insert-file-contents (expand-file-name ".scalpelignore" dir))
+        (setq patterns
+              (delq nil
+                    (mapcar
+                     (lambda (line)
+                       (scalpel-agent--scalpel-ignore-regexp line))
+                     (split-string (buffer-string) "\n" t)))))
+      (setq rules patterns)
+      (seq-filter
+       (lambda (file)
+         (let* ((rel (file-relative-name (expand-file-name file dir) dir))
+                (hit nil))
+           (dolist (rx rules)
+             (when (and (not hit)
+                        (or (string-match-p rx rel)
+                            ;; trailing-slash directory rule also matches the
+                            ;; path when the file itself is a directory
+                            (and (file-directory-p (expand-file-name file dir))
+                                 (string-match-p rx (concat rel "/")))))
+               (setq hit t)))
+           hit))
+       files))))
+
 (defun scalpel-agent--walk-all-files (dir)
   "Return every regular file at or below DIR.
 `.git' is skipped whether it is a directory (plain clone) or a
@@ -250,18 +356,24 @@ gitfile (worktree or submodule)."
 
 (defun scalpel-agent--expanded-files (path &optional ignore-gitignore)
   "Return the file list that PATH expands to.
-PATH is a regular file or a directory.  Directory contents respect
-gitignore unless IGNORE-GITIGNORE is non-nil."
+PATH is a regular file or a directory.  A regular file is
+returned as-is.  Directory contents respect gitignore unless
+IGNORE-GITIGNORE is non-nil.  After expansion, directory results
+are additionally filtered through
+`scalpel-agent--scalpel-ignore-files' using the directory as the
+ignore-file location."
   (let* ((path (file-truename (expand-file-name path)))
          (files
           (cond
            ((file-regular-p path) (list path))
            ((file-directory-p path)
-            (cond
-             (ignore-gitignore (scalpel-agent--walk-all-files path))
-             ((scalpel-agent--git-toplevel path)
-              (scalpel-agent--git-listed-files path))
-             (t (scalpel-agent--walk-all-files path))))
+            (scalpel-agent--scalpel-ignore-files
+             (cond
+              (ignore-gitignore (scalpel-agent--walk-all-files path))
+              ((scalpel-agent--git-toplevel path)
+               (scalpel-agent--git-listed-files path))
+              (t (scalpel-agent--walk-all-files path)))
+             path))
            (t nil))))
     files))
 

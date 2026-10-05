@@ -165,10 +165,24 @@ the empty string on any failure; never returns nil."
                            "\n"
                            (format "POD file: %s\n" pod-path)
                            (format
-                            (concat "Read one section (replace START/END "
-                                    "with its line numbers):\n"
+                            (concat "MANDATORY: Your FIRST action in the "
+                                    "next round MUST be one shell command. "
+                                    "Run the command below with START/END "
+                                    "replaced by the real start and end "
+                                    "line numbers of one section listed "
+                                    "above. This is the only permitted way "
+                                    "to read that section.\n"
                                     "perl -ne 'print if $. >= START && "
-                                    "$. <= END' %s\n")
+                                    "$. <= END' %s\n"
+                                    "You are FORBIDDEN, in this round, from "
+                                    "producing the fixed pattern directly. "
+                                    "You are FORBIDDEN from skipping the "
+                                    "reading step. Do NOT use sed; use the "
+                                    "Perl one-liner above. Only after the "
+                                    "output of that shell command appears "
+                                    "in the conversation are you allowed to "
+                                    "proceed with the replacement fix in a "
+                                    "later round.\n")
                             pod-path))
                         "")))))))))
 

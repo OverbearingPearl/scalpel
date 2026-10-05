@@ -1,0 +1,15 @@
+# .scalpelignore -- files excluded when a directory is expanded
+# into the Scalpel session context.  Syntax mirrors .gitignore:
+#
+#   - blank lines and #-comments are skipped
+#   - a pattern without a leading / matches at any depth
+#   - a leading / anchors the pattern to this directory
+#   - a trailing / matches directories only
+#   - * matches within one path segment; ** matches across segments
+#
+# Examples:
+# *.log
+# build/
+# /tmp-scratch/
+
+LICENSE
