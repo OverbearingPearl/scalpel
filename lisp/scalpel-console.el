@@ -283,18 +283,22 @@ blocks on the prompt."
 (defun scalpel-console--teardown ()
   "Clean up per-console resources when a console buffer is killed.
 Runs from the console's buffer-local `kill-buffer-hook': killing the
-console kills its reasoning buffer and removes its entry (keyed by
-its buffer name) from variable `scalpel-token--console-totals', so
-neither reasoning buffers nor token totals linger after the session
-is gone.  When the session ends, the session review (via
-`scalpel-review-open') is offered exactly once, only if the session
-actually recorded changes (checked with `scalpel-lineage-clean-p');
-lineage state is reset afterwards via `scalpel-lineage-reset' so a
-later session starts clean.  Everything stays silent when there is
-no change.  Safe when the reasoning buffer does not exist."
+console kills its reasoning buffer and its raw TOML echo buffer, and
+removes its entry (keyed by its buffer name) from variable
+`scalpel-token--console-totals', so neither reasoning buffers, raw
+TOML echo buffers nor token totals linger after the session is gone.
+When the session ends, the session review (via `scalpel-review-open')
+is offered exactly once, only if the session actually recorded changes
+\(checked with `scalpel-lineage-clean-p'); lineage state is reset
+afterwards via `scalpel-lineage-reset' so a later session starts clean.
+Everything stays silent when there is no change.  Safe when the
+reasoning buffer does not exist."
   (let ((buf (get-buffer (scalpel-llm--reasoning-buffer-name (current-buffer)))))
     (when (buffer-live-p buf)
       (kill-buffer buf)))
+  (let ((raw-buf (get-buffer (concat "*scalpel-raw-toml<" (buffer-name) ">*"))))
+    (when (buffer-live-p raw-buf)
+      (kill-buffer raw-buf)))
   (when (hash-table-p scalpel-token--console-totals)
     (remhash (buffer-name) scalpel-token--console-totals))
   (condition-case nil
