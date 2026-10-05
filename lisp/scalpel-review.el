@@ -127,19 +127,22 @@ Signal with a message when there is no earlier block."
 
 (defun scalpel-review--insert-record (record)
   "Insert one RECORD into the review buffer.
-Render a header line followed by a unified diff of the record's
-old-text versus new-text, produced synchronously by the diff
-program; rename records (detected by :tool being `file-rename')
-show a rename line instead.  The record's :session value, when
-present, is shown in a bracketed suffix on the header line;
-records without a :session render as before.  The diff program's
-own header lines (\"--- before/<name>\" and \"+++ after/<name>\")
-are removed, so the diff output shows only the @@ hunk line and
-the +/- content lines; the file header line (\"File: <path>\") is
-the only label for the block.
-Header lines get a distinctive face and diff output lines get
+Insert a visible separator line of box-drawing dashes before the
+block, styled with `magit-section-heading', then render a header
+line (bold) followed by a unified diff of the record's old-text
+versus new-text, produced synchronously by the diff program;
+rename records (detected by :tool being `file-rename') show a
+rename line instead.  The record's :session value, when present,
+is shown in a bracketed suffix on the header line; records
+without a :session render as before.  The diff program's own
+header lines (\"--- before/<name>\" and \"+++ after/<name>\") are
+removed, so the diff output shows only the @@ hunk line and the
++/- content lines; the file header line (\"File: <path>\") is the
+only label for the block.
+Header lines get a bold face and diff output lines get
 `diff-added'/`diff-removed'/`diff-hunk-header' faces.  The whole
-block is tagged with the `scalpel-review-record' text property."
+block (including the separator line) is tagged with the
+`scalpel-review-record' text property."
   (let* ((inhibit-read-only t)
          (beg (point))
          (old-text (plist-get record :old-text))
@@ -154,12 +157,19 @@ block is tagged with the `scalpel-review-record' text property."
          old-file new-file)
     (unwind-protect
         (progn
+          ;; Visible separator line before the block, magit style.
+          (insert (concat (make-string (max (- (window-width) 1) 8)
+                                       (aref "─" 0))
+                          "\n"))
+          (put-text-property beg (point) 'face 'magit-section-heading)
+          (setq beg (point))
           (if (eq tool 'file-rename)
               (progn
                 (insert (format "Rename: %s -> %s%s\n"
                                 old-text file session-suffix))
-                ;; Highlight the rename header line.
-                (put-text-property beg (point) 'face 'diff-header))
+                ;; Highlight the rename header line in bold.
+                (put-text-property beg (point) 'face
+                                   '(bold diff-header)))
             (progn
               (insert (format "File: %s%s\n" file session-suffix))
               (when (scalpel-lineage-conflict-p record)
@@ -167,8 +177,9 @@ block is tagged with the `scalpel-review-record' text property."
                   (forward-line -1)
                   (end-of-line)
                   (insert "  [CONFLICT: file changed after the session]")))
-              ;; Highlight the file header line.
-              (put-text-property beg (point) 'face 'diff-header)
+              ;; Highlight the file header line in bold.
+              (put-text-property beg (point) 'face
+                                 '(bold diff-header))
               ;; Write old and new text to temporary files so the
               ;; external diff program can compare them synchronously.
               (setq old-file (make-temp-file "scalpel-review-old-"))
@@ -224,8 +235,9 @@ block is tagged with the `scalpel-review-record' text property."
                        (buffer-substring diff-start (point)))
                   (delete-region diff-start (point))
                   (insert "No differences\n")))))
-          ;; Tag the entire block with the record property last so
-          ;; face properties applied above are preserved.
+          ;; Tag the entire block (including the separator line)
+          ;; with the record property last so face properties
+          ;; applied above are preserved.
           (let ((record-end (point)))
             (put-text-property beg record-end 'scalpel-review-record record)))
       ;; Clean up the temporary files regardless of success or error.
