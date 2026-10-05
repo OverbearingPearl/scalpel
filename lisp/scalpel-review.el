@@ -278,11 +278,18 @@ are shown; otherwise all recorded changes are rendered."
 Do nothing at all -- no buffer, no message -- when
 `scalpel-lineage-clean-p' reports no recorded change.
 
-Capture `scalpel-agent--context-files' and the lineage records
-from the calling (console) buffer before switching, so the
-context filter and the rendered records reflect this session even
-though the variables are not buffer-local in the review buffer.
-Fall back to all records when the records variable is unbound.
+Capture `scalpel-agent--context-files' from the calling (console)
+buffer before switching, so the context filter reflects this
+session even though the variable is not buffer-local in the
+review buffer.
+
+Rendered records live buffer-locally on the edited file buffers,
+so a console buffer holds none of them and a purely local lookup
+would render nothing.  When `scalpel-review-session' is loaded,
+collect the records over every known dialogue session instead;
+fall back to the calling buffer's local records (or all records
+when unbound) otherwise.
+
 After popping to the review buffer, move its point and every
 displaying window's start back to the beginning on all frames, so
 a reused window never leaves the cursor at the end."
@@ -292,9 +299,12 @@ a reused window never leaves the cursor at the end."
           (context-files (if (boundp 'scalpel-agent--context-files)
                              scalpel-agent--context-files
                            nil))
-          (records (if (boundp 'scalpel-lineage--records)
-                       scalpel-lineage--records
-                     (scalpel-lineage-changes))))
+          (records
+           (if (featurep 'scalpel-review-session)
+               (scalpel-review-session--collect-records)
+             (if (boundp 'scalpel-lineage--records)
+                 scalpel-lineage--records
+               (scalpel-lineage-changes)))))
       (with-current-buffer buf
         (setq buffer-read-only nil)
         (unless (eq major-mode 'scalpel-review-mode)
