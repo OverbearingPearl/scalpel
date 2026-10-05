@@ -31,9 +31,13 @@
     (define-key map [up] #'scalpel-lineage-history-previous)
     (define-key map "l" #'scalpel-lineage-history-forward)
     (define-key map "h" #'scalpel-lineage-history-backward)
+    (define-key map "g" #'scalpel-lineage-history--refresh)
     (define-key map (kbd "RET") #'scalpel-lineage-history-rollback)
     (define-key map "q" #'quit-window)
     map))
+
+(defvar scalpel-lineage-history--buffer-name "*scalpel-roadmap*"
+  "Name of the roadmap buffer used by --refresh and --open.")
 
 (defun scalpel-lineage-history--all-records ()
   "Collect lineage records from every live buffer.
@@ -89,8 +93,8 @@ roadmap reflects every dialogue the consoles opened."
   (let ((inhibit-read-only t)
         (nodes (scalpel-lineage-history--nodes)))
     (erase-buffer)
-    (insert "Lineage history: one node per dialogue.  "
-            "n/p or j/k move, f/b or h/l jump session, RET rollback, q quit.\n\n")
+    (setq header-line-format
+          " n/p next/prev | f/b session | RET rollback | g refresh | q quit ")
     (if (null nodes)
         (insert "No lineage dialogues recorded.\n")
       (cl-loop for node in nodes
@@ -98,6 +102,15 @@ roadmap reflects every dialogue the consoles opened."
                (scalpel-lineage-history--insert-node node i)))
     (goto-char (point-min))
     (scalpel-lineage-history--snap)))
+
+(defun scalpel-lineage-history--refresh ()
+  "Refresh the lineage history roadmap buffer in place.
+Re-render the roadmap from the current lineage dialogues so that
+newly appeared dialogues or records are reflected in the display."
+  (interactive)
+  (when (get-buffer scalpel-lineage-history--buffer-name)
+    (with-current-buffer scalpel-lineage-history--buffer-name
+      (scalpel-lineage-history--render))))
 
 (defun scalpel-lineage-history--insert-node (node i)
   "Insert one roadmap NODE numbered I at point."
@@ -258,7 +271,7 @@ The roadmap lists every lineage dialogue across all console
 sessions in global record order, so the user can inspect and roll
 back to any point of the recorded history."
   (interactive)
-  (let ((buf (get-buffer-create "*scalpel lineage history*")))
+  (let ((buf (get-buffer-create scalpel-lineage-history--buffer-name)))
     (with-current-buffer buf
       (unless (eq major-mode 'scalpel-lineage-history-mode)
         (kill-all-local-variables)
