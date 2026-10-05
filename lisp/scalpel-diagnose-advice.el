@@ -113,44 +113,64 @@ on every subsequent call so that POD extraction is not repeated.")
 This is the single, self-contained advice-layer owner of TOC
 extraction.  On the first call the perlre POD file is located via
 `perldoc -l perlre', the file is read, and every =head1..=head4
-title is collected and indented according to its heading level.
-The joined string is cached in
+title is collected with the real POD line number it appears on.
+Each entry is formatted as \"line NNNN: Title\" and indented by
+two spaces per heading level.  A fixed footer is appended giving
+the POD path and a copy-pasteable Perl one-liner template for
+reading one section (sed is forbidden, hence Perl is used).  The
+joined string is cached in
 `scalpel-diagnose-advice--perlre-toc-cache' and returned on all
 later calls without re-extraction.  Consumers (console error
 rendering, agent refusal assembly) rely on this advice-layer
 entry point instead of the prompt layer owning the TOC.  Returns
 the empty string on any failure; never returns nil."
   (or scalpel-diagnose-advice--perlre-toc-cache
-      (let ((raw (condition-case nil
-                     (with-temp-buffer
-                       (call-process "perldoc" nil t nil "-l" "perlre")
-                       (let ((path (string-trim (buffer-string))))
-                         (when (and (string-match-p "\\`/.*\\'" path)
-                                    (file-readable-p path))
-                           (with-current-buffer (find-file-noselect path)
-                             (unwind-protect
-                                 (buffer-string)
-                               (kill-buffer))))))
-                   (error nil))))
+      (let ((result nil))
+        (condition-case nil
+            (let ((path ""))
+              (with-temp-buffer
+                (call-process "perldoc" nil t nil "-l" "perlre")
+                (setq path (string-trim (buffer-string))))
+              (when (and (string-match-p "\\`/.*\\'" path)
+                         (file-readable-p path))
+                (let ((raw
+                       (with-temp-buffer
+                         (insert-file-contents path)
+                         (buffer-string))))
+                  (setq result (cons path raw)))))
+          (error nil))
         (setq scalpel-diagnose-advice--perlre-toc-cache
-              (if (not raw)
+              (if (not result)
                   ""
-                (with-temp-buffer
-                  (insert raw)
-                  (goto-char (point-min))
-                  (let ((lines nil)
-                        (case-fold-search nil))
-                    (while (re-search-forward
-                            "^=head\\([1-4]\\)[ \t]+\\([^\n]+\\)" nil t)
-                      (let ((level (string-to-number (match-string 1)))
-                            (title (string-trim (match-string 2))))
-                        (push (concat (make-string (* (1- level) 2)
-                                                   ?\s)
-                                      title)
-                              lines)))
-                    (if lines
-                        (string-join (nreverse lines) "\n")
-                      ""))))))))
+                (let ((pod-path (car result))
+                      (raw (cdr result)))
+                  (with-temp-buffer
+                    (insert raw)
+                    (goto-char (point-min))
+                    (let ((lines nil)
+                          (case-fold-search nil))
+                      (while (re-search-forward
+                              "^=head\\([1-4]\\)[ \t]+\\([^\n]+\\)" nil t)
+                        (let ((level (string-to-number (match-string 1)))
+                              (title (string-trim (match-string 2)))
+                              (line-no (line-number-at-pos
+                                        (match-beginning 0))))
+                          (push (concat (make-string (* (1- level) 2) ?\s)
+                                        (format "line %d: %s"
+                                                line-no title))
+                                lines)))
+                      (if lines
+                          (concat
+                           (string-join (nreverse lines) "\n")
+                           "\n"
+                           (format "POD file: %s\n" pod-path)
+                           (format
+                            (concat "Read one section (replace START/END "
+                                    "with its line numbers):\n"
+                                    "perl -ne 'print if $. >= START && "
+                                    "$. <= END' %s\n")
+                            pod-path))
+                        "")))))))))
 
 (defconst scalpel-diagnose-advice-perl-error-types
   '(pattern-no-match)
