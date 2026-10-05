@@ -1302,7 +1302,8 @@ unchanged so the caller's refusal path reports it."
 Return a human-readable report string.  Signal `user-error' if the target
 region was modified while an LLM request was in flight."
   (with-current-buffer (find-file-noselect file)
-    (let ((range (scalpel-agent--verified-range file symbol expected-body)))
+    (let* ((range (scalpel-agent--verified-range file symbol expected-body))
+           (old-text (buffer-substring-no-properties (car range) (cdr range))))
       (scalpel-execute-replace (car range) (cdr range) new-text)
       (condition-case nil
           (progn
@@ -1310,7 +1311,7 @@ region was modified while an LLM request was in flight."
             (when (fboundp 'scalpel-lineage-note)
               (scalpel-lineage-note 'block-edit
                                     file
-                                    (buffer-substring-no-properties (car range) (cdr range))
+                                    old-text
                                     new-text)))
         (error nil))
       (let ((renamed (scalpel-agent--replacement-name new-text)))
