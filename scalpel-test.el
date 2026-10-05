@@ -109,6 +109,16 @@ applies.  Variables merely holding their standard value are not
 touched.  On Emacs versions older than 30 the predicate
 `customized-variable-p' is missing, so the customization snapshot is
 simply skipped there and the reload proceeds without it.
+Additionally, `scalpel-prompt-reply-language' is snapshotted
+explicitly: a value set on it with plain `setq' has no customized-value
+or saved-value plist entry, so the generic snapshot misses it and
+re-declaring the defcustom via `load-file' would wipe it back to nil.
+Whatever bound value it holds is captured together with the session
+snapshot at the top and put back after all reload `load-file' calls
+have finished, but only when the variable is still bound after reload;
+the capture is skipped silently when the feature or the variable does
+not exist.
+
 After all reload `load-file' calls have finished, each snapshotted
 value is put back only when the variable is still bound after reload,
 so re-declared defcustoms do not wipe the user's settings back to
@@ -122,7 +132,7 @@ needs maintenance as modules come and go.
 Reloading is refused while any console has a round in flight, because
 redefining the functions that round is running under would strand its
 async callback on a mix of old and new definitions.  Wait for the round
-to end or abort it with `scalpel-console-abort`."
+to end or abort it with `scalpel-console-abort'."
   (let (busy-buffer)
     (dolist (buffer (buffer-list))
       (with-current-buffer buffer
@@ -161,7 +171,19 @@ to end or abort it with `scalpel-console-abort`."
                        "a console may need `scalpel-open' again")
                (error-message-string err))
               nil))))
+        prompt-reply-language-snapshot
         custom-snapshot)
+    ;; Snapshot `scalpel-prompt-reply-language' explicitly: a value set on
+    ;; it with plain `setq' has no customized-value or saved-value plist
+    ;; entry, so the generic customization snapshot below misses it and the
+    ;; defcustom re-declared by load-file would reset it to nil.  Whatever
+    ;; bound value it holds is captured here and put back after the reload
+    ;; when the variable is still bound; skipped silently when the feature
+    ;; or the variable does not exist.
+    (when (featurep 'scalpel-prompt)
+      (when (boundp 'scalpel-prompt-reply-language)
+        (setq prompt-reply-language-snapshot
+              (symbol-value 'scalpel-prompt-reply-language))))
     ;; Snapshot user-set customizations generically: variables with a
     ;; recorded customized value in their symbol plist (set this session
     ;; via setopt/customize-set-variable/:custom), or with a recorded
@@ -207,6 +229,12 @@ to end or abort it with `scalpel-console-abort`."
         (load-file (expand-file-name file
                                      (expand-file-name "lisp"
                                                        scalpel-test--package-root)))))
+    ;; Restore `scalpel-prompt-reply-language' after the reload, but only
+    ;; when the variable is still bound, so a module that dropped or renamed
+    ;; the defcustom does not get the old value forced back onto it.
+    (when (and prompt-reply-language-snapshot
+               (boundp 'scalpel-prompt-reply-language))
+      (setq scalpel-prompt-reply-language prompt-reply-language-snapshot))
     ;; Restore user-set customizations after reload: only when the variable
     ;; is still bound, so defcustoms re-declared by load-file do not wipe the
     ;; user's settings back to their defaults.  Customized variables are
