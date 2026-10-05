@@ -177,13 +177,15 @@ The @@ header line is skipped."
 (defun scalpel-review-reject-hunk ()
   "Reject the diff hunk under point in the review buffer.
 Reverse-apply one @@ hunk of the record's diff instead of
-restoring the whole block: the hunk's before-side lines (context
-and removed) must occur exactly once in the file, then they are
-replaced by the after-side lines (context and added).  The
-record's :new-text is rewritten accordingly so later block-level
-restores stay consistent.  Unlike `scalpel-review-reject-block'
-no later records for the same file are undone first; a stale file
-is reported and nothing is changed."
+restoring the whole block: the diff shows changes already applied,
+so the file is in the after state.  The hunk's after-side lines
+\(context and added) must occur exactly once in the file, then
+they are replaced by the before-side lines (context and removed).
+The record's :new-text is rewritten accordingly so later
+block-level restores stay consistent.  Unlike
+`scalpel-review-reject-block' no later records for the same file
+are undone first; a stale file is reported and nothing is
+changed."
   (interactive)
   (let ((region (scalpel-review--hunk-region-at-point)))
     (if (not region)
@@ -192,35 +194,35 @@ is reported and nothing is changed."
              (file (plist-get record :file))
              (ops (scalpel-review--hunk-operations
                    (car region) (cdr region)))
-             (before (mapconcat
-                      (lambda (op)
-                        (if (memq (car op) '(context removed))
-                            (nth 1 op) ""))
-                      ops ""))
              (after (mapconcat
                      (lambda (op)
                        (if (memq (car op) '(context added))
                            (nth 1 op) ""))
-                     ops "")))
-        (if (string-empty-p before)
-            (message "Nothing to reject in this hunk")
+                     ops ""))
+             (before (mapconcat
+                      (lambda (op)
+                        (if (memq (car op) '(context removed))
+                            (nth 1 op) ""))
+                      ops "")))
+        (if (string-empty-p after)
+            (message "Nothing to locate in this hunk")
           (let ((current
                  (with-temp-buffer
                    (insert-file-contents file)
                    (buffer-string))))
-            (let ((first (string-search before current)))
+            (let ((first (string-search after current)))
               (cond
                ((not first)
                 (message "Refused: hunk context not found in file"))
-               ((string-search before current (1+ first))
+               ((string-search after current (1+ first))
                 (message "Refused: hunk context is ambiguous"))
                (t
                 (with-temp-buffer
-                  (insert (string-replace before after current))
+                  (insert (string-replace after before current))
                   (write-region (point-min) (point-max)
                                 file nil 'silent))
                 (plist-put record :new-text
-                           (string-replace before after
+                           (string-replace after before
                                            (plist-get record :new-text)))
                 (message "Rejected one hunk"))))))))))
 

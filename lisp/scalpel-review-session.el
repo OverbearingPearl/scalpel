@@ -60,12 +60,17 @@ Records live buffer-locally on the edited file's buffer, so scan
 every live buffer's `scalpel-lineage--records' and keep records
 whose :session is registered and whose :index falls in the widest
 dialogue range.  Records without :index (pre-dating the counter)
-are kept when their :session matches."
+are kept when their :session matches.  The review buffer itself
+\(named `scalpel-review-session--buffer-name') is skipped: it
+holds a buffer-local copy of the records from the last render,
+and including it would list every record twice."
   (let ((range (scalpel-review-session--index-range))
         (result nil))
     (when range
       (dolist (buffer (buffer-list))
-        (when (local-variable-p 'scalpel-lineage--records buffer)
+        (when (and (not (string= (buffer-name buffer)
+                                 scalpel-review-session--buffer-name))
+                   (local-variable-p 'scalpel-lineage--records buffer))
           (dolist (record (buffer-local-value
                            'scalpel-lineage--records buffer))
             (let ((session (plist-get record :session))
