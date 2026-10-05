@@ -16,8 +16,8 @@
 
 ;;; Code:
 
-(defvar scalpel-lineage--records nil
-  "Change records of the current session, oldest last.
+(defvar-local scalpel-lineage--records nil
+  "Change records of the current buffer's session, oldest last.
 Each entry is a plist: :tool :file :old-text :new-text :round
 :old-hash :new-hash.  For file-create, :old-text is nil; for
 file-delete, :new-text is nil; for file-rename, :file names the new
@@ -25,20 +25,21 @@ path and :old-text the original one.  Text tools record the replaced
 segment in :old-text and what replaced it in :new-text, so a restore
 can locate its target without a whole-file snapshot per record.
 
-This is deliberately global, not buffer-local: the recorder runs
-from agent/execute callbacks whose current buffer is the edited
-file's buffer, so buffer-local state would silently drop records.
-A multi-console future should add a session tag to scope records
-per session.")
+Buffer-local so each session tracks only the changes its own
+conversation produced instead of sharing one global list across
+sessions.  The recorder runs from agent/execute callbacks whose
+current buffer is the edited file's buffer, so records land on the
+buffer belonging to the file being edited.  A multi-console future
+should add a session tag to further scope records per session.")
 
-(defvar scalpel-lineage--baseline nil
+(defvar-local scalpel-lineage--baseline nil
   "Dangling git commit captured at session start, or nil.
 Produced by `git stash create', which touches neither the worktree
 nor any ref; the session-level diff anchors on it.
-Global, not buffer-local: the anchor is captured once per session
-and must survive being set from a non-session buffer.")
+Buffer-local: each console captures its own git baseline, so one
+console's anchor never leaks to another.")
 
-(defvar scalpel-lineage-round 0
+(defvar-local scalpel-lineage-round 0
   "Round counter the recorder stamps into every record.
 The console increments it per round; lineage itself never does.")
 
@@ -73,21 +74,59 @@ Writes that are a no-op are not recorded at all: when both
 OLD-TEXT and NEW-TEXT are strings and equal, or when both are
 nil, return nil without creating a record, so sessions whose
 every write left content identical stay clean-p true and the
-session-end review stays silent.  Hashes let a later restore
-detect that the file moved on since the change, so it refuses
-instead of clobbering user edits."
+session-end review stays silent.  When the change has already
+landed on disk and the current file content contains the
+recorded new text exactly once, store whole-file snapshots: the
+pre-change content derived by replacing the new text back with
+the old text, and the post-change file content, each with a
+whole-content sha1 hash.  Otherwise keep the passed segment
+texts.  Whole-file snapshots let a later restore of an earlier
+record succeed for a file edited several times in one session;
+hashes let a later restore detect that the file moved on since
+the change, so it refuses instead of clobbering user edits."
   (if (or (and (stringp old-text) (stringp new-text)
                (string= old-text new-text))
           (and (null old-text) (null new-text)))
       nil
-    (let ((record
-           (list :tool tool
-                 :file file
-                 :old-text old-text
-                 :new-text new-text
-                 :round scalpel-lineage-round
-                 :old-hash (when old-text (secure-hash 'sha1 old-text))
-                 :new-hash (when new-text (secure-hash 'sha1 new-text)))))
+    (let* ((current (and (stringp old-text) (stringp new-text)
+                         (file-exists-p file)
+                         (with-temp-buffer
+                           (insert-file-contents file)
+                           (buffer-string))))
+           (snapshot-p (and current
+                            (stringp new-text)
+                            (not (string= new-text ""))
+                            (equal
+                             (let ((first (string-search new-text current)))
+                               (and first
+                                    (not (string-search
+                                          new-text current
+                                          (1+ first)))))
+                             0)))
+           (record
+            (if snapshot-p
+                (let* ((after current)
+                       (before (concat
+                                (substring current 0
+                                           (string-search new-text current))
+                                old-text
+                                (substring current
+                                           (+ (string-search new-text current)
+                                              (length new-text))))))
+                  (list :tool tool
+                        :file file
+                        :old-text before
+                        :new-text after
+                        :round scalpel-lineage-round
+                        :old-hash (secure-hash 'sha1 before)
+                        :new-hash (secure-hash 'sha1 after)))
+              (list :tool tool
+                    :file file
+                    :old-text old-text
+                    :new-text new-text
+                    :round scalpel-lineage-round
+                    :old-hash (when old-text (secure-hash 'sha1 old-text))
+                    :new-hash (when new-text (secure-hash 'sha1 new-text))))))
       (setq scalpel-lineage--records
             (append scalpel-lineage--records (list record)))
       record)))
@@ -129,6 +168,10 @@ change landed, so it is refused rather than guessed."
       (and (file-exists-p file)
            (not (equal (scalpel-lineage--file-hash file)
                        (plist-get record :new-hash)))))
+     ((eq (plist-get record :tool) 'file-delete)
+      (and (file-exists-p file)
+           (not (equal (scalpel-lineage--file-hash file)
+                       (plist-get record :old-hash)))))
      ((eq (plist-get record :tool) 'file-rename)
       (not (and (file-exists-p file)
                 (not (file-exists-p (plist-get record :old-text))))))

@@ -2097,8 +2097,8 @@ after %s: %s."
                     "Scalpel: Mission complete, over."))
                   ((unattended-p)
                    (stop-unattended "error ended the run")))
-                 (open-session-review)
-                 (goto-char (point-max)))))
+                 (goto-char (point-max))
+                 (open-session-review))))
            (run-next ()
              (when (unattended-p)
                (unless scalpel-console--unattended-start

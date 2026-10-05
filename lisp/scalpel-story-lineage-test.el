@@ -99,15 +99,16 @@
 
 ;; Story E: the review renders a recorded edit as a diff block.
 (ert-deftest scalpel-story-lineage-test-renders-recorded-edit ()
-  (let ((review-buf nil))
+  (let ((review-buf nil)
+        (scalpel-agent--context-files nil))
     (unwind-protect
         (progn
-          (scalpel-lineage-reset)
-          (scalpel-lineage-note 'block-edit
-                                "/tmp/scalpel-review-example.el"
-                                "old\n"
-                                "new\n")
           (with-current-buffer (get-buffer-create " *review render*")
+            (scalpel-lineage-reset)
+            (scalpel-lineage-note 'block-edit
+                                  "/tmp/scalpel-review-example.el"
+                                  "old\n"
+                                  "new\n")
             (erase-buffer)
             (let ((inhibit-read-only t))
               (scalpel-review--render))

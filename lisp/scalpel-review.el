@@ -45,7 +45,7 @@
   (interactive)
   (let ((pos (point))
         (found nil))
-    (while (and pos (not found))
+    (while (and pos (/= pos (point-max)) (not found))
       (setq pos (next-single-property-change pos 'scalpel-review-record
                                              nil (point-max)))
       (when (and pos (< pos (point-max))
@@ -74,20 +74,45 @@ Signal with a message when there is no earlier block."
   (let ((record (scalpel-review--record-at-point)))
     (if (not record)
         (message "No block under point")
-      (pcase (scalpel-lineage-restore record)
-        (`t
-         (save-excursion
-           (let* ((beg (if (get-text-property (point) 'scalpel-review-record)
-                           (previous-single-property-change
-                            (point) 'scalpel-review-record nil (point-min))
-                         (point)))
-                  (end (next-single-property-change
-                        beg 'scalpel-review-record nil (point-max))))
-             (put-text-property beg end 'face 'scalpel-review-rejected)))
-         (message "Restored one change"))
-        (`conflict
-         (message "Refused: the file changed since this change landed"))
-        (other (message "Restore returned %S" other))))))
+      (let ((file (plist-get record :file))
+            (pos (point))
+            (blocked nil))
+        ;; A later edit to the same file can rewrite or remove the
+        ;; region this record's new text occupies.  Undo every newer
+        ;; record for the same file (newest first, i.e. buffer order
+        ;; below point) so the earlier record's new text is present
+        ;; again and restores cleanly.
+        (save-excursion
+          (goto-char (next-single-property-change
+                      pos 'scalpel-review-record nil (point-max)))
+          (catch 'blocked
+            (while (< (point) (point-max))
+              (let ((newer (get-text-property (point) 'scalpel-review-record)))
+                (when (and newer (equal (plist-get newer :file) file))
+                  (pcase (scalpel-lineage-restore newer)
+                    (`conflict
+                     (setq blocked t)
+                     (throw 'blocked nil)))))
+              (goto-char (next-single-property-change
+                          (point) 'scalpel-review-record nil (point-max))))))
+        (if blocked
+            (message "Refused: the file changed since this change landed")
+          (pcase (scalpel-lineage-restore record)
+            (`t
+             (save-excursion
+               (if (get-text-property (point) 'scalpel-review-record)
+                   (let* ((end (next-single-property-change
+                                (point) 'scalpel-review-record nil (point-max)))
+                          (beg (previous-single-property-change
+                                end 'scalpel-review-record nil (point-min))))
+                     (let ((inhibit-read-only t))
+                       (put-text-property beg end 'face 'scalpel-review-rejected)))
+                 (let ((inhibit-read-only t))
+                   (put-text-property (point) (point) 'face 'scalpel-review-rejected))))
+             (message "Restored one change"))
+            (`conflict
+             (message "Refused: the file changed since this change landed"))
+            (other (message "Restore returned %S" other))))))))
 
 (defun scalpel-review--group-by-file (records)
   "Group RECORDS by their :file, preserving first-seen order."
@@ -253,16 +278,22 @@ are shown; otherwise all recorded changes are rendered."
 Do nothing at all -- no buffer, no message -- when
 `scalpel-lineage-clean-p' reports no recorded change.
 
-Capture `scalpel-agent--context-files' from the calling (console)
-buffer before switching, so the context filter applies during
-rendering even though the variable is not buffer-local in the
-review buffer.  Fall back to all records when the variable is
-unbound."
+Capture `scalpel-agent--context-files' and the lineage records
+from the calling (console) buffer before switching, so the
+context filter and the rendered records reflect this session even
+though the variables are not buffer-local in the review buffer.
+Fall back to all records when the records variable is unbound.
+After popping to the review buffer, move its point and every
+displaying window's start back to the beginning on all frames, so
+a reused window never leaves the cursor at the end."
   (unless (scalpel-lineage-clean-p)
     (let ((buf (get-buffer-create "*scalpel session review*"))
           (context-files (if (boundp 'scalpel-agent--context-files)
                              scalpel-agent--context-files
-                           nil)))
+                           nil))
+          (records (if (boundp 'scalpel-lineage--records)
+                       scalpel-lineage--records
+                     (scalpel-lineage-changes))))
       (with-current-buffer buf
         (setq buffer-read-only nil)
         (unless (eq major-mode 'scalpel-review-mode)
@@ -271,14 +302,15 @@ unbound."
             (setq major-mode 'scalpel-review-mode
                   mode-name "Scalpel-Review")
             (use-local-map scalpel-review-mode-map)))
-        (let ((scalpel-agent--context-files context-files))
+        (let ((scalpel-agent--context-files context-files)
+              (scalpel-lineage--records records))
           (scalpel-review--render))
-        (setq buffer-read-only t))
+        (setq buffer-read-only t)
+        (goto-char (point-min)))
       (pop-to-buffer buf)
-      (let ((win (get-buffer-window buf)))
-        (when win
-          (set-window-point win (point-min))
-          (set-window-start win (point-min)))))))
+      (dolist (win (get-buffer-window-list buf nil t))
+        (set-window-start win (point-min) t)
+        (set-window-point win (point-min))))))
 
 (defun scalpel-review-session-ended ()
   "Session-end hook: open the review when the session changed files."
