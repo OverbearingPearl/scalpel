@@ -151,7 +151,7 @@ the change, so it refuses instead of clobbering user edits."
       (secure-hash
        'sha1
        (with-temp-buffer
-         (insert-file-contents-literally file)
+         (insert-file-contents file)
          (buffer-string)))
     (error nil)))
 
@@ -222,7 +222,7 @@ is it replaced by the recorded old text."
           (error (throw 'result 'conflict))))
        (t
         (let* ((current (with-temp-buffer
-                          (insert-file-contents-literally file)
+                          (insert-file-contents file)
                           (buffer-string)))
                (new-text (plist-get record :new-text))
                (old-text (plist-get record :old-text)))
