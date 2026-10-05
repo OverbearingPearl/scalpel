@@ -285,10 +285,12 @@ review buffer.
 
 Rendered records live buffer-locally on the edited file buffers,
 so a console buffer holds none of them and a purely local lookup
-would render nothing.  When `scalpel-review-session' is loaded,
-collect the records over every known dialogue session instead;
-fall back to the calling buffer's local records (or all records
-when unbound) otherwise.
+would render nothing.  Softly require `scalpel-review-session'
+before collecting, then collect records by scanning every live
+buffer's buffer-local `scalpel-lineage--records' with no session
+filter, so consoles that never registered are not dropped; fall
+back to the calling buffer's local records (or all records when
+unbound) only when the collector is unavailable.
 
 After popping to the review buffer, move its point and every
 displaying window's start back to the beginning on all frames, so
@@ -300,8 +302,15 @@ a reused window never leaves the cursor at the end."
                              scalpel-agent--context-files
                            nil))
           (records
-           (if (featurep 'scalpel-review-session)
-               (scalpel-review-session--collect-records)
+           (if (require 'scalpel-review-session nil t)
+               (let (collected)
+                 (dolist (b (buffer-list) collected)
+                   (with-current-buffer b
+                     (when (boundp 'scalpel-lineage--records)
+                       (setq collected
+                             (append collected
+                                     (copy-sequence
+                                      scalpel-lineage--records)))))))
              (if (boundp 'scalpel-lineage--records)
                  scalpel-lineage--records
                (scalpel-lineage-changes)))))

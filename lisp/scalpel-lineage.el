@@ -209,29 +209,21 @@ aborted session cannot clear another console's registration."
 
 Records live buffer-locally on the edited file's buffers, so a
 plain read of the caller's own binding usually misses them.  When
-`scalpel-review-session' is loaded, scan every known dialogue
-session rather than only the registered consoles: registration
-happens only after a first dirty report, so filtering by the
-registration list would hide unregistered consoles that already
-carry recorded changes.  Otherwise fall back to the local
-variable."
-  (if (featurep 'scalpel-review-session)
-      (progn
-        (require 'scalpel-review-session)
-        (let* ((known (cond
-                       ((fboundp 'scalpel-review-session--all-sessions)
-                        (scalpel-review-session--all-sessions))
-                       ((boundp 'scalpel-review-session--sessions)
-                        (symbol-value 'scalpel-review-session--sessions))
-                       (t nil)))
-               (records
-                (if known
-                    (cl-loop for session in known
-                             when (fboundp 'scalpel-review-session--session-records)
-                             append (scalpel-review-session--session-records session))
-                  (scalpel-review-session--collect-records))))
-          (null records)))
-    (null scalpel-lineage--records)))
+the session machinery is available, scan every live buffer's
+buffer-local records directly, ignoring the registration list
+entirely: registration happens only after a first dirty report,
+so filtering by the registration list would hide unregistered
+consoles that already carry recorded changes.  Otherwise fall
+back to the local variable."
+  (let ((session-loaded (require 'scalpel-review-session nil t)))
+    (if (and session-loaded
+             (fboundp 'scalpel-review-session--collect-records))
+        (null (cl-loop for buffer in (buffer-list)
+                       append
+                       (with-current-buffer buffer
+                         (when (local-variable-p 'scalpel-lineage--records)
+                           scalpel-lineage--records))))
+      (null scalpel-lineage--records))))
 
 (defun scalpel-lineage-reset ()
   "Hold no lineage state of this session."
