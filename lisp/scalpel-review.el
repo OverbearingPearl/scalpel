@@ -182,10 +182,12 @@ so the file is in the after state.  The hunk's after-side lines
 \(context and added) must occur exactly once in the file, then
 they are replaced by the before-side lines (context and removed).
 The record's :new-text is rewritten accordingly so later
-block-level restores stay consistent.  Unlike
-`scalpel-review-reject-block' no later records for the same file
-are undone first; a stale file is reported and nothing is
-changed."
+block-level restores stay consistent.  Once the hunk is rejected,
+its lines in the review buffer are struck through by applying the
+`scalpel-review-rejected' face to the hunk's region, as block
+rejection does.  Unlike `scalpel-review-reject-block' no later
+records for the same file are undone first; a stale file is
+reported and nothing is changed."
   (interactive)
   (let ((region (scalpel-review--hunk-region-at-point)))
     (if (not region)
@@ -224,6 +226,10 @@ changed."
                 (plist-put record :new-text
                            (string-replace after before
                                            (plist-get record :new-text)))
+                (with-current-buffer (current-buffer)
+                  (let ((inhibit-read-only t))
+                    (put-text-property (car region) (cdr region)
+                                       'face 'scalpel-review-rejected)))
                 (message "Rejected one hunk"))))))))))
 
 (defun scalpel-review--group-by-file (records)
