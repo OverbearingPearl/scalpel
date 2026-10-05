@@ -139,9 +139,12 @@ header lines (\"--- before/<name>\" and \"+++ after/<name>\") are
 removed, so the diff output shows only the @@ hunk line and the
 +/- content lines; the file header line (\"File: <path>\") is the
 only label for the block.
-Header lines get a bold face and diff output lines get
-`diff-added'/`diff-removed'/`diff-hunk-header' faces.  The whole
-block (including the separator line) is tagged with the
+Header lines get a bold face and diff output lines are colored
+with magit's diff faces (`magit-diff-added',
+`magit-diff-removed', `magit-diff-hunk-heading') when those
+faces are defined, falling back to the built-in
+`diff-added'/`diff-removed'/`diff-hunk-header' faces otherwise.
+The whole block (including the separator line) is tagged with the
 `scalpel-review-record' text property."
   (let* ((inhibit-read-only t)
          (beg (point))
@@ -154,6 +157,18 @@ block (including the separator line) is tagged with the
                              (format "  [session: %s]" session)
                            ""))
          (program (if (boundp 'diff-command) diff-command "diff"))
+         ;; Resolve diff faces at render time: prefer magit's diff
+         ;; faces when magit has been loaded (its faces are defined),
+         ;; otherwise fall back to the built-in diff-mode faces.
+         (added-face (if (facep 'magit-diff-added)
+                         'magit-diff-added
+                       'diff-added))
+         (removed-face (if (facep 'magit-diff-removed)
+                           'magit-diff-removed
+                         'diff-removed))
+         (hunk-face (if (facep 'magit-diff-hunk-heading)
+                        'magit-diff-hunk-heading
+                      'diff-hunk-header))
          old-file new-file)
     (unwind-protect
         (progn
@@ -214,7 +229,8 @@ block (including the separator line) is tagged with the
                       (forward-line 1))))
                 ;; Apply per-line faces to the diff output:
                 ;; "+" lines as added, "-" lines as removed, and
-                ;; "@@" lines as hunk headers.
+                ;; "@@" lines as hunk headers, using the resolved
+                ;; magit or built-in faces.
                 (save-excursion
                   (goto-char diff-start)
                   (while (not (eobp))
@@ -223,13 +239,13 @@ block (including the separator line) is tagged with the
                       (cond
                        ((looking-at "\\+\\(?:\\+\\+\\)?")
                         (put-text-property line-start line-end
-                                           'face 'diff-added))
+                                           'face added-face))
                        ((looking-at "-\\(?:--\\)?")
                         (put-text-property line-start line-end
-                                           'face 'diff-removed))
+                                           'face removed-face))
                        ((looking-at "@@")
                         (put-text-property line-start line-end
-                                           'face 'diff-hunk-header)))
+                                           'face hunk-face)))
                       (forward-line 1))))
                 (when (string-empty-p
                        (buffer-substring diff-start (point)))
