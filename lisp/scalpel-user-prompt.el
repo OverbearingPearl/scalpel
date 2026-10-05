@@ -139,12 +139,15 @@ lookup works from any working directory inside the repo."
 (defun scalpel-user-prompt-for-file (file)
   "Return the user prompt text matching FILE, or nil.
 All three dimensions are consulted: the author and repository of
-the repo holding FILE, and FILE's language.  Matching contents are
-joined with a blank line; each matching file contributes once even
-when several dimensions name the same file."
+the repo holding FILE, and FILE's language.  In addition, the
+unconditional base name \"prompt\" is always read first, with no
+repo, author or language condition.  Matching contents are joined
+with a blank line; each matching file contributes once even when
+several dimensions name the same file."
   (when file
     (let ((names (delete-dups
                   (append
+                   (list "prompt")
                    (scalpel-user-prompt--names-for-dir
                     (file-name-directory file))
                    (list (scalpel-user-prompt--file-name
@@ -156,6 +159,8 @@ when several dimensions name the same file."
 
 (defun scalpel-user-prompt-for-files (files)
   "Return the union of user prompt text for FILES, or nil.
+The unconditional base prompt \"prompt\" always leads the candidate
+list, matching the single-file version's behavior.
 Git identity is resolved once per directory, so a round touching
 several files of one repo runs git once.  A round spanning several
 languages or several repos attaches every matching prompt, each
@@ -169,6 +174,7 @@ nil as a prompt name would crash `expand-file-name'."
            (delete-dups
             (delq nil
                   (append
+                   (list "prompt")
                    (apply #'append
                           (delq nil
                                 (mapcar #'scalpel-user-prompt--names-for-dir
