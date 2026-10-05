@@ -560,6 +560,7 @@ later ones are removed.  Must be called inside the console buffer."
   "Keymap used in Scalpel console buffers.")
 
 (require 'scalpel-review)
+(require 'scalpel-review-session)
 
 (require 'scalpel-lineage)
 
@@ -1996,14 +1997,13 @@ with the console buffer name.
 terminal point, so a second RET during a round is refused.  When
 an operation ends, the cursor in the target buffer is also moved
 to `point-max', signalling that the answer is finished.  At every
-terminal point the session review buffer is opened exactly once
-per operation via `scalpel-review-open', whether the operation
-completed successfully or was ended by an error; the call is
-guarded so consoles in non-git or lineage-less setups still end
-cleanly.  The completion acknowledgement is only shown for a
-successful final round.  An interactive
-operation ends with a compression offer once the cumulative token
-growth since the last offer reaches
+terminal point the shared session review buffer
+`scalpel-review-session' is refreshed and popped exactly once per
+operation whenever the dialogue recorded changes; consoles whose
+dialogues made no changes are not registered.  The completion
+acknowledgement is only shown for a successful final round.  An
+interactive operation ends with a compression offer once the
+cumulative token growth since the last offer reaches
 `scalpel-console-compression-offer-growth-threshold'; a declined
 offer still advances the baseline, so the next offer waits for
 further growth."
@@ -2033,8 +2033,16 @@ further growth."
                (setq review-opened t)
                (condition-case nil
                    (progn
-                     (require 'scalpel-lineage)
-                     (scalpel-review-open))
+                     (require 'scalpel-review-session)
+                     (when (condition-case nil
+                               (not (scalpel-lineage-clean-p))
+                             (error nil))
+                       (unless (member (buffer-name)
+                                       scalpel-review-session--consoles)
+                         (setq scalpel-review-session--consoles
+                               (append scalpel-review-session--consoles
+                                       (list (buffer-name)))))
+                       (scalpel-review-session-refresh)))
                  (error nil))))
            (close-lineage-session ()
              (condition-case nil
