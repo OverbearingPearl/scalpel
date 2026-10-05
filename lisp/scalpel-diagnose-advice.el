@@ -152,6 +152,28 @@ the empty string on any failure; never returns nil."
                         (string-join (nreverse lines) "\n")
                       ""))))))))
 
+(defconst scalpel-diagnose-advice-perl-error-types
+  '(pattern-no-match)
+  "These error types always belong to the perl rewriting path.
+They carry the perlre TOC.")
+
+(defun scalpel-diagnose-advice-perlre-toc-for (error)
+  "Return the perlre TOC string if ERROR belongs to the perl rewriting path.
+ERROR is a plist describing a diagnostic error.  The decision lives
+entirely in this advice layer: the error belongs to the perl path when
+its type is listed in `scalpel-diagnose-advice-perl-error-types', or
+when its message mentions perl, regexp, pattern or substitute
+case-insensitively.  Return nil otherwise; the TOC text itself is
+still computed by `scalpel-diagnose-advice-perlre-toc'."
+  (let ((type (plist-get error :type))
+        (message (plist-get error :message)))
+    (when (or (member type scalpel-diagnose-advice-perl-error-types)
+              (and (stringp message)
+                   (string-match-p
+                    "\\_<\\(?:perl\\|regexp\\|pattern\\|substitute\\)_\\>"
+                    (downcase message))))
+      (scalpel-diagnose-advice-perlre-toc))))
+
 (defun scalpel-diagnose-advice-plist (error-plist)
   "Extract :type from ERROR-PLIST and delegate to `scalpel-diagnose-advice-for'."
   (scalpel-diagnose-advice-for (plist-get error-plist :type)))

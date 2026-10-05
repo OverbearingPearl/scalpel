@@ -74,8 +74,9 @@
 (defun scalpel-review--insert-record (record)
   "Insert one RECORD into the review buffer.
 Render a header line followed by a unified diff of the record's
-old-text versus new-text; rename records (detected by :tool being
-`file-rename') show a rename line instead.
+old-text versus new-text, produced synchronously by the diff
+program; rename records (detected by :tool being `file-rename')
+show a rename line instead.
 The whole block is tagged with the `scalpel-review-record' text property."
   (let* ((inhibit-read-only t)
          (beg (point))
@@ -83,24 +84,42 @@ The whole block is tagged with the `scalpel-review-record' text property."
          (new-text (plist-get record :new-text))
          (file (plist-get record :file))
          (tool (plist-get record :tool))
-         (old-buf (get-buffer-create " *scalpel-review-old*"))
-         (new-buf (get-buffer-create " *scalpel-review-new*")))
+         (program (if (boundp 'diff-command) diff-command "diff"))
+         old-file new-file)
     (unwind-protect
         (progn
           (if (eq tool 'file-rename)
               (insert (format "Rename: %s -> %s\n" old-text file))
             (progn
               (insert (format "File: %s\n" file))
-              (with-current-buffer old-buf
-                (erase-buffer)
+              ;; Write old and new text to temporary files so the
+              ;; external diff program can compare them synchronously.
+              (setq old-file (make-temp-file "scalpel-review-old-"))
+              (setq new-file (make-temp-file "scalpel-review-new-"))
+              (with-temp-file old-file
                 (insert (or old-text "")))
-              (with-current-buffer new-buf
-                (erase-buffer)
+              (with-temp-file new-file
                 (insert (or new-text "")))
-              (diff-no-select old-buf new-buf nil 'noasync)))
+              ;; Run the diff program synchronously, capturing its
+              ;; stdout into a temp buffer, then insert the full text
+              ;; at point under the File header.
+              (let ((diff-output (with-temp-buffer
+                                   (call-process program nil t nil
+                                                 "-u" old-file new-file)
+                                   (buffer-substring (point-min) (point-max)))))
+                (if (string-empty-p diff-output)
+                    (insert "No differences\n")
+                  (insert diff-output)))))
           (put-text-property beg (point) 'scalpel-review-record record))
-      (kill-buffer old-buf)
-      (kill-buffer new-buf))))
+      ;; Clean up the temporary files regardless of success or error.
+      (when old-file
+        (condition-case nil
+            (delete-file old-file)
+          (error nil)))
+      (when new-file
+        (condition-case nil
+            (delete-file new-file)
+          (error nil))))))
 
 (defun scalpel-review--render ()
   "Fill the current buffer with a unified-diff review listing."

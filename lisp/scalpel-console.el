@@ -2026,6 +2026,11 @@ further growth."
                         (string-match-p
                          (concat "\\(?:SCALPEL-ERROR\\)[^[:space:]]*"
                                  "perlre pattern compile failure")
+                         err-message))
+                   (and (eq err-type 'no-replacement)
+                        (stringp err-message)
+                        (string-match-p
+                         "perl compile failure"
                          err-message)))))
            (phase-line ()
              (let ((phase
@@ -2172,7 +2177,14 @@ after %s: %s."
                                      ((stale-file-error-p round-error)
                                       (scalpel-prompt--stale-file-retry-instruction))
                                      ((substitute-error-p round-error)
-                                      (scalpel-prompt--substitute-retry-instruction))
+                                      (concat
+                                       (scalpel-prompt--substitute-retry-instruction)
+                                       "\n\n"
+                                       (condition-case nil
+                                           (or
+                                            (scalpel-diagnose-advice-perlre-toc)
+                                            "")
+                                         (error ""))))
                                      (t
                                       (phase-line))))
                               (run-next)))

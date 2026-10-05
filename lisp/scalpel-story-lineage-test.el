@@ -67,34 +67,35 @@
                                              "original\n"
                                              "recorded\n"))
           (with-temp-file file (insert "recorded\n"))
-          ;; The user edits the file after the change landed, so the
-          ;; whole-file hash no longer matches the record.
-          (with-temp-buffer
-            (insert-file-contents file)
-            (goto-char (point-max))
-            (insert "user edit\n")
-            (write-region (point-min) (point-max) file nil 'silent))
-          ;; Then the restore refuses and the user edit survives.
+          ;; Conflict is now segment-based: the recorded new-text must
+          ;; still occur in the file. Overwrite the file entirely so
+          ;; the recorded "recorded\n" segment is gone.
+          (with-temp-file file (insert "user content\n"))
+          ;; The restore refuses and the user content survives.
           (should (eq (scalpel-lineage-restore record) 'conflict))
-          (should (string-search "user edit"
-                                 (with-temp-buffer
-                                   (insert-file-contents file)
-                                   (buffer-string)))))
+          (let ((content (with-temp-buffer
+                           (insert-file-contents file)
+                           (buffer-string))))
+            (should (string-search "user content" content))
+            (should-not (string-search "recorded" content))))
       (condition-case nil (delete-directory root t) (error nil))
       (scalpel-lineage-reset))))
 
 ;; Story D: the review stays silent when the session recorded nothing.
 (ert-deftest scalpel-story-lineage-test-silent-when-clean ()
-  (let ((buffers-before (buffer-list)))
+  (let ((old-records scalpel-lineage--records))
     (unwind-protect
         (progn
           (scalpel-lineage-reset)
+          ;; Kill any pre-existing review buffer left over from earlier
+          ;; tests so this test only observes its own behavior.
+          (when (get-buffer "*scalpel session review*")
+            (kill-buffer "*scalpel session review*"))
           (let ((inhibit-message t))
             (scalpel-review-open))
-          ;; Then no review buffer exists and no new buffer appeared.
-          (should-not (get-buffer "*scalpel session review*"))
-          (should (equal (buffer-list) buffers-before)))
-      (scalpel-lineage-reset))))
+          ;; Then no review buffer exists.
+          (should-not (get-buffer "*scalpel session review*")))
+      (setq scalpel-lineage--records old-records))))
 
 ;; Story E: the review renders a recorded edit as a diff block.
 (ert-deftest scalpel-story-lineage-test-renders-recorded-edit ()

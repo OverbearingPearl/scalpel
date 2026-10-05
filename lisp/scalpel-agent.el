@@ -2886,26 +2886,11 @@ can offer block-edit as the retry."
                   (progn
                     (require 'scalpel-lineage nil t)
                     (when (fboundp 'scalpel-lineage-note)
-                      (let ((case-fold-search nil)
-                            (old-texts nil)
-                            (new-texts nil)
-                            (pos 0))
-                        (while (string-match pattern new pos)
-                          (push (match-string 0 new) new-texts)
-                          (setq pos (match-end 0)))
-                        (setq new-texts (nreverse new-texts))
-                        (setq pos 0)
-                        (while (string-match pattern old pos)
-                          (push (match-string 0 old) old-texts)
-                          (setq pos (match-end 0)))
-                        (setq old-texts (nreverse old-texts))
-                        (cl-loop for old-text in old-texts
-                                 for new-text in new-texts
-                                 do (funcall 'scalpel-lineage-note
-                                             'file-substitute
-                                             resolved
-                                             old-text
-                                             new-text)))))
+                      (funcall 'scalpel-lineage-note
+                               'file-substitute
+                               resolved
+                               old
+                               new)))
                 (error nil)))
             (push (format "Rewrote %d occurrence(s) in %s" count resolved) lines)
             (dolist (pair excerpts)

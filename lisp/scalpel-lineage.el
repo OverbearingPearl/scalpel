@@ -118,8 +118,11 @@ instead of clobbering user edits."
 
 (defun scalpel-lineage-conflict-p (record)
   "Return non-nil when the file no longer matches what RECORD expects.
-A restore in this state would either fail or clobber edits the user
-made after the change landed, so it is refused rather than guessed."
+For text edits the check is segment-based: the recorded :new-text must
+occur in the file exactly once, mirroring the test
+`scalpel-lineage-restore' performs with `string-search'.  A restore in
+this state would either fail or clobber edits the user made after the
+change landed, so it is refused rather than guessed."
   (let ((file (plist-get record :file)))
     (cond
      ((eq (plist-get record :tool) 'file-create)
@@ -130,8 +133,18 @@ made after the change landed, so it is refused rather than guessed."
       (not (and (file-exists-p file)
                 (not (file-exists-p (plist-get record :old-text))))))
      (t
-      (not (equal (scalpel-lineage--file-hash file)
-                  (plist-get record :new-hash)))))))
+      (if (not (file-readable-p file))
+          t
+        (let* ((content (with-temp-buffer
+                          (insert-file-contents file)
+                          (buffer-string)))
+               (new-text (plist-get record :new-text))
+               (count 0)
+               (pos 0))
+          (while (string-search new-text content pos)
+            (setq count (1+ count)
+                  pos (1+ (string-search new-text content pos))))
+          (not (= count 1))))))))
 
 (defun scalpel-lineage-restore (record)
   "Undo the single change RECORD describes.
