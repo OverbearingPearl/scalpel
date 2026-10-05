@@ -23,9 +23,11 @@
     (define-key map (kbd "TAB") #'scalpel-review-next-block)
     (define-key map (kbd "<backtab>") #'scalpel-review-previous-block)
     (define-key map (kbd "k") #'scalpel-review-reject-block)
+    (define-key map (kbd "K") #'scalpel-review-reject-hunk)
     (define-key map (kbd "q") #'scalpel-review-accept-all)
     map)
-  "Keymap for session review buffers.")
+  "Keymap for session review buffers.
+K rejects a single hunk; k rejects a whole block.")
 
 (defface scalpel-review-rejected
   '((t (:strike-through t)))
@@ -113,6 +115,114 @@ Signal with a message when there is no earlier block."
             (`conflict
              (message "Refused: the file changed since this change landed"))
             (other (message "Restore returned %S" other))))))))
+
+(defun scalpel-review--hunk-region-at-point ()
+  "Return (BEG . END) covering the diff hunk containing point.
+The hunk is one @@-delimited section of the record block under
+point, including its @@ header line.  Nil when point is not
+inside a record's diff hunks."
+  (let* ((record (scalpel-review--record-at-point))
+         (block-beg nil)
+         (block-end nil)
+         (hunk-beg nil)
+         (hunk-end nil))
+    (when record
+      (save-excursion
+        (setq block-end (next-single-property-change
+                         (point) 'scalpel-review-record
+                         nil (point-max)))
+        (setq block-beg (previous-single-property-change
+                         block-end 'scalpel-review-record
+                         nil (point-min)))
+        (beginning-of-line)
+        ;; Walk back to the nearest @@ line, staying in the block.
+        (catch 'found
+          (while t
+            (when (looking-at "@@")
+              (setq hunk-beg (point))
+              (throw 'found nil))
+            (if (or (bobp) (<= (point) block-beg))
+                (throw 'found nil)
+              (forward-line -1))))
+        (when hunk-beg
+          (goto-char hunk-beg)
+          (forward-line 1)
+          (while (and (< (point) block-end)
+                      (not (looking-at "@@")))
+            (forward-line 1))
+          (setq hunk-end (point))))
+      (when hunk-beg (cons hunk-beg hunk-end)))))
+
+(defun scalpel-review--hunk-operations (beg end)
+  "Return the hunk's line operations between BEG and END.
+Each element is (KIND TEXT), where KIND is `context', `removed'
+or `added' and TEXT is the line's content including its newline.
+The @@ header line is skipped."
+  (save-excursion
+    (let (ops)
+      (goto-char beg)
+      (forward-line 1)
+      (while (< (point) end)
+        (let* ((raw (buffer-substring (point) (line-end-position)))
+               (nl (if (< (line-end-position) end) "\n" ""))
+               (kind (cond
+                      ((string-prefix-p " " raw) 'context)
+                      ((string-prefix-p "-" raw) 'removed)
+                      ((string-prefix-p "+" raw) 'added))))
+          (when kind
+            (push (list kind (concat (substring raw 1) nl)) ops)))
+        (forward-line 1))
+      (nreverse ops))))
+
+(defun scalpel-review-reject-hunk ()
+  "Reject the diff hunk under point in the review buffer.
+Reverse-apply one @@ hunk of the record's diff instead of
+restoring the whole block: the hunk's before-side lines (context
+and removed) must occur exactly once in the file, then they are
+replaced by the after-side lines (context and added).  The
+record's :new-text is rewritten accordingly so later block-level
+restores stay consistent.  Unlike `scalpel-review-reject-block'
+no later records for the same file are undone first; a stale file
+is reported and nothing is changed."
+  (interactive)
+  (let ((region (scalpel-review--hunk-region-at-point)))
+    (if (not region)
+        (message "No hunk under point")
+      (let* ((record (scalpel-review--record-at-point))
+             (file (plist-get record :file))
+             (ops (scalpel-review--hunk-operations
+                   (car region) (cdr region)))
+             (before (mapconcat
+                      (lambda (op)
+                        (if (memq (car op) '(context removed))
+                            (nth 1 op) ""))
+                      ops ""))
+             (after (mapconcat
+                     (lambda (op)
+                       (if (memq (car op) '(context added))
+                           (nth 1 op) ""))
+                     ops "")))
+        (if (string-empty-p before)
+            (message "Nothing to reject in this hunk")
+          (let ((current
+                 (with-temp-buffer
+                   (insert-file-contents file)
+                   (buffer-string))))
+            (let ((first (string-search before current)))
+              (cond
+               ((not first)
+                (message "Refused: hunk context not found in file"))
+               ((string-search before current (1+ first))
+                (message "Refused: hunk context is ambiguous"))
+               (t
+                (with-temp-buffer
+                  (insert (string-replace before after current))
+                  (write-region (point-min) (point-max)
+                                file nil 'silent))
+                (plist-put record :new-text
+                           (string-replace before after
+                                           (plist-get record :new-text)))
+                (message "Rejected one hunk"))))))))))
 
 (defun scalpel-review--group-by-file (records)
   "Group RECORDS by their :file, preserving first-seen order."
@@ -290,7 +400,7 @@ are shown; otherwise all recorded changes are rendered."
                  (member (file-truename (plist-get record :file))
                          context-truenames))
                records))))
-    (setq header-line-format " TAB next | Shift+TAB prev | k reject | q accept all & quit ")
+    (setq header-line-format " TAB next | Shift+TAB prev | k reject | K reject hunk | q accept all & quit ")
     (erase-buffer)
     (insert "Session review: changes made this session.\n\n")
     (if (null records)
