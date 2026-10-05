@@ -1983,7 +1983,12 @@ An unattended run also arms
 stops at its own round limit with a timestamped mark instead of
 the interactive round-limit notice.  Closing marks for an
 unattended run name how long the run lasted, not only when it
-ended.  `scalpel-console--busy' is set here and cleared at every
+ended.  Each operation registers a lineage dialogue bracketing the
+user's question to the final answer: the session begins when the
+operation starts and ends at every terminal point, via
+`scalpel-lineage-session-begin' and `scalpel-lineage-session-end'
+with the console buffer name.
+`scalpel-console--busy' is set here and cleared at every
 terminal point, so a second RET during a round is refused.  When
 an operation ends, the cursor in the target buffer is also moved
 to `point-max', signalling that the answer is finished.  At every
@@ -1998,8 +2003,14 @@ growth since the last offer reaches
 `scalpel-console-compression-offer-growth-threshold'; a declined
 offer still advances the baseline, so the next offer waits for
 further growth."
+  (condition-case nil (require 'scalpel-lineage) (error nil))
   (let ((operation (cl-incf scalpel-console--operation-generation)))
     (setq scalpel-console--busy t)
+    ;; Open the lineage dialogue for this operation, once, at the
+    ;; user's question.  A lineage failure must not block the run.
+    (condition-case nil
+        (scalpel-lineage-session-begin (buffer-name) instruction)
+      (error nil))
     (let ((target (scalpel-console--target-buffer))
           (round 0)
           (round-limit (if scalpel-console--unattended-p
@@ -2021,6 +2032,10 @@ further growth."
                      (require 'scalpel-lineage)
                      (scalpel-review-open))
                  (error nil))))
+           (close-lineage-session ()
+             (condition-case nil
+                 (scalpel-lineage-session-end (buffer-name))
+               (error nil)))
            (stale-file-error-p (err-plist)
              (eq (plist-get err-plist :type) 'stale-file))
            (substitute-error-p (err-plist)
@@ -2106,6 +2121,7 @@ after %s: %s."
                   ((unattended-p)
                    (stop-unattended "error ended the run")))
                  (goto-char (point-max))
+                 (close-lineage-session)
                  (open-session-review))))
            (run-next ()
              (when (unattended-p)

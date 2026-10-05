@@ -83,7 +83,15 @@ whole-content sha1 hash.  Otherwise keep the passed segment
 texts.  Whole-file snapshots let a later restore of an earlier
 record succeed for a file edited several times in one session;
 hashes let a later restore detect that the file moved on since
-the change, so it refuses instead of clobbering user edits."
+the change, so it refuses instead of clobbering user edits.
+Each record is also stamped with :index, a value drawn from the
+global monotonic sequence counter `scalpel-lineage--record-counter'
+incremented once per record, so record order in the flat list and
+index order agree; and :session, the identity of the console
+session currently registered as producing changes, taken from
+`scalpel-lineage--current-session'.  When no session is currently
+registered, :session is stamped nil so old callers and tests keep
+working."
   (if (or (and (stringp old-text) (stringp new-text)
                (string= old-text new-text))
           (and (null old-text) (null new-text)))
@@ -127,9 +135,70 @@ the change, so it refuses instead of clobbering user edits."
                     :round scalpel-lineage-round
                     :old-hash (when old-text (secure-hash 'sha1 old-text))
                     :new-hash (when new-text (secure-hash 'sha1 new-text))))))
+      (setq record
+            (plist-put record :index scalpel-lineage--record-counter))
+      (setq scalpel-lineage--record-counter
+            (1+ scalpel-lineage--record-counter))
+      (setq record
+            (plist-put record :session scalpel-lineage--current-session))
       (setq scalpel-lineage--records
             (append scalpel-lineage--records (list record)))
       record)))
+
+(defvar scalpel-lineage--record-counter 0
+  "Global counter of lineage records produced so far.
+Incremented by the note path for each record emitted.  Not
+buffer-local: it coordinates across multiple consoles.")
+
+(defun scalpel-lineage-record-counter ()
+  "Return the current value of the global record counter."
+  scalpel-lineage--record-counter)
+
+(defvar scalpel-lineage--current-session nil
+  "Identity tag of the console currently producing changes.
+This is the console buffer name or a similar identity, or nil
+when none is registered.")
+
+(defvar scalpel-lineage--dialogues nil
+  "List of dialogue entries, most operations append to the end.
+Each entry is a plist with :session, :start and :end, where
+:start and :end are sequence-index values bracketing one
+user-question-to-final-answer dialogue.  :end is nil while the
+dialogue is still open.")
+
+(defun scalpel-lineage-session-begin (session &optional question)
+  "Register SESSION as the console currently producing edits.
+Open a new dialogue entry whose :start is the current record
+counter value and whose :end is nil.  QUESTION is the user's
+instruction text for this dialogue; it is stored as :question and
+defaults to nil when not supplied.  The history roadmap renders
+this question text truncated."
+  (setq scalpel-lineage--current-session session)
+  (setq scalpel-lineage--dialogues
+        (append scalpel-lineage--dialogues
+                (list (list :session session
+                            :question question
+                            :start scalpel-lineage--record-counter
+                            :end nil)))))
+
+(defun scalpel-lineage-session-end (session)
+  "Close the open dialogue entry for SESSION.
+Stamp the current record counter value as its :end.  Clear the
+current-session tag only when it still matches SESSION, so an
+aborted session cannot clear another console's registration."
+  (let ((entry (seq-find
+                (lambda (e)
+                  (and (equal (plist-get e :session) session)
+                       (null (plist-get e :end))))
+                scalpel-lineage--dialogues)))
+    (when entry
+      (plist-put entry :end scalpel-lineage--record-counter)))
+  (when (equal scalpel-lineage--current-session session)
+    (setq scalpel-lineage--current-session nil)))
+
+(defun scalpel-lineage-dialogues ()
+  "Return the list of dialogue entries."
+  scalpel-lineage--dialogues)
 
 (defun scalpel-lineage-changes ()
   "Return this session's change records, oldest first."
@@ -193,6 +262,9 @@ change landed, so it is refused rather than guessed."
   "Undo the single change RECORD describes.
 Return t on success, or the symbol `conflict' when the file has
 changed since the record was made; a conflicted restore is refused.
+On success the record is marked as processed by setting its
+:restored property to t, so the review buffer can later show
+restored blocks as already-handled instead of pending.
 For a text change the whole-file hash must match first, then the
 recorded new text must occur exactly once in the file, and only then
 is it replaced by the recorded old text."
@@ -204,7 +276,9 @@ is it replaced by the recorded old text."
       (cond
        ((eq tool 'file-create)
         (condition-case nil
-            (progn (delete-file file) (throw 'result t))
+            (progn (delete-file file)
+                   (plist-put record :restored t)
+                   (throw 'result t))
           (error (throw 'result 'conflict))))
        ((eq tool 'file-delete)
         (condition-case nil
@@ -212,12 +286,14 @@ is it replaced by the recorded old text."
               (with-temp-buffer
                 (insert (plist-get record :old-text))
                 (write-region (point-min) (point-max) file nil 'silent))
+              (plist-put record :restored t)
               (throw 'result t))
           (error (throw 'result 'conflict))))
        ((eq tool 'file-rename)
         (condition-case nil
             (progn
               (rename-file file (plist-get record :old-text))
+              (plist-put record :restored t)
               (throw 'result t))
           (error (throw 'result 'conflict))))
        (t
@@ -235,6 +311,7 @@ is it replaced by the recorded old text."
                 (with-temp-buffer
                   (insert replaced)
                   (write-region (point-min) (point-max) file nil 'silent))
+                (plist-put record :restored t)
                 t)
             'conflict)))))))
 
