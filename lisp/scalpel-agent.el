@@ -663,9 +663,11 @@ ancestor are never reported, so files outside any repository cost
 no subprocess; each repository is queried once."
   (let (groups)
     (dolist (file files)
-      (let ((root (locate-dominating-file file ".git")))
+      (let ((root (scalpel-agent--git-toplevel
+                   (file-name-directory file))))
         (when root
-          (let* ((root (file-name-as-directory (expand-file-name root)))
+          (let* ((root (file-name-as-directory
+                        (expand-file-name root)))
                  (cell (assoc root groups)))
             (if cell
                 (setcdr cell (cons file (cdr cell)))
