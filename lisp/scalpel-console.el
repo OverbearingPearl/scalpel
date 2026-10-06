@@ -1384,7 +1384,12 @@ history; the baseline is advanced only once the answer is known --
 right after the `y-or-n-p' returns, in both the declined and the
 accepted case -- so a keyboard quit during the prompt leaves the
 baseline untouched, while the ask itself counts as the reset for
-both the answered cases.  All display-only notes (declined offer,
+both the answered cases.  When `scalpel-console--unattended-p' is
+non-nil the prompt is skipped entirely: the baseline is advanced
+to the current history token count and a display-only note
+records the declined offer, so an unattended session never blocks
+on a question and the offer is simply re-armed for the next
+threshold of growth.  All display-only notes (declined offer,
 failed compression, and the compression connector) are inserted
 via `scalpel-console--insert-compression-note', so every note
 carries `scalpel-console-output' and is never counted as pending
@@ -1421,93 +1426,102 @@ the resend."
                      0))
          (growth (- history-tokens baseline)))
     (when (>= growth scalpel-console-compression-offer-growth-threshold)
-      (if (not (y-or-n-p
-                (format "Compress the conversation history into a summary \
-(history: %d tokens)?"
-                        history-tokens)))
-          ;; Declined: advance the baseline now that the answer is known,
-          ;; so a declined offer still requires another threshold of
-          ;; growth before the next offer; a C-g during the prompt quits
-          ;; before this and leaves the baseline untouched.  Then leave a
-          ;; display-only note and touch nothing else.
+      (if scalpel-console--unattended-p
+          ;; Unattended: never prompt.  Advance the baseline to the
+          ;; current history token count so the offer is re-armed only
+          ;; after another threshold of growth, leave a display-only
+          ;; note, and return nil without touching anything else.
           (progn
             (setq scalpel-console--compression-baseline history-tokens)
             (scalpel-console--insert-compression-note
-             "history compression offer declined"))
-        ;; Accepted: advance the baseline now that the answer is known
-        ;; (a C-g during the prompt quits before this), then block RET
-        ;; while the summary request runs and send the history for a
-        ;; summary.  Return `deferred' immediately via prog1 while the
-        ;; request runs in the background.
-        (setq scalpel-console--compression-baseline history-tokens)
-        (let ((console-buffer (current-buffer))
-              (prompt
-               (concat
-                (scalpel-prompt--history-compress-instruction)
-                "\n\n"
-                (scalpel-console--history)
-                "\n")))
-          (setq scalpel-console--busy t)
-          (message "Compressing conversation history...")
-          (prog1 'deferred
-            (scalpel-llm-request-async
-             prompt
-             ;; Success callback.
-             (lambda (summary)
-               (when (buffer-live-p console-buffer)
-                 (with-current-buffer console-buffer
-                   (if (or (not (stringp summary))
-                           (string-match-p "\\`[[:space:]]*\\'" summary))
-                       ;; Treated as failure: display-only note only,
-                       ;; roles untouched, busy cleared.
-                       (progn
-                         (scalpel-console--insert-compression-note
-                          "history compression failed: empty summary")
-                         (setq scalpel-console--busy nil)
-                         (message "History compression failed; press RET \
+             "history compression offer declined (unattended)"))
+        (if (not (y-or-n-p
+                  (format "Compress the conversation history into a summary \
+(history: %d tokens)?"
+                          history-tokens)))
+            ;; Declined: advance the baseline now that the answer is known,
+            ;; so a declined offer still requires another threshold of
+            ;; growth before the next offer; a C-g during the prompt quits
+            ;; before this and leaves the baseline untouched.  Then leave a
+            ;; display-only note and touch nothing else.
+            (progn
+              (setq scalpel-console--compression-baseline history-tokens)
+              (scalpel-console--insert-compression-note
+               "history compression offer declined"))
+          ;; Accepted: advance the baseline now that the answer is known
+          ;; (a C-g during the prompt quits before this), then block RET
+          ;; while the summary request runs and send the history for a
+          ;; summary.  Return `deferred' immediately via prog1 while the
+          ;; request runs in the background.
+          (setq scalpel-console--compression-baseline history-tokens)
+          (let ((console-buffer (current-buffer))
+                (prompt
+                 (concat
+                  (scalpel-prompt--history-compress-instruction)
+                  "\n\n"
+                  (scalpel-console--history)
+                  "\n")))
+            (setq scalpel-console--busy t)
+            (message "Compressing conversation history...")
+            (prog1 'deferred
+              (scalpel-llm-request-async
+               prompt
+               ;; Success callback.
+               (lambda (summary)
+                 (when (buffer-live-p console-buffer)
+                   (with-current-buffer console-buffer
+                     (if (or (not (stringp summary))
+                             (string-match-p "\\`[[:space:]]*\\'" summary))
+                         ;; Treated as failure: display-only note only,
+                         ;; roles untouched, busy cleared.
+                         (progn
+                           (scalpel-console--insert-compression-note
+                            "history compression failed: empty summary")
+                           (setq scalpel-console--busy nil)
+                           (message "History compression failed; press RET \
 to resend the instruction."))
-                     ;; Hold the summary in a local before mutating the
-                     ;; buffer, so the rewrite below is independent of
-                     ;; how the buffer changes during insertion.
-                     (let ((held summary))
-                       ;; Forget the old history, skipping the
-                       ;; confirmation because the user already
-                       ;; confirmed the compression by answering yes to
-                       ;; the offer.
-                       (scalpel-console-forget-history t)
-                       ;; Connector note between the old conversation and
-                       ;; the compressed summary.
-                       (scalpel-console--insert-compression-note
-                        "the conversation above was compressed into the \
+                       ;; Hold the summary in a local before mutating the
+                       ;; buffer, so the rewrite below is independent of
+                       ;; how the buffer changes during insertion.
+                       (let ((held summary))
+                         ;; Forget the old history, skipping the
+                         ;; confirmation because the user already
+                         ;; confirmed the compression by answering yes to
+                         ;; the offer.
+                         (scalpel-console-forget-history t)
+                         ;; Connector note between the old conversation and
+                         ;; the compressed summary.
+                         (scalpel-console--insert-compression-note
+                          "the conversation above was compressed into the \
 summary below")
-                       ;; Append the held summary as a user turn, prefixed
-                       ;; by the compression preamble.
-                       (scalpel-console--append
-                        (concat scalpel-prompt--history-compress-preamble
-                                "\n"
-                                held)
-                        "user")
-                       ;; Keep the consumed-body marks in sync with the
-                       ;; rewritten buffer.
-                       (scalpel-console--refresh-consumed-body-markers)
-                       ;; Reset the baseline to the compressed history's
-                       ;; token count so growth is measured from the small
-                       ;; compressed history, not the old long one.
-                       (setq scalpel-console--compression-baseline
-                             (scalpel-llm--count-tokens
-                              (scalpel-console--history)))
-                       ;; Unblock RET and tell the user to confirm the
-                       ;; resend; never re-enter the send path here.
-                       (setq scalpel-console--busy nil)
-                       (message "History compressed; press RET to resend \
+                         ;; Append the held summary as a user turn, prefixed
+                         ;; by the compression preamble.
+                         (scalpel-console--append
+                          (concat scalpel-prompt--history-compress-preamble
+                                  "\n"
+                                  held)
+                          "user")
+                         ;; Keep the consumed-body marks in sync with the
+                         ;; rewritten buffer.
+                         (scalpel-console--refresh-consumed-body-markers)
+                         ;; Reset the baseline to the compressed history's
+                         ;; token count so growth is measured from the small
+                         ;; compressed history, not the old long one.
+                         (setq scalpel-console--compression-baseline
+                               (scalpel-llm--count-tokens
+                                (scalpel-console--history)))
+                         ;; Unblock RET and tell the user to confirm the
+                         ;; resend; never re-enter the send path here.
+                         (setq scalpel-console--busy nil)
+                         (message "History compressed; press RET to resend \
 the instruction."))))))
-             ;; Error callback.
-             (lambda (error)
-               (when (buffer-live-p console-buffer)
-                 (with-current-buffer console-buffer
-                   ;; Failure: display-only note only; roles untouched.
-                   (scalpel-console--insert-compression-note
-                    (format "history compression failed: %s" error)))
+               ;; Error callback.
+               (lambda (error)
+                 (when (buffer-live-p console-buffer)
+                   (with-current-buffer console-buffer
+                     ;; Failure: display-only note only; roles untouched.
+                     (scalpel-console--insert-compression-note
+                      (format "history compression failed: %s" error))))
                  ;; Unblock RET; the user re-sends by pressing RET.
                  (setq scalpel-console--busy nil)
                  (message "History compression failed; press RET to resend \
