@@ -69,12 +69,15 @@ placeholder, and secret all use the slash-less \"/Users/NAME\"
 prefix with no trailing slash; the slash after the user name
 always comes from the surrounding text itself, so apply and
 restore are exact inverse operations and no double slash can
-ever appear."
-  (unless scalpel-redact-rules
-    (scalpel-redact-register
-     (scalpel-redact--home-pattern)
-     scalpel-redact--home-placeholder
-     (concat "/Users/" (user-real-login-name)))))
+ever appear.
+Always return t so callers can use the result as a condition,
+whether or not default rules were newly installed."
+  (prog1 t
+    (unless scalpel-redact-rules
+      (scalpel-redact-register
+       (scalpel-redact--home-pattern)
+       scalpel-redact--home-placeholder
+       (concat "/Users/" (user-real-login-name))))))
 
 (defun scalpel-redact-apply (text)
   "Return TEXT with every rule's pattern replaced by its placeholder.
