@@ -102,6 +102,41 @@ bound read-only, so the probe must not use one.")
   "Signal `scalpel-sandbox-error', built from FORMAT and ARGS."
   (signal 'scalpel-sandbox-error (list (apply #'format format args))))
 
+(defun scalpel-sandbox--probe ()
+  "Run the sandbox preflight probe once, without a context file.
+Write a scratch file into the working directory, pass it to
+`scalpel-sandbox--invoke' as the sole context file, and delete
+it afterwards; the context file is never touched.  Return t
+only when the invocation returns (0 . OUTPUT) and OUTPUT,
+after trimming, equals the sandbox probe sentinel value; return
+nil when the invocation signals `scalpel-sandbox-error'.  Deletion
+failures are reported loudly instead of being swallowed.  This is
+an internal detail of `scalpel-sandbox-supported-p'."
+  (let ((scratch (make-temp-file
+                  (expand-file-name "scalpel-sandbox-probe-"
+                                    default-directory)))
+        (ok nil))
+    (unwind-protect
+        (condition-case nil
+            (progn
+              (write-region ";; scalpel sandbox probe\n"
+                            nil scratch nil 'silent)
+              (setq ok
+                    (let ((result (scalpel-sandbox--invoke
+                                   "true" (list scratch))))
+                      (and (consp result)
+                           (= (car result) 0)
+                           (string=
+                            (string-trim (cdr result))
+                            scalpel-sandbox--probe-sentinel)))))
+          (scalpel-sandbox-error nil))
+      (condition-case err
+          (delete-file scratch)
+        (file-error
+         (message "scalpel: failed to delete probe scratch %S: %S"
+                  scratch err))))
+    ok))
+
 (defun scalpel-sandbox--file-paths (files)
   "Return normalized context FILES.
 Reject missing files, directories, and symlinks.  Every returned
@@ -436,13 +471,44 @@ FILES is the list of context files to expose, read-only."
         (scalpel-sandbox--macos-profile files)
         "/bin/sh" "-c" command))
 
+(defun scalpel-sandbox--darwin-probe-p ()
+  "Run a trivial sandbox-exec profile; return non-nil when it is honored.
+On some macOS setups sandbox-exec exists but refuses to apply profiles
+\(exit 71), so existence alone is not enough."
+  (let ((exit-code
+         (call-process scalpel-sandbox-macos-program nil nil nil
+                       "-p" "(version 1)(allow default)" "/usr/bin/true")))
+    (eq exit-code 0)))
+
+(defun scalpel-sandbox--linux-probe-p ()
+  "Return non-nil if the Linux sandbox backend is usable.
+Runs one minimal real bubblewrap invocation so the answer reflects
+an actual executable probe rather than a name lookup, keeping this
+function safe to call from `scalpel-sandbox-supported-p' without
+triggering byte-compile warnings about an undefined helper."
+  (and (executable-find "bwrap")
+       (zerop
+        (call-process "bwrap" nil nil nil
+                      "--unshare-all"
+                      "--die-with-parent"
+                      "--ro-bind" "/" "/"
+                      "/bin/true"))))
+
 (defun scalpel-sandbox-supported-p ()
-  "Return non-nil when a sandbox backend is available for this system."
+  "Return non-nil when a sandbox backend is available for this system.
+
+Both backends require the sandbox executable to be present and a
+probe to succeed, so environments where the OS refuses the
+sandbox are reported as unsupported rather than failing later
+during preflight."
   (cond
    ((eq system-type 'gnu/linux)
-    (and (executable-find scalpel-sandbox-program) t))
+    (and (executable-find scalpel-sandbox-program)
+         (scalpel-sandbox--linux-probe-p)
+         t))
    ((eq system-type 'darwin)
-    (and (executable-find scalpel-sandbox-macos-program) t))
+    (and (executable-find scalpel-sandbox-macos-program)
+         (scalpel-sandbox--darwin-probe-p)))
    (t nil)))
 
 (defun scalpel-sandbox--sandbox-argv-p (argv)

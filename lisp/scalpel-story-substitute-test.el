@@ -1,4 +1,4 @@
-;;; scalpel-story-substitute-test.el --- User-visible substitute stories;; -*- lexical-binding: t; -*-
+;;; scalpel-story-substitute-test.el --- User-visible substitute stories -*- lexical-binding: t; -*-
 
 ;;; Commentary:
 

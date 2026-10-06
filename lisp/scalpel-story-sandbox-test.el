@@ -11,9 +11,6 @@
 
 (require 'ert-gwt)
 (require 'scalpel-sandbox)
-
-;;; scalpel-story-sandbox-test.el --- User-visible sandbox stories -*- lexical-binding: t; -*-
-
 (defvar scalpel-story-sandbox-test-result nil
   "Holds a sandbox run result captured inside a story.")
 
@@ -21,7 +18,8 @@
   (:given ((root (make-temp-file "scalpel-story-" t))
            (scalpel-agent--context-files nil)
            (scalpel-story-sandbox-test-result nil))
-          (should (scalpel-sandbox-supported-p)))
+          (unless (scalpel-sandbox-supported-p)
+   (ert-skip "sandbox backend unavailable on this system")))
   (:when (setq scalpel-story-sandbox-test-result
                (scalpel-sandbox-run "echo hello" root (list (progn (write-region "x\n" nil (expand-file-name "ctx.txt" root)) (expand-file-name "ctx.txt" root))))))
   (:then (should (equal (car scalpel-story-sandbox-test-result) 0)))

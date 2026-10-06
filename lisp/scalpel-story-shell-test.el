@@ -1,4 +1,4 @@
-;;; scalpel-story-shell-test.el --- User-visible shell stories;; -*- lexical-binding: t; -*-
+;;; scalpel-story-shell-test.el --- User-visible shell stories -*- lexical-binding: t; -*-
 
 ;;; Commentary:
 
