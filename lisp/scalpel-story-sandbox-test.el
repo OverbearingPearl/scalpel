@@ -20,13 +20,13 @@
 (ert-gwt-deftest
   (:given ((root (make-temp-file "scalpel-story-" t))
            (scalpel-agent--context-files nil)
-           (scalpel-story-sandbox-result nil))
+           (scalpel-story-sandbox-test-result nil))
           (should (scalpel-sandbox-supported-p)))
-  (:when (setq scalpel-story-sandbox-result
+  (:when (setq scalpel-story-sandbox-test-result
                (scalpel-sandbox-run "echo hello" root (list (progn (write-region "x\n" nil (expand-file-name "ctx.txt" root)) (expand-file-name "ctx.txt" root))))))
-  (:then (should (equal (car scalpel-story-sandbox-result) 0)))
+  (:then (should (equal (car scalpel-story-sandbox-test-result) 0)))
   (:then (should (string-search
-                  "hello" (cdr scalpel-story-sandbox-result))))
+                  "hello" (cdr scalpel-story-sandbox-test-result))))
   (:cleanup (delete-directory root t)
             (setq scalpel-agent--context-files nil)))
 
