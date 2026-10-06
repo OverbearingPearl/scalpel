@@ -96,13 +96,43 @@ section."
               (cdr lines)))))))
 
 (defun scalpel-locate-markdown-list-symbols (_file)
-  "Return the list of heading texts in the current buffer."
+  "Return the list of heading texts in the current buffer.
+Skip fenced code blocks and the YAML front matter at the top of
+the buffer: `#' lines inside them are not reported."
   (let ((case-fold-search nil)
+        in-fence
+        fence-marker
         syms)
     (save-excursion
       (goto-char (point-min))
+      (let ((limit (point-min)))
+        ;; Detect YAML front matter: "---" on the first line.
+        (when (looking-at-p "---[ \t]*$")
+          (setq limit (line-end-position))
+          ;; Find the closing delimiter.
+          (if (re-search-forward "^---[ \t]*$" nil t)
+              (setq limit (line-end-position))
+            ;; No closing delimiter: treat as no front matter.
+            (setq limit (point-min))))
+        (goto-char limit))
       (while (re-search-forward scalpel-locate-markdown--heading-regexp nil t)
-        (push (match-string-no-properties 2) syms)))
+        (let ((bol (line-beginning-position)))
+          ;; Update fence state using lines before the heading line.
+          (save-excursion
+            (goto-char bol)
+            (beginning-of-line)
+            (let ((line (buffer-substring-no-properties
+                         (line-beginning-position)
+                         (line-end-position))))
+              (when (string-match "\\`[ \t]*\\(```\\{3,\\}\\|~~~\\{3,\\}\\)" line)
+                (let ((mark (match-string 1 line)))
+                  (if in-fence
+                      (when (string-prefix-p fence-marker mark)
+                        (setq in-fence nil fence-marker nil))
+                    (setq in-fence t
+                          fence-marker (if (string-prefix-p "```" mark) "```" "~~~")))))))
+          (unless in-fence
+            (push (match-string-no-properties 2) syms)))))
     (nreverse syms)))
 
 (defconst scalpel-locate-markdown--definer-line-regexp

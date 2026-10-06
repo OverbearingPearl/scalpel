@@ -59,7 +59,7 @@ before they occur.
 **Key differences from Aider and newer coding agents (Claude Code, OpenCode, etc.)**
 
 - **Interaction and ecosystem**: Scalpel is not a standalone CLI; it lives inside
-  Emacs as a buffer. It reuses gptel, LSP, and magit, so there is no need to switch
+  Emacs as a buffer. It reuses gptel and LSP, so there is no need to switch
   to another window outside Emacs.
 - **Location without text guessing**: Aider asks the LLM to produce SEARCH/REPLACE
   blocks for matching; Scalpel instead resolves symbols directly to exact byte
