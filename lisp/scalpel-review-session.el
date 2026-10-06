@@ -11,8 +11,7 @@
 ;; Coordination half of the multi-console session review.  Consoles
 ;; that finished an operation with recorded changes register here;
 ;; every registration offers the user a review update.  The review
-;; renders the widest index range covered by the registered consoles'
-;; last dialogues, with each record tagged by its owning session.
+;; renders the records of each registered console over its last dialogue, with each record tagged by its owning session.
 
 ;;; Code:
 
@@ -28,10 +27,12 @@ all of their work.")
 
 (defun scalpel-review-session-offer ()
   "Update or create the session review buffer with the latest diff.
-The review buffer always shows the diff between two adjacent lineage
-indices that have file changes, snapshotting the current record
-counter at dialogue end.  Collect records via
-`scalpel-review-session--collect-records'; when the result is empty,
+For each registered console, only that console's latest dialogue is
+considered: records are collected via
+`scalpel-review-session--collect-records', which scopes to each
+console's latest dialogue (records whose :index is strictly greater
+than that dialogue's :start and at most its :end), snapshotting the
+current record counter at dialogue end.  When the result is empty,
 do nothing and return nil.  Otherwise build or reuse the buffer named
 `scalpel-review-session--buffer-name': set up the review major mode
 manually, bind `scalpel-lineage--records' to the
@@ -72,54 +73,48 @@ review buffer and return nil, on a yes pop to it and return t."
   (scalpel-review-session-offer))
 
 (defun scalpel-review-session--collect-records ()
-  "Collect lineage records made by registered consoles.
-Records live buffer-locally on the edited file's buffer, so scan
-every live buffer's `scalpel-lineage--records' and keep records
-whose :session is registered and whose :index falls in the widest
-dialogue range.  Records without :index (pre-dating the counter)
-are kept when their :session matches.  The review buffer itself
-\(named `scalpel-review-session--buffer-name') is skipped: it
-holds a buffer-local copy of the records from the last render,
-and including it would list every record twice."
-  (let ((range (scalpel-review-session--collect-indices))
-        (result nil))
-    (when range
-      (dolist (buffer (buffer-list))
-        (when (and (not (string= (buffer-name buffer)
-                                 scalpel-review-session--buffer-name))
-                   (local-variable-p 'scalpel-lineage--records buffer))
-          (dolist (record (buffer-local-value
-                           'scalpel-lineage--records buffer))
-            (let ((session (plist-get record :session))
-                  (index (plist-get record :index)))
-              (when (and (member session
-                                 scalpel-review-session--consoles)
-                         (or (null index)
-                             (and (>= index (car range))
-                                  (<= index (cdr range)))))
-                (push record result)))))))
-    (nreverse result)))
-
-(defun scalpel-review-session--collect-indices ()
-  "Collect :index values of records tied to registered review sessions.
-Scan every live buffer for a buffer-local `scalpel-lineage--records',
-gather the :index of each record whose :session is registered in
-`scalpel-review-session--consoles', and return an inclusive (lo . hi)
-cons covering all such indices.
-Return nil when no qualifying index exists."
-  (let ((indices nil))
+  "Collect lineage records of the registered consoles' last closed dialogues.
+For each record, look up the most recent dialogue in
+`scalpel-lineage--dialogues' whose :session equals the record's
+:session; keep the record only when that session is registered in
+`scalpel-review-session--consoles', the dialogue exists, its :end is
+non-nil, and the record's :index satisfies start < index <= end.
+Records without :index are dropped: a dialogue-scoped diff is defined
+purely by adjacent lineage indices with file changes.  Records live
+buffer-locally on the edited file's buffer, so scan every live
+buffer's `scalpel-lineage--records'.  The review buffer itself (named
+`scalpel-review-session--buffer-name') is skipped: it holds a
+buffer-local copy of the records from the last render, and including
+it would list every record twice."
+  (let ((result nil))
     (dolist (buffer (buffer-list))
-      (when (and (buffer-live-p buffer)
+      (when (and (not (string= (buffer-name buffer)
+                               scalpel-review-session--buffer-name))
                  (local-variable-p 'scalpel-lineage--records buffer))
-        (dolist (record (buffer-local-value 'scalpel-lineage--records buffer))
-          (when (and (listp record)
-                     (plist-member record :session)
-                     (plist-member record :index)
-                     (member (plist-get record :session)
-                             scalpel-review-session--consoles))
-            (push (plist-get record :index) indices)))))
-    (when indices
-      (cons (apply #'min indices) (apply #'max indices)))))
+        (dolist (record (buffer-local-value
+                         'scalpel-lineage--records buffer))
+          (let ((session (plist-get record :session))
+                (index (plist-get record :index))
+                dialogue)
+            (when (and session
+                       (member session
+                               scalpel-review-session--consoles))
+              ;; `scalpel-lineage--dialogues' is appended over time, so
+              ;; the same session may appear multiple times; the most
+              ;; recent dialogue is the last matching entry.  Scan
+              ;; backwards instead of taking the first (earliest) match.
+              (setq dialogue
+                    (cl-find-if
+                     (lambda (d) (eq (plist-get d :session) session))
+                     (reverse scalpel-lineage--dialogues)))
+              (when (and index
+                         dialogue
+                         (plist-get dialogue :end)
+                         (> index (plist-get dialogue :start))
+                         (<= index (plist-get dialogue :end)))
+                (push record result)))))))
+    (setq result (nreverse result))
+    result))
 
 (provide 'scalpel-review-session)
 
