@@ -210,9 +210,11 @@ Scalpel is a **conversational editor**, not a one-shot command.
    not from a review loop.
 
 6. If a change is wrong, the session is there to inspect and undo: review the
-   recorded edits as a diff, then `M-x scalpel-revert-session` takes the session
-   back as one unit. `C-c C-k` stops a request in flight. This is the reason step 5
-   can move without asking.
+   recorded edits as a diff — rejecting individual hunks from the review buffer
+   if only some of them are wrong — then `M-x scalpel-revert-session` takes the
+   session back as one unit. When shell output is truncated, it can be continued
+   from where it stopped (continue-after-shell). `C-c C-k` stops a request in
+   flight. This is the reason step 5 can move without asking.
 
 Anonymous targets such as "the second if branch" are handled by first moving the
 Emacs point to that block; point is the strongest coordinate Scalpel knows.
@@ -339,6 +341,10 @@ Inside the console:
 
 - All LLM traffic goes through `gptel`; Scalpel never connects directly to an
   LLM or sends data outside your configured backend.
+- Outgoing prompts pass through `scalpel-redact` first: configured rules --
+  home-directory paths, and any pattern you add -- are replaced before the text
+  reaches the LLM, so identifiers that would point back to your machine never
+  leave it.
 - Shell actions run inside an OS sandbox whose file scope is exactly the
   current context files, rebuilt for every action.  On Linux that is
   `bubblewrap`; on macOS it is the deprecated `sandbox-exec`, treated as
@@ -359,7 +365,9 @@ Inside the console:
   carry only the report's header, so a long session does not re-send output
   the planner has already read.  The console buffer keeps every byte;
   `scalpel-console-trim-consumed-output` turns the trimming off.
-- The context is bounded by `scalpel-agent-context-max-files': an add that
+- The context is bounded by `scalpel-agent-context-max-files`, and its
+  collection honors `.scalpelignore` and the project's Git ignore rules, so
+  ignored files never enter the prompt or the sandbox's reach.  An add that
   would cross the cap is refused whole, leaving the context exactly as it
   was, so neither the sandbox's reach nor the planner prompt grows past it
   by accident.
@@ -369,8 +377,6 @@ Inside the console:
   be diffed as a whole.  Recovery then runs through the orphan branch
   `scalpel/autosave`: the current Git working tree stays clean until you decide
   to commit.  This ships with `scalpel-lineage`; see Status & Roadmap.
-
----
 
 ## Status & Roadmap
 
@@ -389,6 +395,10 @@ Scalpel is in active, deliberately small MVP stages.
   human-readable report
   that stays in the console buffer, so a session's changes are readable after
   the fact
+- Diagnosis and self-healing: when planner output fails to parse, the failure
+  is classified and diagnosed, bracket defects are located, Perl regexes are
+  pre-checked with mechanical repair suggestions, and the round retries with
+  the diagnosis fed back to the planner
 - Execution boundary lock: a replacement lands only on the range the locator
   resolved, and an unbalanced replacement is refused; an applied change reaches
   its file as it lands, so the shell commands the next round runs already see
@@ -412,12 +422,21 @@ Scalpel is in active, deliberately small MVP stages.
   or would unbalance an Emacs Lisp file refuses entire, it is always confirmed
   by the user first because its reach spans every file it names, and its
   report joins the conversation so the planner can iterate on the result
+- Session-level review and recovery, piece by piece: `M-x scalpel-history`
+  opens a roadmap of what the session did, each recorded change can be opened
+  in a review buffer and rejected per block, and remaining records can be
+  restored one at a time rather than as one lump
+- An optional unattended mode, in which the loop runs without per-action
+  confirmation
+- The `scalpel/autosave` orphan branch and `scalpel-lineage`, which record
+  each landed change so per-session diffing and recovery have something to
+  read from
 
 **Near-term**
-- Session diff and one-shot rollback: review everything a session changed as a
-  single diff, then revert it as one unit -- `scalpel-lineage`, the
-  `scalpel/autosave` orphan branch, `M-x scalpel-history`, and
-  `M-x scalpel-revert-session`
+- One-shot session diff and rollback: reviewing everything a session changed
+  as a single diff and reverting it as one unit (`M-x scalpel-revert-session`)
+  on top of the existing lineage records, complementing the already
+  implemented per-block reject and per-record restore
 - LSP-backed locator providers, registered through the existing dispatch API
 
 **Later**
