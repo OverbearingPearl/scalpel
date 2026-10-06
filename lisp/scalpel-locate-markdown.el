@@ -100,48 +100,53 @@ section."
 Skip fenced code blocks and the YAML front matter at the top of
 the buffer: `#' lines inside them are not reported."
   (let ((case-fold-search nil)
-        in-fence
-        fence-marker
+        (in-fence nil)
+        (fence-marker nil)
         syms)
     (save-excursion
       (goto-char (point-min))
-      (let ((limit (point-min)))
-        ;; Detect YAML front matter: "---" on the first line.
-        (when (looking-at-p "---[ \t]*$")
-          (setq limit (line-end-position))
-          ;; Find the closing delimiter.
-          (if (re-search-forward "^---[ \t]*$" nil t)
-              (setq limit (line-end-position))
-            ;; No closing delimiter: treat as no front matter.
-            (setq limit (point-min))))
-        (goto-char limit))
-      (while (re-search-forward scalpel-locate-markdown--heading-regexp nil t)
-        (let ((bol (line-beginning-position)))
-          ;; Update fence state using lines before the heading line.
-          (save-excursion
-            (goto-char bol)
-            (beginning-of-line)
-            (let ((line (buffer-substring-no-properties
-                         (line-beginning-position)
-                         (line-end-position))))
-              (when (string-match "\\`[ \t]*\\(```\\{3,\\}\\|~~~\\{3,\\}\\)" line)
-                (let ((mark (match-string 1 line)))
-                  (if in-fence
-                      (when (string-prefix-p fence-marker mark)
-                        (setq in-fence nil fence-marker nil))
-                    (setq in-fence t
-                          fence-marker (if (string-prefix-p "```" mark) "```" "~~~")))))))
-          (unless in-fence
-            (push (match-string-no-properties 2) syms)))))
+      ;; Skip YAML front matter: "---" on the first line.
+      (when (looking-at-p "---[ \t]*$")
+        (if (re-search-forward "^---[ \t]*$" nil t)
+            (forward-line 1)
+          ;; No closing delimiter: treat as no front matter.
+          (goto-char (point-min))))
+      ;; Scan line by line: update fence state first, then collect
+      ;; headings only when outside a fence.
+      (while (not (eobp))
+        (let ((line (buffer-substring-no-properties
+                     (line-beginning-position)
+                     (line-end-position))))
+          (cond
+           ;; Fence run at line start toggles fence state; the fence
+           ;; token may be followed by an info string (e.g. "```sh"),
+           ;; which is ignored.  The interval `\\{3,\\}' is applied to
+           ;; a single-character class so it means "three or more
+           ;; fence characters", not "three more after two literals".
+           ((string-match
+             "\\`[ \t]*\\([`]\\{3,\\}\\|[~]\\{3,\\}\\)[^\n]*\\'" line)
+            (let ((mark (match-string 1 line)))
+              (if in-fence
+                  (when (string-prefix-p fence-marker mark)
+                    (setq in-fence nil fence-marker nil))
+                (setq in-fence t
+                      fence-marker (if (string-prefix-p "```" mark) "```" "~~~")))))
+           ;; Heading candidate outside fences.
+           ((and (not in-fence)
+                 (string-match scalpel-locate-markdown--heading-regexp line))
+            (push (match-string-no-properties 2 line) syms))))
+        (forward-line 1)))
     (nreverse syms)))
 
 (defconst scalpel-locate-markdown--definer-line-regexp
-  "- \\([^[:space]:\n]+\\):[^\n]*"
+  "- \\([^ \t\n:]+\\):[^\n]*"
   "Regexp matching a Markdown definer line like \"- NAME: REST\".
 The leading dash and space are literal.  Group 1 captures the
-definer name, i.e. a run of characters excluding whitespace,
-colon and newline.  The rest of the line is matched with a
-negated character class since `.' does not cross newlines.")
+definer name, i.e. one or more characters none of space, tab,
+newline or colon, written as a plain negated character class
+instead of a POSIX bracket class.  The rest of the line is
+matched with a negated character class since `.' does not cross
+newlines.")
 
 ;; Scan the current buffer and return deduplicated definer names
 ;; in file order.
@@ -167,9 +172,11 @@ order and removing duplicates."
   "Return the deduplicated definer names found in FILE.
 The file is synced into a temporary buffer via
 `scalpel-locate--sync-buffer', then scanned in file order."
-  (with-temp-buffer
-    (scalpel-locate--sync-buffer file)
-    (scalpel-locate-markdown--definer-names)))
+  (let ((buffer (scalpel-locate--sync-buffer file)))
+    (unwind-protect
+        (with-current-buffer buffer
+          (scalpel-locate-markdown--definer-names))
+      (kill-buffer buffer))))
 
 (defun scalpel-locate-markdown-register-provider ()
   "Register the markdown locate provider with Scalpel."
