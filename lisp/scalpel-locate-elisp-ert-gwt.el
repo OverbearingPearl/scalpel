@@ -24,16 +24,16 @@
 (defun scalpel-locate-elisp-ert-gwt--names (file)
   "Return, in source order, the ert-gwt test names defined in FILE.
 Read FILE into a temp buffer and walk its top-level forms with
-`read'; for each (`ert-gwt-deftest' ...) call synthesize the symbol
-name ert-gwt-deftest-N, where N is the 1-based ordinal of the call
-in the file, matching the numbering the list-symbols fallback
-uses.  This derives the names from the source itself, so the file
-does not need to have been loaded and the result survives the test
-runner unloading features.  Return nil when FILE is nil or the
-file contains no `ert-gwt-deftest' call."
+`read'; for each (`ert-gwt-deftest' ...) call take the clause list
+\\\\(cdr form) and call `ert-gwt--name' with the clauses, collecting
+the returned strings as the names.
+The naming rule, including the suffix numbering for duplicated
+blocks, is implemented entirely by `ert-gwt--name'; this function
+only reads the clause lists out of the source and asks for each
+test's name.  Return nil when FILE is nil or the file contains no
+`ert-gwt-deftest' call."
   (when (and file (file-readable-p file))
-    (let ((names nil)
-          (count 0))
+    (let ((names nil))
       (with-temp-buffer
         (insert-file-contents file)
         (condition-case nil
@@ -42,12 +42,10 @@ file contains no `ert-gwt-deftest' call."
                 (setq form (read (current-buffer)))
                 (when (and (consp form)
                            (eq (car form) 'ert-gwt-deftest))
-                  (setq count (1+ count))
-                  (push (format "ert-gwt-deftest-%d" count) names))))
+                  (push (ert-gwt--name (cdr form))
+                        names))))
           (end-of-file nil)))
-      (nreverse names))))
-
-(scalpel-locate-elisp-register-anonymous-definer
+      (nreverse names))))(scalpel-locate-elisp-register-anonymous-definer
  'ert-gwt-deftest #'scalpel-locate-elisp-ert-gwt--names)
 
 (provide 'scalpel-locate-elisp-ert-gwt)

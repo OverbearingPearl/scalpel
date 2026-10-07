@@ -11,120 +11,108 @@
 
 ;;; Code:
 
-(require 'ert)
+(require 'ert-gwt)
 (require 'scalpel-lineage)
 (require 'scalpel-review)
 
 ;; Story A: a recorded edit is restored exactly once.
-(ert-deftest scalpel-story-lineage-test-restore-succeeds ()
-  (let ((root (make-temp-file "scalpel-lineage-" t))
-        (file nil)
-        (record nil))
-    (unwind-protect
-        (progn
-          (setq file (expand-file-name "a.el" root))
+(ert-gwt-deftest
+  (:given ((root (make-temp-file "scalpel-lineage-" t))
+           (file (expand-file-name "a.el" root))
+           (result nil))
           (scalpel-lineage-reset)
-          (setq record (scalpel-lineage-note 'block-edit file "old\n" "new\n"))
-          (with-temp-file file (insert "new\n"))
-          ;; Then the recorded change restores the old content.
-          (should (eq (scalpel-lineage-restore record) t))
-          (should (string=
-                   (with-temp-buffer
-                     (insert-file-contents file)
-                     (buffer-string))
-                   "old\n")))
-      (condition-case nil (delete-directory root t) (error nil))
-      (scalpel-lineage-reset))))
+          (with-temp-file file (insert "new\n")))
+  (:given ((record (scalpel-lineage-note 'block-edit file "old\n" "new\n"))))
+  (:when (setq result (scalpel-lineage-restore record)))
+  (:then (should (eq result t)))
+  (:then (should (string=
+                  (with-temp-buffer
+                    (insert-file-contents file)
+                    (buffer-string))
+                  "old\n")))
+  (:cleanup (condition-case nil (delete-directory root t) (error nil))
+            (scalpel-lineage-reset)))
 
 ;; Story B: a no-op write leaves no record, so the session stays clean.
-(ert-deftest scalpel-story-lineage-test-noop-unrecorded ()
-  (let ((root (make-temp-file "scalpel-lineage-" t)))
-    (unwind-protect
-        (progn
-          (scalpel-lineage-reset)
-          ;; Given a write whose old and new content are identical.
-          (let ((record (scalpel-lineage-note 'block-edit
-                                              (expand-file-name "b.el" root)
-                                              "same\n"
-                                              "same\n")))
-            ;; Then nothing is recorded and the session counts as clean.
-            (should-not record)
-            (should (scalpel-lineage-clean-p))))
-      (condition-case nil (delete-directory root t) (error nil))
-      (scalpel-lineage-reset))))
+(ert-gwt-deftest
+  (:given ((root (make-temp-file "scalpel-lineage-" t)))
+          (scalpel-lineage-reset))
+  (:when (scalpel-lineage-note 'block-edit
+                               (expand-file-name "b.el" root)
+                               "same\n"
+                               "same\n"))
+  (:then (should (scalpel-lineage-clean-p)))
+  (:cleanup (condition-case nil (delete-directory root t) (error nil))
+            (scalpel-lineage-reset)))
 
 ;; Story C: restoring after the file moved on refuses without clobbering.
-(ert-deftest scalpel-story-lineage-test-conflict-refused ()
-  (let ((root (make-temp-file "scalpel-lineage-" t))
-        (file nil)
-        (record nil))
-    (unwind-protect
-        (progn
-          (setq file (expand-file-name "c.el" root))
+(ert-gwt-deftest
+  (:given ((root (make-temp-file "scalpel-lineage-" t))
+           (file (expand-file-name "c.el" root))
+           (result nil))
           (with-temp-file file (insert "original\n"))
-          (scalpel-lineage-reset)
-          (setq record (scalpel-lineage-note 'block-edit file
-                                             "original\n"
-                                             "recorded\n"))
+          (scalpel-lineage-reset))
+  (:given ((record (scalpel-lineage-note 'block-edit file
+                                         "original\n"
+                                         "recorded\n")))
           (with-temp-file file (insert "recorded\n"))
           ;; Conflict is now segment-based: the recorded new-text must
           ;; still occur in the file. Overwrite the file entirely so
           ;; the recorded "recorded\n" segment is gone.
-          (with-temp-file file (insert "user content\n"))
-          ;; The restore refuses and the user content survives.
-          (should (eq (scalpel-lineage-restore record) 'conflict))
-          (let ((content (with-temp-buffer
-                           (insert-file-contents file)
-                           (buffer-string))))
-            (should (string-search "user content" content))
-            (should-not (string-search "recorded" content))))
-      (condition-case nil (delete-directory root t) (error nil))
-      (scalpel-lineage-reset))))
+          (with-temp-file file (insert "user content\n")))
+  (:when (setq result (scalpel-lineage-restore record)))
+  (:then (should (eq result 'conflict)))
+  (:then (should (string-search "user content"
+                                (with-temp-buffer
+                                  (insert-file-contents file)
+                                  (buffer-string)))))
+  (:then (should (not (string-search "recorded"
+                                     (with-temp-buffer
+                                       (insert-file-contents file)
+                                       (buffer-string))))))
+  (:cleanup (condition-case nil (delete-directory root t) (error nil))
+            (scalpel-lineage-reset)))
 
 ;; Story D: the review stays silent when the session recorded nothing.
-(ert-deftest scalpel-story-lineage-test-silent-when-clean ()
-  (let ((old-records scalpel-lineage--records))
-    (unwind-protect
-        (progn
+(ert-gwt-deftest
+  (:given ((old-records scalpel-lineage--records))
           (scalpel-lineage-reset)
           ;; Kill any pre-existing review buffer left over from earlier
           ;; tests so this test only observes its own behavior.
           (when (get-buffer "*scalpel session review*")
-            (kill-buffer "*scalpel session review*"))
-          (let ((inhibit-message t))
-            (scalpel-review-open))
-          ;; Then no review buffer exists.
-          (should-not (get-buffer "*scalpel session review*")))
-      (setq scalpel-lineage--records old-records))))
+            (kill-buffer "*scalpel session review*")))
+  (:when (let ((inhibit-message t))
+           (scalpel-review-open)))
+  (:then (should (not (get-buffer "*scalpel session review*"))))
+  (:cleanup (setq scalpel-lineage--records old-records)))
 
 ;; Story E: the review renders a recorded edit as a diff block.
-(ert-deftest scalpel-story-lineage-test-renders-recorded-edit ()
-  (let ((review-buf nil)
-        (scalpel-agent--context-files nil))
-    (unwind-protect
-        (progn
-          (with-current-buffer (get-buffer-create " *review render*")
+(ert-gwt-deftest
+  (:given ((buffer (get-buffer-create " *review render*"))
+           (scalpel-agent--context-files nil))
+          (with-current-buffer buffer
             (scalpel-lineage-reset)
             (scalpel-lineage-note 'block-edit
                                   "/tmp/scalpel-review-example.el"
                                   "old\n"
-                                  "new\n")
-            (erase-buffer)
-            (let ((inhibit-read-only t))
-              (scalpel-review--render))
-            (setq review-buf (current-buffer))
-            ;; Then the buffer lists the file and tags each block with
-            ;; its record so navigation can find it.  The header lines
-            ;; precede the first block, so locate the block boundary.
-            (should (string-search "/tmp/scalpel-review-example.el"
-                                   (buffer-string)))
-            (let ((block-pos (next-single-property-change
-                              (point-min) 'scalpel-review-record)))
-              (should block-pos)
-              (should (get-text-property block-pos 'scalpel-review-record)))))
-      (when (buffer-live-p review-buf)
-        (kill-buffer review-buf))
-      (scalpel-lineage-reset))))
+                                  "new\n")))
+  (:when (with-current-buffer buffer
+           (erase-buffer)
+           (let ((inhibit-read-only t))
+             (scalpel-review--render))))
+  (:then (with-current-buffer buffer
+           (should (string-search "/tmp/scalpel-review-example.el"
+                                  (buffer-string)))))
+  (:then (with-current-buffer buffer
+           ;; The header lines precede the first block, so locate the
+           ;; block boundary by the record text property.
+           (let ((block-pos (next-single-property-change
+                             (point-min) 'scalpel-review-record)))
+             (should block-pos)
+             (should (get-text-property block-pos 'scalpel-review-record)))))
+  (:cleanup (when (buffer-live-p buffer)
+              (kill-buffer buffer))
+            (scalpel-lineage-reset)))
 
 (provide 'scalpel-story-lineage-test)
 
