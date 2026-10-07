@@ -239,6 +239,7 @@ back to the local variable."
   "Hold no lineage state of this session."
   (setq scalpel-lineage--records nil
         scalpel-lineage--baseline nil
+        scalpel-lineage--dialogues nil
         scalpel-lineage-round 0))
 
 (defun scalpel-lineage--file-hash (file)
