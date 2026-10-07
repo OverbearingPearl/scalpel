@@ -78,6 +78,58 @@
   (:cleanup (kill-buffer rec-buf)
             (scalpel-lineage-reset)))
 
+;; Story D: point movement walks node to node and stops at the ends.
+(ert-gwt-deftest
+  (:given ((rec-buf (get-buffer-create " *story-lh-nav*"))
+           (positions nil)
+           (last-stay nil)
+           (back nil))
+          (with-current-buffer rec-buf
+            (scalpel-lineage-reset)
+            (scalpel-lineage-session-begin "s1" "first")
+            (scalpel-lineage-session-end "s1")
+            (scalpel-lineage-session-begin "s2" "second")
+            (scalpel-lineage-session-end "s2")))
+  (:when (with-temp-buffer
+           (scalpel-lineage-history--render)
+           (setq positions (scalpel-lineage-history--node-positions))
+           (goto-char (nth 1 positions))
+           (scalpel-lineage-history-next)
+           (setq last-stay (equal (point) (nth 1 positions)))
+           (scalpel-lineage-history-previous)
+           (setq back (equal (point) (nth 0 positions)))))
+  (:then (should (eq (length positions) 2)))
+  (:then (should last-stay))
+  (:then (should back))
+  (:cleanup (kill-buffer rec-buf)
+            (scalpel-lineage-reset)))
+
+;; Story E: forward and backward jump between distinct sessions.
+(ert-gwt-deftest
+  (:given ((rec-buf (get-buffer-create " *story-lh-nav*"))
+           (positions nil)
+           (fwd nil)
+           (bwd nil))
+          (with-current-buffer rec-buf
+            (scalpel-lineage-reset)
+            (scalpel-lineage-session-begin "s1" "first")
+            (scalpel-lineage-session-end "s1")
+            (scalpel-lineage-session-begin "s2" "second")
+            (scalpel-lineage-session-end "s2")))
+  (:when (with-temp-buffer
+           (scalpel-lineage-history--render)
+           (setq positions (scalpel-lineage-history--node-positions))
+           (goto-char (nth 0 positions))
+           (scalpel-lineage-history-forward)
+           (setq fwd (equal (point) (nth 1 positions)))
+           (scalpel-lineage-history-backward)
+           (setq bwd (equal (point) (nth 0 positions)))))
+  (:then (should (eq (length positions) 2)))
+  (:then (should fwd))
+  (:then (should bwd))
+  (:cleanup (kill-buffer rec-buf)
+            (scalpel-lineage-reset)))
+
 (provide 'scalpel-story-lineage-history-test)
 
 ;;; scalpel-story-lineage-history-test.el ends here

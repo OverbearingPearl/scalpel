@@ -79,9 +79,10 @@ roadmap reflects every dialogue the consoles opened."
     (mapcar
      (lambda (dialogue)
        (let ((start (plist-get dialogue :start))
-             (end (plist-get dialogue :end)))
+             (end (plist-get dialogue :end))
+             (session (plist-get dialogue :session)))
          (list :dialogue dialogue
-               :session (plist-get dialogue :session)
+               :session session
                :question (plist-get dialogue :question)
                :open (null end)
                :records (scalpel-lineage-history--records-in
@@ -119,7 +120,12 @@ newly appeared dialogues or records are reflected in the display."
          (records (plist-get node :records))
          (question (scalpel-lineage-history--truncate-question
                     (plist-get node :question)))
-         (beg (point)))
+         beg)
+    ;; Trunk separator only between nodes, inserted before the node text
+    ;; and outside the text-property span.
+    (unless (= i 0)
+      (insert "│\n"))
+    (setq beg (point))
     ;; Node bullet on the vertical trunk line.
     (insert (if open "○ " "● "))
     (insert (format "dialogue %d  session: %s  %d change(s)%s\n"
@@ -133,8 +139,7 @@ newly appeared dialogues or records are reflected in the display."
                       (plist-get record :file)
                       (if (plist-get record :restored)
                           "  [restored]" ""))))
-    (unless (eq node (car (last (scalpel-lineage-history--nodes))))
-      (insert "│\n"))
+    ;; Property covers only this node's own text, not the separator.
     (put-text-property beg (point)
                        'scalpel-lineage-history-node node)))
 
@@ -149,13 +154,23 @@ newly appeared dialogues or records are reflected in the display."
       (goto-char pos))))
 
 (defun scalpel-lineage-history--current-node ()
-  "Return the node at point, or the nearest one at or before it."
+  "Return the node at point, or the nearest one at or before it.
+If no node exists at or before point, fall back to the nearest
+node after point, so callers starting at the beginning of the
+buffer still resolve to the first node."
   (or (get-text-property (point) 'scalpel-lineage-history-node)
-      (progn
-        (goto-char (previous-single-property-change
-                    (1+ (point)) 'scalpel-lineage-history-node
-                    nil (point-min)))
-        (get-text-property (point) 'scalpel-lineage-history-node))))
+      (let ((pos (point)))
+        (or (progn
+              (goto-char (previous-single-property-change
+                          (1+ (point)) 'scalpel-lineage-history-node
+                          nil (point-min)))
+              (get-text-property (point) 'scalpel-lineage-history-node))
+            ;; Fallback: nearest node strictly after the original position.
+            (progn
+              (goto-char (next-single-property-change
+                          pos 'scalpel-lineage-history-node
+                          nil (point-max)))
+              (get-text-property (point) 'scalpel-lineage-history-node))))))
 
 (defun scalpel-lineage-history--node-positions ()
   "Start by returning buffer positions where each node's property begins."
@@ -246,8 +261,11 @@ reported, not forced.  The roadmap is re-rendered afterwards to
 show the restored marks."
   (interactive)
   (let* ((node (scalpel-lineage-history--current-node))
+         (dialogue (plist-get node :dialogue))
          (all-nodes (scalpel-lineage-history--nodes))
-         (nodes (or (member node all-nodes)
+         (nodes (or (cl-member dialogue all-nodes
+                               :test (lambda (a b)
+                                       (equal a (plist-get b :dialogue))))
                     (error "Scalpel: current node not found in roadmap nodes")))
          (records (nreverse
                    (apply #'append
