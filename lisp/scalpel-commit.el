@@ -320,18 +320,20 @@ them without asking."
   "Replace the buffer's message body with MESSAGE.
 The body is delimited by the \"--- BEGIN COMMIT MESSAGE ---\" and
 \"--- END COMMIT MESSAGE ---\" marker lines.  Everything between
-them is replaced, so regenerations never pile up; the header lines
-above the BEGIN marker stay untouched.  If the BEGIN marker is
-missing, it is inserted at point-max so subsequent regenerations
-can find it."
+them, including the old END marker line itself, is replaced, so
+regenerations never pile up or leave duplicate END markers; the
+header lines above the BEGIN marker stay untouched.  If the BEGIN
+marker is missing, it is inserted at point-max so subsequent
+regenerations can find it."
   (let ((inhibit-read-only t))
     (goto-char (point-min))
     (if (re-search-forward "^--- BEGIN COMMIT MESSAGE ---\n" nil t)
         (let ((beg (point)))
           (if (re-search-forward "^--- END COMMIT MESSAGE ---\n" nil t)
-              (delete-region beg (match-beginning 0))
+              (delete-region beg (match-end 0))
             (goto-char (point-max))
             (delete-region beg (point-max)))
+          (goto-char beg)
           (insert message "\n")
           (insert (propertize "--- END COMMIT MESSAGE ---\n" 'face 'shadow))
           (goto-char (point-max)))
