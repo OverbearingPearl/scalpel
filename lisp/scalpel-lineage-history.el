@@ -240,9 +240,8 @@ newly appeared dialogues or records are reflected in the display."
 (defun scalpel-lineage-history-rollback ()
   "Restore the roadmap state as of the dialogue at point.
 Collect the change records of this node and of every later node
-in the roadmap, then restore them newest first: all later nodes'
-records first, then this node's, in reverse chronological order
-via `scalpel-lineage-restore'.  Conflicts are counted and
+in the roadmap in chronological order, then restore them newest
+first via `scalpel-lineage-restore'.  Conflicts are counted and
 reported, not forced.  The roadmap is re-rendered afterwards to
 show the restored marks."
   (interactive)
@@ -250,10 +249,11 @@ show the restored marks."
          (all-nodes (scalpel-lineage-history--nodes))
          (nodes (or (member node all-nodes)
                     (error "Scalpel: current node not found in roadmap nodes")))
-         (records (apply #'append
-                         (mapcar (lambda (n)
-                                   (reverse (plist-get n :records)))
-                                 nodes)))
+         (records (nreverse
+                   (apply #'append
+                          (mapcar (lambda (n)
+                                    (plist-get n :records))
+                                  nodes))))
          (restored 0) (conflicted 0))
     (if (null records)
         (message "Scalpel: this dialogue has no change records to roll back.")

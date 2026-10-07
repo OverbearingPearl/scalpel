@@ -55,21 +55,21 @@
             (scalpel-lineage-session-end "s")
             (with-temp-file file (insert "new\n")))
           ;; Given a roadmap with two dialogues over one file, when the
-          ;; user rolls back from the second (latest) dialogue node.
+          ;; user rolls back from the first (earliest) dialogue node,
+          ;; the rollback restores records newest first, undoing every
+          ;; later change until the original content is back.
           (with-temp-buffer
             (scalpel-lineage-history--render)
-            (goto-char (next-single-property-change
-                        (point-min) 'scalpel-lineage-history-node
-                        nil (point-max)))
+            (goto-char (point-min))
             (let ((inhibit-message t))
               (scalpel-lineage-history-rollback))
-            ;; Then the file holds the content as of after the first
-            ;; dialogue, i.e. the second change was undone.
+            ;; Then the file holds the original content, i.e. both
+            ;; changes were undone newest-first.
             (should (string=
                      (with-temp-buffer
                        (insert-file-contents file)
                        (buffer-string))
-                     "mid\n"))))
+                     "old\n"))))
       (condition-case nil (delete-directory root t) (error nil))
       (kill-buffer rec-buf)
       (scalpel-lineage-reset))))
