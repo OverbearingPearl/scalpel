@@ -3455,18 +3455,36 @@ a round that applied a batch substitution still counts as a
 changing round.
 ON-ERROR receives a plist (:type SYMBOL :message STRING).
 
-Actions are executed in array order; a `block-edit' or
-`block-insert' action settles from its own LLM callback, so actions
-stay serialized while
-the caller's command loop keeps running.  Every callback runs in
-the buffer that was current when this function was called, so the
-session's buffer-local context and `scalpel-agent--shell-output'
-are read and written consistently.  One round is one
+Actions are executed in array order; each step dispatch -- the
+first one and every subsequent one -- is deferred onto a
+zero-second timer instead of running synchronously inside the LLM
+process sentinel.  This keeps the sentinel from blocking timers
+and input while heavy work runs; shell `call-process' invocations,
+file I/O and `y-or-n-p' confirmations all execute in ordinary
+command-loop context.  The chain stays serialized exactly as
+before: each timer fires only after the previous action's
+callback has dispatched the next step, so a `block-edit' or
+`block-insert' action still settles from its own LLM callback
+before the next action runs, and the caller's command loop keeps
+running throughout.  Every callback runs in the buffer that was
+current when this function was called, so the session's
+buffer-local context and `scalpel-agent--shell-output' are read
+and written consistently.  One round is one
 request/execute cycle, not a whole conversation: the caller owns
 the loop and the history.  If the buffer this function was called
 in is killed while a request is in flight, the round stops and
 ON-ERROR is called with :type `session', so a caller holding a
 busy flag still gets a chance to release it.
+
+Abort handling: the generation counter
+`scalpel-agent--run-generation' is captured when the plan arrives,
+before the first step dispatches.  Before every step dispatch --
+including the first -- the captured generation is compared with
+the current value; if they differ (an abort raised
+`scalpel-agent--run-generation' between two steps, or between
+plan and first dispatch), the chain stops and ON-ERROR is called
+with :type `aborted', so the caller's terminal callback runs and
+its busy guard is released instead of the chain dying silently.
 
 Before executing the first changing action, the runner records a
 write-before staleness baseline: for every target path of every
@@ -3503,7 +3521,10 @@ mtime, so the session's own writes never trip a later check."
                  (shells nil)
                  (reads nil)
                  (changes nil)
-                 (baseline nil))
+                 (baseline nil)
+                 ;; Capture the generation at plan time, before the
+                 ;; first dispatch; every step compares against this.
+                 (gen scalpel-agent--run-generation))
              (cl-labels
                  ((finish ()
                     (funcall on-done
@@ -3512,6 +3533,11 @@ mtime, so the session's own writes never trip a later check."
                                    :shells (nreverse shells)
                                    :reads (nreverse reads)
                                    :changes (nreverse changes))))
+                  (note-aborted ()
+                    (funcall on-error
+                             (list :type 'aborted
+                                   :message
+                                   "Scalpel: round aborted; generation changed after plan")))
                   (note-stale (targets)
                     (funcall on-error
                              (list :type 'stale-file
@@ -3519,7 +3545,7 @@ mtime, so the session's own writes never trip a later check."
                                    :message
                                    (format "Scalpel: refusing to write; these files were just changed, likely by another console on the same root: %s. Re-read them and re-plan."
                                            (string-join targets ", ")))))
-                  (step (rest)
+                  (run-step (rest)
                     (if (null rest)
                         (finish)
                       (let ((action (car rest)))
@@ -3560,10 +3586,33 @@ mtime, so the session's own writes never trip a later check."
                                                     (scalpel-agent-run--mtime-of target))
                                               (assq-delete-all
                                                target baseline)))))
+                              ;; Defer the next dispatch so the LLM
+                              ;; callback (possibly a process sentinel)
+                              ;; returns before the next action runs.
                               (step (cdr rest))))
                            (lambda (err)
                              (in-session
-                              (funcall on-error err)))))))))
+                              (funcall on-error err))))))))
+                  (step (rest)
+                    ;; Defer this step onto a zero-second timer so the
+                    ;; sentinel (or any caller context) returns
+                    ;; immediately and shell `call-process', file I/O
+                    ;; and `y-or-n-p' confirms run in ordinary
+                    ;; command-loop context.  Serialization is
+                    ;; preserved: each dispatch happens only after the
+                    ;; previous action's callback fires.  On dispatch,
+                    ;; the plan-time generation is rechecked: if an
+                    ;; abort bumped `scalpel-agent--run-generation' in
+                    ;; the meantime, report :type `aborted' instead of
+                    ;; silently dropping the chain, so the caller's
+                    ;; terminal callback always runs.
+                    (run-at-time 0 nil
+                                 (lambda ()
+                                   (in-session
+                                    (if (not (equal gen
+                                                    scalpel-agent--run-generation))
+                                        (note-aborted)
+                                      (run-step rest)))))))
                ;; Seed the staleness baseline before running anything:
                ;; capture each changing action's target mtimes so a
                ;; concurrent writer between plan and execute is caught.
@@ -3579,6 +3628,17 @@ mtime, so the session's own writes never trip a later check."
        (lambda (err)
          (in-session
           (funcall on-error err)))))))
+
+(defvar-local scalpel-agent--run-generation 0
+  "Per-run generation guard for deferred actions after abort.
+
+每次调用 `scalpel-agent-run' 在开始时捕获当前值；deferred 零秒定时器
+步骤在执行前先比对当前值与捕获值，不一致则不再执行本轮剩余动作
+（包括 shell 命令）。`scalpel-console-abort' 会递增该变量，使被中止
+轮次的延迟动作链停止触发。
+
+刻意不加入 `scalpel-console--session-variables'：这是瞬态的轮次状态，
+重载后必须归零，不得跨重载存活。")
 
 (provide 'scalpel-agent)
 
