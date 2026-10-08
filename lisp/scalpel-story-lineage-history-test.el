@@ -130,6 +130,44 @@
   (:cleanup (kill-buffer rec-buf)
             (scalpel-lineage-reset)))
 
+;; Story F: rollback counts conflicts and continues with the rest.
+(ert-gwt-deftest
+  (:given ((root (make-temp-file "scalpel-story-lh-" t))
+           (fa nil) (fb nil)
+           (rec-buf (get-buffer-create " *story-lh-rec*"))
+           (msg nil))
+          (setq fa (expand-file-name "a.el" root))
+          (setq fb (expand-file-name "b.el" root))
+          (with-temp-file fa (insert "old\n"))
+          (with-temp-file fb (insert "x\n"))
+          (with-current-buffer rec-buf
+            (scalpel-lineage-reset)
+            (scalpel-lineage-session-begin "s" "first")
+            (scalpel-lineage-note 'block-edit fa "old\n" "mid\n")
+            (scalpel-lineage-note 'block-edit fb "x\n" "y\n")
+            (scalpel-lineage-session-end "s")
+            ;; fa drifts away from every recorded state, so its
+            ;; restore is refused as a conflict; fb is restorable.
+            (with-temp-file fa (insert "drifted\n"))
+            (with-temp-file fb (insert "y\n"))))
+  (:when (with-temp-buffer
+           (scalpel-lineage-history--render)
+           (goto-char (point-min))
+           (cl-letf (((symbol-function 'message)
+                      (lambda (fmt &rest args)
+                        (setq msg (apply #'format fmt args)))))
+             (scalpel-lineage-history-rollback))))
+  (:then (should (string=
+                  (with-temp-buffer
+                    (insert-file-contents fb)
+                    (buffer-string))
+                  "x\n")))
+  (:then (should (string-search "refused as conflict" msg)))
+  (:then (should (string-search "1 change(s)" msg)))
+  (:cleanup (condition-case nil (delete-directory root t) (error nil))
+            (kill-buffer rec-buf)
+            (scalpel-lineage-reset)))
+
 (provide 'scalpel-story-lineage-history-test)
 
 ;;; scalpel-story-lineage-history-test.el ends here
