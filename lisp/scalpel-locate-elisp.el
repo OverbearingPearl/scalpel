@@ -22,7 +22,7 @@
     define-generic-mode define-skeleton define-inline
     transient-define-prefix transient-define-suffix
     transient-define-argument
-    ert-deftest)
+    ert-deftest ert-gwt-deftest)
   "Top-level defining forms recognised as one complete definition.
 Structural contract shared by the definition regexes below and by
 `scalpel-locate-elisp--single-definition-p'.
