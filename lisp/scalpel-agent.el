@@ -3544,7 +3544,11 @@ the same project root -- the action is refused with ON-ERROR and
 :type `stale-file', and the remaining actions in the round are not
 run.  After one of the session's own changing actions succeeds, the
 baseline entries for its targets are refreshed to the current
-mtime, so the session's own writes never trip a later check."
+mtime, so the session's own writes never trip a later check.
+
+A signal raised while a dispatched step runs is caught in the timer
+callback and routed to ON-ERROR as :type `action'; a quit signal is
+re-signaled unchanged with its original data."
   (let ((session (current-buffer)))
     (cl-macrolet
         ((in-session (&rest body)
@@ -3658,7 +3662,12 @@ mtime, so the session's own writes never trip a later check."
                                     (if (not (equal gen
                                                     scalpel-agent--run-generation))
                                         (note-aborted)
-                                      (run-step rest)))))))
+                                      (condition-case timer-err
+                                          (run-step rest)
+                                        (quit (signal (car timer-err) (cdr timer-err)))
+                                        (error (funcall on-error
+                                                        (list :type 'action
+                                                              :message (error-message-string timer-err)))))))))))
                ;; Seed the staleness baseline before running anything:
                ;; capture each changing action's target mtimes so a
                ;; concurrent writer between plan and execute is caught.
