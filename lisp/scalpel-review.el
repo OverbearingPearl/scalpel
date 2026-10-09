@@ -71,7 +71,14 @@ Signal with a message when there is no earlier block."
   (get-text-property (point) 'scalpel-review-record))
 
 (defun scalpel-review-reject-block ()
-  "Restore the change under point through `scalpel-lineage-restore'."
+  "Restore the change under point through `scalpel-lineage-restore'.
+
+Records for the same file that are newer than the one under point
+may have rewritten or removed its region, so they are undone too
+\\(cascade).  Every block successfully restored by the cascade is
+immediately struck through with `scalpel-review-rejected' so the
+display stays in sync with the on-disk state; the clicked block
+is struck through the same way afterwards."
   (interactive)
   (let ((record (scalpel-review--record-at-point)))
     (if (not record)
@@ -83,34 +90,42 @@ Signal with a message when there is no earlier block."
         ;; region this record's new text occupies.  Undo every newer
         ;; record for the same file (newest first, i.e. buffer order
         ;; below point) so the earlier record's new text is present
-        ;; again and restores cleanly.
+        ;; again and restores cleanly.  Each restored cascade block's
+        ;; text range is recorded and struck through immediately, so
+        ;; the buffer view reflects what is now on disk.
         (save-excursion
           (goto-char (next-single-property-change
                       pos 'scalpel-review-record nil (point-max)))
           (catch 'blocked
             (while (< (point) (point-max))
-              (let ((newer (get-text-property (point) 'scalpel-review-record)))
+              (let* ((beg (point))
+                     (newer (get-text-property beg 'scalpel-review-record))
+                     (end (next-single-property-change
+                           beg 'scalpel-review-record nil (point-max))))
                 (when (and newer (equal (plist-get newer :file) file))
                   (pcase (scalpel-lineage-restore newer)
                     (`conflict
                      (setq blocked t)
-                     (throw 'blocked nil)))))
+                     (throw 'blocked nil))
+                    (`t
+                     (let ((inhibit-read-only t))
+                       (put-text-property beg end
+                                          'face 'scalpel-review-rejected))))))
               (goto-char (next-single-property-change
                           (point) 'scalpel-review-record nil (point-max))))))
         (if blocked
             (message "Refused: the file changed since this change landed")
           (pcase (scalpel-lineage-restore record)
             (`t
+             ;; Strike the whole block under point: from here to the
+             ;; next record boundary.  No fallback is needed because
+             ;; a record under point always has a text range.
              (save-excursion
-               (if (get-text-property (point) 'scalpel-review-record)
-                   (let* ((end (next-single-property-change
-                                (point) 'scalpel-review-record nil (point-max)))
-                          (beg (previous-single-property-change
-                                end 'scalpel-review-record nil (point-min))))
-                     (let ((inhibit-read-only t))
-                       (put-text-property beg end 'face 'scalpel-review-rejected)))
+               (let ((end (next-single-property-change
+                           pos 'scalpel-review-record nil (point-max))))
                  (let ((inhibit-read-only t))
-                   (put-text-property (point) (point) 'face 'scalpel-review-rejected))))
+                   (put-text-property pos end
+                                      'face 'scalpel-review-rejected))))
              (message "Restored one change"))
             (`conflict
              (message "Refused: the file changed since this change landed"))
@@ -389,7 +404,10 @@ The whole block (including the separator line) is tagged with the
 
 If the buffer-local variable `scalpel-agent--context-files' is bound
 and non-nil, only lineage records whose :file is a member of that list
-are shown; otherwise all recorded changes are rendered."
+are shown; otherwise all recorded changes are rendered.  Records
+produced by the file-rename tool are always kept: their :file is the
+new path, which the session context does not track (the context only
+records the pre-rename path)."
   (require 'diff)
   (let ((inhibit-read-only t)
         (records (scalpel-lineage-changes)))
@@ -398,6 +416,9 @@ are shown; otherwise all recorded changes are rendered."
     ;; so test-run temp files never appear.  Compare through
     ;; `file-truename' on both sides so resolved paths such as
     ;; /private/var/folders/... match user-spelled /var/folders/... ones.
+    ;; file-rename records are exempt: their :file is the new path while
+    ;; the context only tracks the old one, so truename matching would
+    ;; wrongly drop them.
     (when (and (boundp 'scalpel-agent--context-files)
                scalpel-agent--context-files)
       (let ((context-truenames
@@ -405,8 +426,9 @@ are shown; otherwise all recorded changes are rendered."
         (setq records
               (cl-remove-if-not
                (lambda (record)
-                 (member (file-truename (plist-get record :file))
-                         context-truenames))
+                 (or (equal (plist-get record :tool) "file-rename")
+                     (member (file-truename (plist-get record :file))
+                             context-truenames)))
                records))))
     (setq header-line-format " TAB next | Shift+TAB prev | k reject | K reject hunk | q accept all & quit ")
     (erase-buffer)
