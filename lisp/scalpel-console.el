@@ -742,10 +742,14 @@ inserted through here becomes part of the conversation sent to the
 LLM.  Display-only output must not use it.  The tag is not
 permanent: `scalpel-console-forget-history' clears it, which
 removes the region from the conversation while leaving the visible
-text alone."
+text alone.  When ROLE is `user' the whole insertion is given the
+built-in face `highlight', highlighting the user turn with a
+theme-adapted light background; other roles get no face."
   (let ((beg (point)))
     (insert text)
     (put-text-property beg (point) 'scalpel-console-role role)
+    (when (eq role 'user)
+      (put-text-property beg (point) 'face 'highlight))
     ;; Keyboard input arrives through `insert-and-inherit', which copies
     ;; the text properties of the character before point.  Without
     ;; `rear-nonsticky', the very first character the user types after
@@ -755,7 +759,7 @@ text alone."
     ;; folded body would replace the user's own first keystroke.
     (put-text-property beg (point) 'rear-nonsticky
                        '(scalpel-console-role scalpel-console-output
-                         scalpel-console-collapsed display))))
+                         scalpel-console-collapsed display face))))
 
 (defun scalpel-console--trim-report (text)
   "Replace the fenced body of a report in TEXT with a placeholder.
