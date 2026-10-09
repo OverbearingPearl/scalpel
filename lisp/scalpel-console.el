@@ -1241,7 +1241,10 @@ as their cell text, unhighlighted."
 Files git would ignore are marked in the tree.  Lines dropped since
 the previous refresh are dimmed and struck through, newly added
 lines are bolded.  The baseline is replaced afterwards, so each
-delta is highlighted exactly once."
+delta is highlighted exactly once.
+Unsent pending input is extracted before the tree is appended and
+re-inserted afterwards with its text properties intact, so the
+tree always appears before the user's input."
   (with-current-buffer (scalpel-console--target-buffer)
     (let* ((ignored (scalpel-agent--git-ignored-files
                      scalpel-agent--context-files))
@@ -1249,10 +1252,37 @@ delta is highlighted exactly once."
                     scalpel-console--context-baseline ignored))
            (lines (car result)))
       (setq scalpel-console--context-baseline (cdr result))
-      (scalpel-console--append
-       (if (null lines)
-           "Context: none"
-         (concat "Context:\n" (scalpel-console--render-diff lines)))))))
+      (let* ((regions
+              ;; Keep only pending-input regions, i.e. those not
+              ;; tagged with a role/output label.
+              (cl-remove-if
+               (lambda (region)
+                 (or (get-text-property (car region) 'scalpel-console-role)
+                     (get-text-property (car region) 'scalpel-console-output)))
+               (scalpel-console--pending-input-regions)))
+             (pending-texts
+              (mapcar (lambda (region)
+                        ;; Preserve text properties so the pending
+                        ;; scan still recognizes these regions.
+                        (buffer-substring (car region) (cdr region)))
+                      regions)))
+        ;; Delete back to front so earlier positions stay valid.
+        (dolist (region (reverse regions))
+          (delete-region (car region) (cdr region)))
+        (scalpel-console--append
+         (if (null lines)
+             "Context: none"
+           (concat "Context:\n" (scalpel-console--render-diff lines))))
+        ;; Re-insert pending input directly, bypassing --append so
+        ;; the text is not tagged as display-only output.
+        (dolist (text pending-texts)
+          (save-excursion
+            (goto-char (point-max))
+            (insert text)
+            ;; Keep the trailing character non-sticky so new text
+            ;; appended afterwards does not inherit these properties.
+            (put-text-property (1- (point-max)) (point-max)
+                               'rear-nonsticky t)))))))
 
 (defun scalpel-console-add-file (&optional ignore-gitignore)
   "Prompt for a file or directory and add it to the context.
