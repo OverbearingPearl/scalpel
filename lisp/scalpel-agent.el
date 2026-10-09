@@ -3678,13 +3678,16 @@ mtime, so the session's own writes never trip a later check."
 (defvar-local scalpel-agent--run-generation 0
   "Per-run generation guard for deferred actions after abort.
 
-每次调用 `scalpel-agent-run' 在开始时捕获当前值；deferred 零秒定时器
-步骤在执行前先比对当前值与捕获值，不一致则不再执行本轮剩余动作
-（包括 shell 命令）。`scalpel-console-abort' 会递增该变量，使被中止
-轮次的延迟动作链停止触发。
+Each call to `scalpel-agent-run' captures the current value at
+start.  Deferred zero-second timer steps compare the current value
+against the captured one before executing, and skip the remaining
+actions of the round (including shell commands) when they differ.
+`scalpel-console-abort' increments this variable so the deferred
+chain of an aborted round stops firing.
 
-刻意不加入 `scalpel-console--session-variables'：这是瞬态的轮次状态，
-重载后必须归零，不得跨重载存活。")
+Deliberately not added to `scalpel-console--session-variables':
+this is transient per-round state that must reset to zero across
+reload and must not survive reloads.")
 
 (provide 'scalpel-agent)
 
