@@ -261,17 +261,18 @@ reported and nothing is changed."
 (defun scalpel-review--insert-record (record)
   "Insert one RECORD into the review buffer.
 Insert a visible separator line of box-drawing dashes before the
-block, styled with `magit-section-heading', then render a header
-line (bold) followed by a unified diff of the record's old-text
-versus new-text, produced synchronously by the diff program;
-rename records (detected by :tool being `file-rename') show a
-rename line instead.  The record's :session value, when present,
-is shown in a bracketed suffix on the header line; records
-without a :session render as before.  The diff program's own
-header lines (\"--- before/<name>\" and \"+++ after/<name>\") are
-removed, so the diff output shows only the @@ hunk line and the
-+/- content lines; the file header line (\"File: <path>\") is the
-only label for the block.
+block, drawn at a fixed length (32 characters) rather than the
+full window width, styled with `magit-section-heading', then
+render a header line (bold) followed by a unified diff of the
+record's old-text versus new-text, produced synchronously by the
+diff program; rename records (detected by :tool being
+`file-rename') show a rename line instead.  The record's :session
+value, when present, is shown in a bracketed suffix on the header
+line; records without a :session render as before.  The diff
+program's own header lines (\"--- before/<name>\" and \"+++
+after/<name>\") are removed, so the diff output shows only the @@
+hunk line and the +/- content lines; the file header line with
+the form \"File: <path>\" is the only label for the block.
 Header lines get a bold face and diff output lines are colored
 with magit's diff faces (`magit-diff-added',
 `magit-diff-removed', `magit-diff-hunk-heading') when those
@@ -305,10 +306,10 @@ The whole block (including the separator line) is tagged with the
          old-file new-file)
     (unwind-protect
         (progn
-          ;; Visible separator line before the block, magit style.
-          (insert (concat (make-string (max (- (window-width) 1) 8)
-                                       (aref "─" 0))
-                          "\n"))
+          ;; Visible separator line before the block, magit style,
+          ;; at a fixed length instead of the full window width.
+          (insert (make-string 32 (aref "─" 0)))
+          (insert "\n")
           (put-text-property beg (point) 'face 'magit-section-heading)
           (setq beg (point))
           (if (eq tool 'file-rename)
