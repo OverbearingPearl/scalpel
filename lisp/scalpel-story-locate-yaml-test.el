@@ -59,6 +59,33 @@
            (setq result (scalpel-locate-yaml-list-symbols nil))))
   (:then (should (equal result '("key")))))
 
+(ert-gwt-deftest
+  (:given ((range nil) (text nil)))
+  (:when (with-temp-buffer
+           (insert "a: 1\nb: 2\n\nc: 3\n")
+           (setq range (scalpel-locate-yaml-range nil "b"))
+           (setq text (buffer-substring-no-properties
+                       (car range) (cdr range)))))
+  (:then (should (equal text "b: 2"))))
+
+(ert-gwt-deftest
+  (:given ((range nil) (text nil)))
+  (:when (with-temp-buffer
+           (insert "on:\n  push:\n    branches: [main]\njobs:\n  build:\n")
+           (setq range (scalpel-locate-yaml-range nil "on"))
+           (setq text (buffer-substring-no-properties
+                       (car range) (cdr range)))))
+  (:then (should (equal text "on:\n  push:\n    branches: [main]"))))
+
+(ert-gwt-deftest
+  (:given ((range nil) (text nil)))
+  (:when (with-temp-buffer
+           (insert "a: 1\njobs:\n  build:\n")
+           (setq range (scalpel-locate-yaml-range nil "jobs"))
+           (setq text (buffer-substring-no-properties
+                       (car range) (cdr range)))))
+  (:then (should (equal text "jobs:\n  build:"))))
+
 (provide 'scalpel-story-locate-yaml-test)
 
 ;;; scalpel-story-locate-yaml-test.el ends here
