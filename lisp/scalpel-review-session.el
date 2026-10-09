@@ -79,7 +79,7 @@ For each record, look up the most recent dialogue in
 :session.  Only when the record's :session is registered in
 `scalpel-review-session--consoles', that dialogue exists and is
 closed (:end non-nil), and the record carries an :index, is the
-record filtered by start < index <= end: an index outside that
+record filtered by start <= index <= end: an index outside that
 range belongs to an earlier dialogue and is dropped.  In every
 other case -- no :session, unregistered session, no :index, no
 matching dialogue, or an open dialogue -- the record is kept.
@@ -114,7 +114,7 @@ including it would list every record twice."
                      index
                      dialogue
                      (plist-get dialogue :end))
-                (when (and (> index (plist-get dialogue :start))
+                (when (and (>= index (plist-get dialogue :start))
                            (<= index (plist-get dialogue :end)))
                   (push record result))
               (push record result))))))

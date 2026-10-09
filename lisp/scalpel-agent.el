@@ -2216,7 +2216,8 @@ not as a re-spelling of the same one."
         (when lines
           (push (format "\nThe closest lines in %s are:\n%s\nCheck \
 the real shape of the target text with `file-peek' or a read-only \
-shell command before composing the next pattern, and never resend \
+shell command before composing the next pattern, use `file-peek' \
+to see the actual shape of the target text first, and never resend \
 the same pattern unchanged.\n"
                         (car entry) lines)
                 blocks))))

@@ -93,32 +93,6 @@ source text: `scalpel-locate-elisp--def-name-regex' and literal name
 searches cannot see them, so expansion-time bookkeeping is the only
 reliable way to locate such definitions.")
 
-(defun scalpel-locate-elisp-count-definer-forms (definer)
-  "Count top-level forms in the current buffer headed by DEFINER.
-DEFINER is a symbol naming a definer macro.  Scan using `forward-sexp'
-so that only top-level forms are considered.  Read errors and end of
-buffer are handled gracefully; this function never signals."
-  (save-excursion
-    (save-restriction
-      (widen)
-      (goto-char (point-min))
-      (let ((count 0)
-            (definer-name (symbol-name definer)))
-        (while (condition-case nil
-                   (progn (forward-sexp) t)
-                 (scan-error nil)
-                 (invalid-regexp nil)
-                 (args-out-of-range nil))
-          (condition-case nil
-              (save-excursion
-                (backward-sexp)
-                (forward-comment (point-max))
-                (when (looking-at (concat "(" (regexp-quote definer-name)
-                                          "\\(?:[ \t\n\r]\\|)\\)"))
-                  (setq count (1+ count))))
-            (error nil)))
-        count))))
-
 (defun scalpel-locate-elisp-register-anonymous-definer (symbol function)
   "Register SYMBOL as an anonymous definer whose names FUNCTION supplies.
 
@@ -331,11 +305,16 @@ whose head is a member of `scalpel-locate-elisp--defining-forms'
 but whose second element is a list rather than a symbol or string
 \(e.g. an `ert-gwt-deftest' call like (ert-gwt-deftest (:given ...)
 ...) whose clauses follow the head directly) carries no name in
-the usual place and counts as an anonymous use; such calls are
-counted per definer in source order and synthesized as
-\"<definer>-1\", \"<definer>-2\", ..., so even never-loaded files
-still contribute a stable count.  FILE is the path the caller
-names; anonymous-definer functions receive it unchanged."
+the usual place and counts as an anonymous use.  For definers that
+have a registered anonymous-definer function (assq hit in
+`scalpel-locate-elisp--anonymous-definer-registry') the fallback
+synthesizes nothing: the real hash names come from the registry
+alone, avoiding duplicate placeholder names.  Only unregistered
+definers get fallback synthesis, counted per definer in source
+order and named \"<definer>-1\", \"<definer>-2\", ..., so even
+never-loaded files still contribute a stable count.  FILE is the
+path the caller names; anonymous-definer functions receive it
+unchanged."
   (let ((case-fold-search nil)
         syms)
     ;; Literal names via the source-level regex scan.
@@ -356,7 +335,7 @@ names; anonymous-definer functions receive it unchanged."
             (push name syms)))))
     ;; Source-level fallback needing no registration: walk the
     ;; top-level forms and synthesize placeholder names for
-    ;; anonymous defining calls.
+    ;; anonymous defining calls of unregistered definers only.
     (save-excursion
       (goto-char (point-min))
       (let ((anon-counts (make-hash-table :test #'eq)))
@@ -370,7 +349,12 @@ names; anonymous-definer functions receive it unchanged."
                              ;; place -- the second element is itself
                              ;; a list, e.g. (ert-gwt-deftest (:given
                              ;; ...) ...) with clauses after the head.
-                             (consp (cadr form)))
+                             (consp (cadr form))
+                             ;; Registered anonymous definers supply
+                             ;; real names above; skip synthesis so
+                             ;; placeholders never duplicate them.
+                             (not (assq head
+                                        scalpel-locate-elisp--anonymous-definer-registry)))
                     (let ((n (1+ (gethash head anon-counts 0))))
                       (puthash head n anon-counts)
                       (push (format "%s-%d" (symbol-name head) n) syms))))))
