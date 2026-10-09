@@ -71,7 +71,7 @@ user, who is shown every command together with its output size.
 asking even then; nil never continues, and never asks.  Batch runs
 never continue regardless of this value.")
 
-(defconst scalpel-console-continue-after-shell-max-bytes 4096
+(defconst scalpel-console-continue-after-shell-max-bytes 10000
   "Shell output above this size makes a round worth questioning.
 When a round ran a shell command whose raw output exceeded this
 many bytes -- or that was truncated or binary -- the round stops

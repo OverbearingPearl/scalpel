@@ -43,8 +43,8 @@ regexp string, no quotes, no delimiters, no prose."
   "Per-category tool preferences.")
 
 (defun scalpel-tool--entry (category)
-  "Return CATEGORY's plist entry from `scalpel-tool--preferences'."
-  (plist-get scalpel-tool--preferences category))
+  "Return CATEGORY's plist from `scalpel-tool--preferences'."
+  (cdr (assq category scalpel-tool--preferences)))
 
 (defun scalpel-tool--argv (category)
   "Return the CATEGORY tool's argv prefix straight from its table entry.
@@ -54,10 +54,10 @@ Nil when the category has no table entry."
 
 (defun scalpel-tool--prompt-rule (category)
   "Return the prompt wording for CATEGORY's preferred tool, or nil.
-Look up CATEGORY in `scalpel-tool--preferences'; return nil when there
+Look up CATEGORY via `scalpel-tool--entry'; return nil when there
 is no entry, the entry has no :prompt-rule, or the entry's :argv
 executable is not installed, leaving the choice to the planner."
-  (let* ((entry (plist-get scalpel-tool--preferences category))
+  (let* ((entry (scalpel-tool--entry category))
          (argv (and entry (plist-get entry :argv)))
          (exec (and argv (car argv)))
          (rule (and exec
