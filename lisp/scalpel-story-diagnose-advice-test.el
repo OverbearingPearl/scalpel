@@ -76,6 +76,45 @@
                         :message "nothing parseable here")))))
   (:then (should (null toc))))
 
+(ert-gwt-deftest
+  (:given ((first nil)
+           (again nil)))
+  (:when (progn
+           (setq first (scalpel-diagnose-advice-perlre-toc))
+           (setq again (scalpel-diagnose-advice-perlre-toc))))
+  (:then (should (stringp first)))
+  (:then (should (equal first again))))
+
+(ert-gwt-deftest
+  (:given ((result nil)))
+  (:when (progn
+           (setq result (scalpel-diagnose-advice-perlre-toc))))
+  (:then (should (stringp result))))
+
+(ert-gwt-deftest
+  (:given ((repaired nil)))
+  (:when (progn
+           (setq repaired
+                 (scalpel-diagnose-advice-mechanical-repair
+                  (list :type 'tool-call
+                        :input
+                        "junk line\n[[action]]\ntool = 'reply'\n")))))
+  (:then (should (stringp repaired)))
+  (:then (should (string-match-p "\\[\\[action\\]\\]" repaired))))
+
+;; Story J: a no-such-symbol error is repaired by swapping the name.
+(ert-gwt-deftest
+  (:given ((repaired nil)))
+  (:when (progn
+           (setq repaired
+                 (scalpel-diagnose-advice-mechanical-repair
+                  (list :type 'no-such-symbol
+                        :message
+                        "No such symbol: foo-bar, did you mean: foo-baz"
+                        :input "(use foo-bar)")))))
+  (:then (should (stringp repaired)))
+  (:then (should (string-match-p "foo-baz" repaired))))
+
 (provide 'scalpel-story-diagnose-advice-test)
 
 ;;; scalpel-story-diagnose-advice-test.el ends here
