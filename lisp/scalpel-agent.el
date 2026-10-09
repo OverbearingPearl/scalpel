@@ -2347,6 +2347,46 @@ nil on success."
          (scalpel-agent--perlre-toc-for-refusal))))
     nil))
 
+(defun scalpel-agent--perl-replacement-check (replacement)
+  "Validate Perl replacement string REPLACEMENT from left to right.
+A backslash escapes the following character: \\$ and \\\\ are
+literal, \\1..\\9 and \\& are capture references of this engine;
+both are allowed.  Any other escape such as \\n is not expanded by
+this engine and stays as a literal two-character sequence; a
+warning is recorded for each such escape.  Any bare $ is rejected
+with an error naming its position and advising \\$ or \\N.  Return
+nil when valid."
+  (let ((i 0)
+        (len (length replacement))
+        (unexpanded '()))
+    (while (< i len)
+      (let ((ch (aref replacement i)))
+        (if (= ch ?\\)
+            (progn
+              (setq i (1+ i))
+              (if (< i len)
+                  (let ((next (aref replacement i)))
+                    (unless (or (= next ?$)
+                                (= next ?\\)
+                                (and (>= next ?1) (<= next ?9))
+                                (= next ?&))
+                      ;; Not a capture reference or literal escape:
+                      ;; kept as a literal two-character sequence.
+                      (push (substring replacement (1- i) (1+ i))
+                            unexpanded))
+                ;; Trailing backslash: harmless literal, skip.
+                )
+              (setq i (1+ i))))
+          (if (= ch ?$)
+              (error "Bare $ at position %d in replacement %S; use \\$ for a literal dollar or \\N for a capture reference"
+                     i replacement)
+            (setq i (1+ i))))))
+    (when unexpanded
+      (display-warning 'scalpel
+                       (format "Escapes not expanded by scalpel (kept literal): %s"
+                               (mapconcat #'identity (nreverse unexpanded) " "))))
+    nil))
+
 (defun scalpel-agent--perl-invocation (pattern replacement)
   "Return a multi-line, pasteable description of the complete perl command.
 The description consists of three labeled lines:
@@ -2393,21 +2433,26 @@ including nil."
 A compile pre-check runs unconditionally before the substitution
 script: `scalpel-agent--perl-compile-check' is called with PATTERN so a
 pattern perl refuses is rejected up front, before any stdin text is
-piped.  The substitute engine is fixed to the perl executable.  The
-script body is the perl script constant `scalpel-agent--perl-script' and this
-function feeds it PATTERN, REPLACEMENT and TEXT.  The pattern is
-compiled by perl's own qr//, so a pattern perl refuses comes back as a
-concrete error the next attempt repairs.  TEXT is piped on stdin and
-perl prints a \"SCALPEL-COUNT n\" line followed by the rewritten text,
-both on stdout, so no stderr channel is involved.  On a compile failure
-perl prints a \"SCALPEL-ERROR ...\" line and exits 2, surfacing perl's
+piped.  Before that, `scalpel-agent--perl-replacement-check' is called
+with REPLACEMENT; it signals `user-error' itself when the replacement
+is statically refused, so no refusal string is returned here.  The
+substitute engine is fixed to the perl executable.  The script body is
+the perl script constant `scalpel-agent--perl-script' and this function
+feeds it PATTERN, REPLACEMENT and TEXT.  The pattern is compiled by
+perl's own qr//, so a pattern perl refuses comes back as a concrete
+error the next attempt repairs.  TEXT is piped on stdin and perl prints
+a \"SCALPEL-COUNT n\" line followed by the rewritten text, both on
+stdout, so no stderr channel is involved.  On a compile failure perl
+prints a \"SCALPEL-ERROR ...\" line and exits 2, surfacing perl's
 concrete message.  In REPLACEMENT, \\N means the Nth capture group and
-\\& the whole match.  Every refusal \(compile-check failure, compile
-failure, nonzero exit, or missing count report) ends with the complete
-perl command produced by `scalpel-agent--perl-invocation', so the next
-attempt can replay it directly.  Signal `user-error' when perl refuses
-to compile the pattern."
+\\& the whole match.  Every refusal (replacement check failure,
+compile-check failure, compile failure, nonzero exit, or missing count
+report) ends with the complete perl command produced by
+`scalpel-agent--perl-invocation', so the next attempt can replay it
+directly.  Signal `user-error' when perl refuses to compile the pattern
+or when the replacement is statically refused."
   (let ((command (scalpel-agent--perl-invocation pattern replacement)))
+    (scalpel-agent--perl-replacement-check replacement)
     (let ((refusal (scalpel-agent--perl-compile-check pattern)))
       (when refusal
         (user-error

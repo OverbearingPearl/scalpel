@@ -78,7 +78,7 @@ rules out both, whatever `regexp-opt' emits inside.")
           "\\([^ \t\n()]+\\)")
   "Regex matching a top-level Emacs Lisp definer and capturing its name.")
 
-(defconst scalpel-locate-elisp--anonymous-definer-registry
+(defvar scalpel-locate-elisp--anonymous-definer-registry
   '()
   "Alist mapping definer symbols to locator functions for anonymous definitions.
 
@@ -91,7 +91,12 @@ that file.
 This registry is needed because anonymous names never appear in the
 source text: `scalpel-locate-elisp--def-name-regex' and literal name
 searches cannot see them, so expansion-time bookkeeping is the only
-reliable way to locate such definitions.")
+reliable way to locate such definitions.
+
+Use `defvar' rather than `defconst' because adapter files (e.g.
+scalpel-locate-elisp-ert-gwt.el) may be loaded before this file when
+sorted by filename and have already registered entries; re-evaluation
+by `defconst' would wipe those registrations.")
 
 (defun scalpel-locate-elisp-register-anonymous-definer (symbol function)
   "Register SYMBOL as an anonymous definer whose names FUNCTION supplies.
