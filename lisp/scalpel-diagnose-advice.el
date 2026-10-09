@@ -18,6 +18,8 @@
 
 ;;; Code:
 
+(require 'toml)
+(require 'scalpel-redact)
 (require 'scalpel-diagnose)
 
 (defconst scalpel-diagnose-advice-table
@@ -221,6 +223,17 @@ A repair that is identical to the failed input yields nil, so a missing
 suggestion fence means no mechanical fix was possible.
 In the parse branch, advice blocks the model echoed back are
 disinfected before repair.
+In the prose branch, prose is stripped not only before the first table
+but also between tables and at the tail: lines are scanned with the
+same triple-quote delimiter tracking as
+`scalpel-llm-dialect--validate-string-delimiters', and a \"[[\" line
+counts as a table header only when it lies outside a multi-line string
+literal.  Each header-delimited segment is judged by a whole-segment
+TOML parse (via the toml library on a temporary file); segments that
+parse and carry a tool key are kept in original order.  If any
+headered segment cannot be parsed, or no parseable segment exists, the
+repair is abandoned and nil is returned — a mangled input is better
+left unfixed than given a bad suggestion.
 Applies `scalpel-redact-apply' before returning."
   (let* ((type (plist-get error-plist :type))
          (message (plist-get error-plist :message))
@@ -231,7 +244,28 @@ Applies `scalpel-redact-apply' before returning."
               "@scalpel@" (0+ blank) "suggestion"))
          (fence-close-rx
           (rx bol (0+ blank)
-              "@scalpel@" (0+ blank) "end" (0+ blank) eol)))
+              "@scalpel@" (0+ blank) "end" (0+ blank) eol))
+         (triple-quote-rx (rx "\"\"\""))
+         (header-rx (rx bol (0+ blank) "[["))
+         ;; Count triple-quote occurrences on one line; an odd count
+         ;; flips the in-string state, mirroring the delimiter
+         ;; validation used by scalpel-llm-dialect.
+         (string-delimiter-count
+          (lambda (line)
+            (let ((n 0) (pos 0))
+              (while (string-match triple-quote-rx line pos)
+                (setq n (1+ n) pos (match-end 0)))
+              n)))
+         (toml-parse-text
+          (lambda (text)
+            (condition-case nil
+                (let ((file (make-temp-file "scalpel-diagnose-toml")))
+                  (unwind-protect
+                      (progn
+                        (write-region text nil file nil 'silent)
+                        (toml:read-from-file file))
+                    (delete-file file)))
+              (error nil)))))
     (cond
      ((eq type 'tool-call)
       (let* ((no-xml (replace-regexp-in-string
@@ -286,9 +320,64 @@ Applies `scalpel-redact-apply' before returning."
                          (concat "\\b" (regexp-quote bad-symbol) "\\b")
                          good-symbol input t t)))))
      ((eq type 'prose)
-      (let ((idx (string-match "\\[\\[" input)))
-        (when idx
-          (setq content (substring input idx)))))
+      ;; Split the input at table-header lines recognized only outside
+      ;; multi-line string literals, then judge each headered segment
+      ;; by a whole-segment TOML parse.
+      (let* ((lines (split-string input "\n"))
+             (segments nil)
+             (current nil)
+             (in-string nil))
+        (dolist (line lines)
+          (if (and (not in-string)
+                   (string-match-p header-rx line))
+              (progn
+                (when current
+                  (push (nreverse current) segments))
+                (setq current (list line)))
+            (when current
+              (push line current)))
+          (let ((cnt (funcall string-delimiter-count line)))
+            (when (and (> cnt 0) (= (% cnt 2) 1))
+              (setq in-string (not in-string)))))
+        (when current
+          (push (nreverse current) segments))
+        (setq segments (nreverse segments))
+        (when segments
+          (let ((kept nil)
+                (ok t))
+            (dolist (seg segments)
+              (when ok
+                ;; Shrink trailing prose lines until the whole segment
+                ;; parses; the verdict is always the whole-segment parse.
+                (let ((seg-lines seg)
+                      (parsed-lines nil))
+                  (while (and seg-lines (not parsed-lines))
+                    (when (funcall toml-parse-text
+                                   (mapconcat #'identity seg-lines "\n"))
+                      (setq parsed-lines seg-lines))
+                    (unless parsed-lines
+                      (setq seg-lines (butlast seg-lines))))
+                  (cond
+                   ;; A headered segment that cannot be parsed at all
+                   ;; means the repair is not trustworthy: give up.
+                   ((null parsed-lines)
+                    (setq ok nil))
+                   (t
+                    (let ((table (funcall toml-parse-text
+                                          (mapconcat #'identity parsed-lines
+                                                     "\n"))))
+                      ;; Keep only segments that parse and carry a tool key.
+                      (when (and table (gethash "tool" table))
+                        (push parsed-lines kept))))))))
+            (setq kept (nreverse kept))
+            (when (and ok kept)
+              (let ((candidate
+                     (mapconcat
+                      (lambda (seg) (mapconcat #'identity seg "\n"))
+                      kept "\n")))
+                (unless (string-equal (string-trim candidate)
+                                      (string-trim input))
+                  (setq content candidate))))))))
      (t nil))
     (when (and content (not (string-empty-p content))
                (not (string-equal (string-trim content)
