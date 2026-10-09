@@ -133,7 +133,7 @@ again, but the task's rounds keep running attended until they
 finish or the user aborts.  This is a guard rail, not a goal; the
 run ends earlier when the task completes or the user aborts.")
 
-(defconst scalpel-console-compression-offer-growth-threshold 10000
+(defconst scalpel-console-compression-offer-growth-threshold 15000
   "Token growth that triggers a history compression offer.
 The count is measured since the last offer, so the next offer always
 waits for a further growth of this many tokens regardless of the
