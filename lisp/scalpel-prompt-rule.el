@@ -419,6 +419,13 @@ output, so a replacement is always written as the complete new
 text itself."
   "Whole-block editing: no diffs, no line-by-line reasoning.")
 
+(defconst scalpel-prompt-rule--block-budget
+  "The replacement text of a block edit must appear in the reply in full, so the size of the located block is a hard lower bound on the reply length.
+
+When the target block is large (tens of lines or more), rewriting it whole within a single instruction is forbidden: split the work first—either restructure the file so the big block occupies its own small section, or anchor the edit on a smaller nested unit—so that each round's replacement text stays short.
+
+Only when no split is possible is a whole rewrite of a large block allowed, and in that case the reply must contain nothing besides the block itself.")
+
 (defconst scalpel-prompt-rule--instruction
   "The instruction of a block-edit or a block-insert states only
 what should change, in a few sentences of plain prose: it must

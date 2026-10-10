@@ -19,7 +19,8 @@
 
 (defconst scalpel-diagnose-planner-types
   '(parse tool-call prose unknown-tool missing-field malformed no-replacement
-          no-such-symbol pattern-no-match bad-path unbalanced no-validation)
+          oversized oversized-target no-such-symbol pattern-no-match bad-path
+          unbalanced no-validation)
   "Error types caused by the planner's reply, not by Scalpel or the user.
 Under the default-allow self-heal policy every type in this list is
 eligible for an automatic retry round except the two names held in the
@@ -35,7 +36,20 @@ block-edit, which the retry round can plan directly.
 UNKNOWN-TOOL means the planner named a tool the action contract
 does not define, and MISSING-FIELD means an action omitted a
 required field; each is corrected by re-emitting the document with
-the tool name or field fixed.")
+the tool name or field fixed.
+OVERSIZED means the planner's reply was cut off or refused because it
+exceeded the output budget for the action it attempted; nothing was
+executed.  The remedy is to shorten the reply -- emit fewer, smaller
+actions, split one large block-edit into several smaller ones, or
+rebuild the target with file-create -- not to re-emit the same
+oversized plan.  An oversized failure remains diagnosable and stays
+eligible for self-heal retry with shortened-output advice.
+OVERSIZED-TARGET means the agent refused a block-edit before any LLM
+request because the target definition's byte size exceeds the
+pre-flight budget; nothing was executed.  The blame is the planner's
+choice of an over-large edit target, so the failure is planner-side
+and stays eligible for self-heal retry with advice to split the edit
+into smaller targets or rebuild the definition with file-create.")
 
 (defconst scalpel-diagnose-context-types
   '(file-outside-context)

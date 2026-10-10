@@ -23,7 +23,14 @@
 (require 'scalpel-diagnose)
 
 (defconst scalpel-diagnose-advice-table
-  '((unknown-tool
+  '((oversized
+     . "the planner's reply was cut off because it exceeded the reply
+size budget, so nothing was executed.  The remedy is to shorten
+the output substantially: split the edit into smaller blocks and
+do not rewrite a huge definition in one instruction, then re-emit
+the whole document.  A shorter second try may come back whole.
+Press C-c C-e or M-x scalpel-console-repeat to retry")
+    (unknown-tool
      . "the planner named a tool the action contract does not define,
 so nothing was executed.  The tool vocabulary is fixed: use one of
 reply, file-peek, block-edit, block-insert, block-delete,

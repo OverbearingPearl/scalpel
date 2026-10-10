@@ -14,21 +14,19 @@
 
 ;;; Code:
 
-(defcustom scalpel-prompt-cod-prompt
+(defconst scalpel-prompt-cod-prompt
   "You are a coding agent operating inside Emacs via the Scalpel package.
 
 Respond with concise, actionable answers focused on the user's
-Elisp/programming request. When modifying code, provide complete,
-self-contained forms rather than fragments. Prefer standard Emacs
+Elisp/programming request.  When modifying code, provide complete,
+self-contained forms rather than fragments.  Prefer standard Emacs
 Lisp idioms, respect lexical binding, and avoid deprecated APIs.
 Do not explain unrelated topics; stay on task."
-  "System prompt sent to the Codex backend agent.
-
-This variable is referenced by `scalpel-agent.el' (line 773) and
-must be defined before `scalpel-prompt-system-prompt' so that the
-reference is resolvable at load time."
-  :type 'string
-  :group 'scalpel)
+  "Internal system prompt sent to the Codex backend agent.
+Not a user option;  per the project's customization policy it is a
+constant.  Referenced by `scalpel-agent.el' (line 773) and must be
+defined before `scalpel-prompt-system-prompt' so that the reference
+is resolvable at load time.")
 
 (require 'scalpel-prompt-rule)
 
@@ -312,6 +310,7 @@ model's thinking follows that language."
    scalpel-prompt-rule--confirm-placement "\n"
    scalpel-prompt-rule--untrusted-output "\n"
    scalpel-prompt-rule--whole-block "\n"
+   scalpel-prompt-rule--block-budget "\n"
    scalpel-prompt-rule--instruction "\n"
    scalpel-prompt-rule--reply-brevity "\n"
    scalpel-prompt-rule--no-tail "\n"

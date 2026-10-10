@@ -101,6 +101,20 @@ loop ends after it without ever telling the planner what landed.")
 Structural contract shared by the replacement prompt in
 `scalpel-agent-block-edit' and its no-op check.")
 
+(defconst scalpel-agent-block-edit-max-body-bytes 32768
+  "Pre-flight byte budget for block-edit targets.
+
+Because a block-edit's replacement text must contain the whole new
+block, the byte size of the target definition forms a hard lower
+bound on the reply length.  When the located body exceeds this budget,
+the edit is refused before any LLM request is issued -- at zero
+generation cost, with an oversized-target refusal and remedy advice --
+instead of failing minutes later at the usable-replacement stage.
+
+This budget is deliberately set looser (smaller) than
+`scalpel-llm-max-reply-bytes' so that ordinary large block edits are
+not blocked; the scalpel-llm byte cap remains the final backstop.")
+
 (defconst scalpel-agent-cod-enabled nil
   "Non-nil means append `scalpel-prompt-cod-prompt' to the system prompt.")
 
@@ -1413,9 +1427,12 @@ original content with the bare label is never wanted.  Otherwise,
 if the whole text fails `scalpel-locate-single-definition-p', the
 longest line-bounded prefix that passes is tried, then the
 longest suffix, which drops trailing prose and leading file noise
-respectively while keeping the definition whole.  When neither
-qualifies, TEXT is returned unchanged so the caller's refusal
-path reports it."
+respectively while keeping the definition whole -- unless the
+stripped text has more lines than
+`scalpel-agent--usable-replacement-scan-limit', in which case the
+scans are skipped and STRIPPED is returned unchanged so the
+caller's refusal path reports it.  When neither prefix nor suffix
+qualifies, TEXT is returned unchanged likewise."
   (let* ((stripped (scalpel-agent--strip-code-fence text))
          (lines (split-string stripped "\n"))
          (candidate (string-join lines "\n")))
@@ -1423,30 +1440,32 @@ path reports it."
         text
       (if (scalpel-locate-single-definition-p file candidate)
           candidate
-        ;; Longest prefix first: adding prose after a complete
-        ;; definition breaks the single-definition check, so the first
-        ;; passing prefix is the definition without the prose.
-        (let ((found nil))
-          (cl-loop for n from (length lines) downto 2
-                   until found
-                   do (let ((prefix (string-join (cl-subseq lines 0 n) "\n")))
-                        (when (scalpel-locate-single-definition-p file prefix)
-                          (setq found prefix))))
-          (if found
-              found
-            ;; The definition can also sit at the end of the reply, under
-            ;; whole-file noise: take the longest passing suffix.  Suffixes
-            ;; are tried only after prefixes fail, so the existing
-            ;; trailing-prose case keeps its answer.
-            (cl-loop for n from 1 upto (- (length lines) 2)
+        (if (> (length lines) scalpel-agent--usable-replacement-scan-limit)
+            stripped
+          ;; Longest prefix first: adding prose after a complete
+          ;; definition breaks the single-definition check, so the first
+          ;; passing prefix is the definition without the prose.
+          (let ((found nil))
+            (cl-loop for n from (length lines) downto 2
                      until found
-                     do (let ((suffix (string-join (cl-subseq lines n) "\n")))
-                          (when (scalpel-locate-single-definition-p file suffix)
-                            ;; The split keeps the reply's trailing newline
-                            ;; as an empty final line; whitespace after the
-                            ;; validated definition is padding, not code.
-                            (setq found (string-trim-right suffix)))))
-            (or found stripped)))))))
+                     do (let ((prefix (string-join (cl-subseq lines 0 n) "\n")))
+                          (when (scalpel-locate-single-definition-p file prefix)
+                            (setq found prefix))))
+            (if found
+                found
+              ;; The definition can also sit at the end of the reply, under
+              ;; whole-file noise: take the longest passing suffix.  Suffixes
+              ;; are tried only after prefixes fail, so the existing
+              ;; trailing-prose case keeps its answer.
+              (cl-loop for n from 1 upto (- (length lines) 2)
+                       until found
+                       do (let ((suffix (string-join (cl-subseq lines n) "\n")))
+                            (when (scalpel-locate-single-definition-p file suffix)
+                              ;; The split keeps the reply's trailing newline
+                              ;; as an empty final line; whitespace after the
+                              ;; validated definition is padding, not code.
+                              (setq found (string-trim-right suffix)))))
+              (or found stripped))))))))
 
 (defun scalpel-agent--apply-if-unchanged (file symbol expected-body new-text)
   "Replace SYMBOL in FILE with NEW-TEXT only if EXPECTED-BODY is unchanged.
@@ -1509,7 +1528,7 @@ be sent after a name the file does not hold."
 (defun scalpel-agent-block-edit (file symbol instruction on-success on-error)
   "Edit SYMBOL in FILE per INSTRUCTION, without blocking.
 ON-SUCCESS receives the report string.  ON-ERROR receives a plist
-\(:type SYMBOL :message STRING).  The boundary check inside
+\\(:type SYMBOL :message STRING).  The boundary check inside
 `scalpel-agent--apply-if-unchanged' runs in the LLM callback, so a
 buffer the user edited while the request was in flight still aborts
 the edit."
@@ -1536,13 +1555,32 @@ the edit."
         (let* ((beg (car range))
                (end (cdr range))
                (body (buffer-substring-no-properties beg end))
+               (prompt scalpel-prompt--block-edit-prompt)
+               (language-rule
+                (scalpel-user-prompt-with-language-rule file))
                (signature (save-excursion
                             (goto-char beg)
                             (buffer-substring-no-properties
-                             beg (line-end-position))))
-               (prompt scalpel-prompt--block-edit-prompt)
-               (language-rule
-                (scalpel-user-prompt-with-language-rule file)))
+                             beg (line-end-position)))))
+          ;; Advisory pre-flight size check: a body that dwarfs the
+          ;; prompt budget is better rejected here, before spending a
+          ;; round trip, and settled through ON-ERROR like every other
+          ;; refusal.
+          (let ((body-bytes (string-bytes body)))
+            (when (> body-bytes scalpel-agent-block-edit-max-body-bytes)
+              (funcall on-error
+                       (list :type 'oversized-target
+                             :message
+                             (format (concat "Scalpel: target %s in %s is %d bytes, "
+                                             "exceeding the block-edit limit of %d "
+                                             "bytes. Pick a smaller anchor symbol, "
+                                             "refactor the file into smaller units "
+                                             "first, or, if the file cannot be "
+                                             "split, recreate the whole file with "
+                                             "file-create.")
+                                     symbol file body-bytes
+                                     scalpel-agent-block-edit-max-body-bytes)))
+              (cl-return-from scalpel-agent-block-edit)))
           (scalpel-llm-request-async
            (concat (format prompt signature body instruction)
                    (when language-rule
@@ -2062,6 +2100,13 @@ caller must read nil as \"cannot tell\", never as \"defines nothing\"."
       (with-temp-buffer
         (insert text)
         (delete-dups (funcall list-symbols file))))))
+
+(defconst scalpel-agent--usable-replacement-scan-limit 400
+  "Cap the reply lines the salvage scan walks.
+A reply longer than this is not scanned line by line at all: a runaway
+reply is refused on its whole-text check anyway, and each scan step
+re-parses the text, so scanning a very long reply would make even a
+refusal slow.")
 
 (defun scalpel-agent--rewrite-definition-note (file before after)
   "Return a report line naming the definitions a rewrite changed in FILE.

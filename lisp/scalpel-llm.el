@@ -44,6 +44,17 @@ that keeps streaming heartbeats/reasoning chunks without ever
 emitting a terminal callback still ends within this budget.  It
 must be larger than `scalpel-llm-timeout' to be useful.")
 
+(defconst scalpel-llm-max-reply-bytes 65536
+  "Hard byte cap on the accumulated reply of a single request.
+When the streamed reply exceeds this many bytes, the request
+finishes immediately with an oversized error instead of waiting
+for the stream to end naturally.
+
+This budget truncates by byte count only and never judges the
+syntactic completeness of the reply; the truncated reply reaches
+on-error with the oversized type, and the diagnose layer's retry
+advice then tells the model to shorten output or split the edit.")
+
 (defvar scalpel-llm--cancel-current nil
   "Closure that cancels the request currently in flight, or nil when none.
 Set by `scalpel-llm-request-async' when a request starts and cleared
@@ -173,7 +184,8 @@ Return immediately.  ON-SUCCESS is called with the accumulated
 response string once the stream ends.  ON-ERROR is called with a
 plist (:type SYMBOL :message STRING) when the request fails, stays
 idle for `scalpel-llm-timeout' seconds without any callback,
-exceeds `scalpel-llm-deadline' seconds total, is cancelled, or
+exceeds `scalpel-llm-deadline' seconds total, is cancelled, exceeds
+`scalpel-llm-max-reply-bytes' accumulated reply bytes, or
 cannot be set up.  SYSTEM overrides the default system message.
 
 The request is abandoned by its idle timer, its total deadline,
@@ -186,7 +198,9 @@ a later request.
 deadline, `cancelled' for an explicit cancellation, `api' for a
 backend error surfaced by gptel, `api-key' for a missing or invalid
 API key, `setup' for a failure raised synchronously by
-`gptel-request', and `callback' for a success or error callback that
+`gptel-request', `oversized' for a reply whose accumulated byte
+length exceeded `scalpel-llm-max-reply-bytes', and `callback' for a
+success or error callback that
 raised.  ON-ERROR is the request's terminal callback; a success
 callback which raises is re-delivered through ON-ERROR with :type
 `callback', and an error raised by ON-ERROR itself is only reported
@@ -211,7 +225,13 @@ per-request mirror is informational
 only and shows the most recent request's tally.  The global
 `scalpel-llm--tokens-received' mirrors this request's tally for
 readers outside the request; it is no longer reset at request
-start, so a concurrent request cannot zero an earlier one's count."
+start, so a concurrent request cannot zero an earlier one's count.
+
+The content-chunk branch enforces a hard byte budget: once the
+accumulated reply exceeds `scalpel-llm-max-reply-bytes', the
+request is finished with an `oversized' error naming the
+accumulated byte count and the limit, so a runaway stream is cut
+off quickly and diagnosably while normal replies are unaffected."
   (let* ((cancelled nil)
          (accumulated "")
          (timer nil)
@@ -363,7 +383,23 @@ start, so a concurrent request cannot zero an earlier one's count."
                                        (scalpel-llm--count-tokens resp)))
                               (setq scalpel-llm--tokens-received received)
                               (when progress
-                                (funcall progress)))
+                                (funcall progress))
+                              ;; Hard byte budget: a runaway reply is cut
+                              ;; off immediately as a diagnosable failure
+                              ;; instead of growing without bound; the
+                              ;; check runs after the counters so this
+                              ;; request's tally still includes the chunk
+                              ;; that crossed the limit.
+                              (when (and (numberp scalpel-llm-max-reply-bytes)
+                                         (> scalpel-llm-max-reply-bytes 0)
+                                         (> (length accumulated)
+                                            scalpel-llm-max-reply-bytes))
+                                (finish 'error
+                                        (list :type 'oversized
+                                              :message
+                                              (format "Scalpel: reply exceeded budget; truncated at %d bytes (limit %d bytes, scalpel-llm-max-reply-bytes)"
+                                                      (length accumulated)
+                                                      scalpel-llm-max-reply-bytes)))))
                              ;; Reasoning chunk: delivered as the RESPONSE
                              ;; argument (a (reasoning . TEXT) cons).
                              ((and (consp resp) (eq (car resp) 'reasoning))
