@@ -237,7 +237,7 @@ plain `user-error'."
 		  "Scalpel forbids and does not parse; nothing was "
 		  "executed.  The reply must be a plain TOML "
 		  "action document with no wrapper markup of any "
-		  "kind.  Reply was:\\n@scalpel@ error (rejected reply -- read to understand the failure, never copy back)\\n"
+		  "kind.  Reply was:\n@scalpel@ error (rejected reply -- read to understand the failure, never copy back)\n"
 		  (scalpel-redact-apply raw)
 		  "\n@scalpel@ end of error"))
 	    (suggestion (when-let ((repair (scalpel-diagnose-advice-mechanical-repair (list :type (quote tool-call) :input raw))))
@@ -258,7 +258,7 @@ plain `user-error'."
 		      "and broke the document -- nothing was executed.  "
 		      "Rephrase the text without them, or write that "
 		      "value as a TOML double-quoted string.  Reply "
-		      "was:\\n@scalpel@ error (rejected reply -- read to understand the failure, never copy back)\\n"
+		      "was:\n@scalpel@ error (rejected reply -- read to understand the failure, never copy back)\n"
 		      (scalpel-redact-apply raw)
 		      "\n@scalpel@ end of error"))
 		(suggestion (when-let ((repair (scalpel-diagnose-advice-mechanical-repair (list :type (quote parse) :input raw))))
@@ -270,7 +270,7 @@ plain `user-error'."
 		    "was executed.  The reply shown below was itself the broken "
 		    "attempt and must not be copied -- the retry must follow "
 		    "the format shown in the system prompt instead.  Reply "
-		    "was:\\n@scalpel@ error (rejected reply -- read to understand the failure, never copy back)\\n"
+		    "was:\n@scalpel@ error (rejected reply -- read to understand the failure, never copy back)\n"
 		    (scalpel-redact-apply raw)
 		    "\n@scalpel@ end of error"))
 	      (suggestion (when-let ((repair (scalpel-diagnose-advice-mechanical-repair (list :type (quote parse) :input raw))))
@@ -285,7 +285,7 @@ plain `user-error'."
 		  "instead of the required TOML action document; "
 		  "nothing was executed.  The echoed text is shown "
 		  "only so the answer it holds can still be read.  "
-		  "Reply was:\\n@scalpel@ error (rejected reply -- read to understand the failure, never copy back)\\n"
+		  "Reply was:\n@scalpel@ error (rejected reply -- read to understand the failure, never copy back)\n"
 		  (scalpel-redact-apply raw)
 		  "\n@scalpel@ end of error"))
 	    (suggestion (when-let ((repair (scalpel-diagnose-advice-mechanical-repair (list :type (quote prose) :input raw))))
@@ -299,7 +299,7 @@ plain `user-error'."
 		  "literal string early, because TOML literal strings take no "
 		  "escapes at all -- nothing was executed.  A value "
 		  "holding a single quote must be written as a "
-		  "triple-quoted literal instead.  Reply was:\\n@scalpel@ error (rejected reply -- read to understand the failure, never copy back)\\n"
+		  "triple-quoted literal instead.  Reply was:\n@scalpel@ error (rejected reply -- read to understand the failure, never copy back)\n"
 		  (scalpel-redact-apply raw)
 		  "\n@scalpel@ end of error"))
 	    (suggestion (when-let ((repair (scalpel-diagnose-advice-mechanical-repair (list :type (quote parse) :input raw))))
@@ -311,7 +311,7 @@ plain `user-error'."
 		  "shown below was itself the broken attempt and must "
 		  "not be copied -- the retry must follow the format "
 		  "shown in the system prompt instead.  Reply "
-		  "was:\\n@scalpel@ error (rejected reply -- read to understand the failure, never copy back)\\n"
+		  "was:\n@scalpel@ error (rejected reply -- read to understand the failure, never copy back)\n"
 		  (scalpel-redact-apply raw)
 		  "\n@scalpel@ end of error"))
 	    (suggestion (when-let ((repair (scalpel-diagnose-advice-mechanical-repair (list :type (quote parse) :input raw))))
