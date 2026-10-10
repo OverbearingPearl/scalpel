@@ -200,17 +200,17 @@ with a different command."
 (defconst scalpel-prompt-rule--feedback-fence
   "Runtime feedback fence rules: a scalpel error fence in the conversation
 history opens on a line holding @scalpel@ error and closes on a line
-holding @scalpel@ end. It holds the verbatim redacted text of the
+holding @scalpel@ end of error. It holds the verbatim redacted text of the
 previous rejected reply, shown only to understand why it failed,
 never to be copied back unchanged.
 A scalpel suggestion fence, when present, opens on a line holding
-@scalpel@ suggestion and closes on that same @scalpel@ end line. It
-holds the client-side diagnostic module's mechanically repaired
-version of that reply, and the next round must copy such a fence back
-character for character, because it is a guess, not a guarantee, so
-self-check first. If a suggestion fence's body is not a complete TOML
-document but only a hint about the failure cause, read it and write the
-corrected document yourself; never copy it back verbatim.
+@scalpel@ suggestion and closes on a line holding @scalpel@ end of
+suggestion. It holds the client-side diagnostic module's mechanically
+repaired version of that reply, and the next round must copy such a
+fence back character for character, because it is a guess, not a
+guarantee, so self-check first. If a suggestion fence's body is not a
+complete TOML document but only a hint about the failure cause, read it
+and write the corrected document yourself; never copy it back verbatim.
 A missing suggestion fence means no
 mechanical fix was found, so rewrite from the error description alone.
 Both fences appear only in the conversation history and must never be

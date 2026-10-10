@@ -244,7 +244,8 @@ Applies `scalpel-redact-apply' before returning."
               "@scalpel@" (0+ blank) "suggestion"))
          (fence-close-rx
           (rx bol (0+ blank)
-              "@scalpel@" (0+ blank) "end" (0+ blank) eol))
+              "@scalpel@" (0+ blank) "end" (one-or-more blank)
+              (or "of error" "of suggestion") (0+ blank) eol))
          (triple-quote-rx (rx "\"\"\""))
          (header-rx (rx bol (0+ blank) "[["))
          ;; Count triple-quote occurrences on one line; an odd count
@@ -383,7 +384,7 @@ Applies `scalpel-redact-apply' before returning."
                (not (string-equal (string-trim content)
                                   (string-trim (or input "")))))
       (scalpel-redact-apply
-       (concat "@scalpel@ suggestion\n" content "\n@scalpel@ end")))))
+       (concat "@scalpel@ suggestion (mechanical repair; copy back verbatim if it is a complete TOML document)\n" content "\n@scalpel@ end of suggestion")))))
 
 (provide 'scalpel-diagnose-advice)
 

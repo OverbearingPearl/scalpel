@@ -2351,14 +2351,15 @@ nil on success."
   "Validate Perl replacement string REPLACEMENT from left to right.
 A backslash escapes the following character: \\$ and \\\\ are
 literal, \\1..\\9 and \\& are capture references of this engine;
-both are allowed.  Any other escape such as \\n is not expanded by
-this engine and stays as a literal two-character sequence; a
-warning is recorded for each such escape.  Any bare $ is rejected
-with an error naming its position and advising \\$ or \\N.  Return
-nil when valid."
+these four are the only escapes supported.  Any other escape such
+as \\n or \\t is rejected with a `user-error' listing all
+unsupported escapes and suggesting the real character be written
+literally (e.g. an actual newline instead of \\n).  Any bare $ is
+rejected with an error naming its position and advising \\$ or
+\\N.  Return nil when valid."
   (let ((i 0)
         (len (length replacement))
-        (unexpanded '()))
+        (unsupported '()))
     (while (< i len)
       (let ((ch (aref replacement i)))
         (if (= ch ?\\)
@@ -2370,22 +2371,19 @@ nil when valid."
                                 (= next ?\\)
                                 (and (>= next ?1) (<= next ?9))
                                 (= next ?&))
-                      ;; Not a capture reference or literal escape:
-                      ;; kept as a literal two-character sequence.
                       (push (substring replacement (1- i) (1+ i))
-                            unexpanded))
+                            unsupported)))
                 ;; Trailing backslash: harmless literal, skip.
                 )
-              (setq i (1+ i))))
+              (setq i (1+ i)))
           (if (= ch ?$)
               (error "Bare $ at position %d in replacement %S; use \\$ for a literal dollar or \\N for a capture reference"
                      i replacement)
             (setq i (1+ i))))))
-    (when unexpanded
-      (display-warning 'scalpel
-                       (format "Escapes not expanded by scalpel (kept literal): %s"
-                               (mapconcat #'identity (nreverse unexpanded) " "))))
-    nil))
+    (when unsupported
+      (user-error "Unsupported escape sequences in replacement %S: %s; this engine only supports \\$, \\\\, \\1..\\9 and \\& -- write the real character instead (e.g. an actual newline rather than \\n)"
+                  replacement
+                  (mapconcat #'identity (nreverse unsupported) " ")))))
 
 (defun scalpel-agent--perl-invocation (pattern replacement)
   "Return a multi-line, pasteable description of the complete perl command.
