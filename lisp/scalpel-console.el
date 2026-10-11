@@ -2251,16 +2251,14 @@ after %s: %s."
                                                err-type type-count))
                               (scalpel-console--append
                                (format
-                                (concat
-                                 "Scalpel: retrying after %s error "
-                                 "(attempt %d, %d of %d retries left "
-                                 "for this type; %d of %d total "
-                                 "retries left)")
+                                "Scalpel: %s, self-heal retry %d of %d for this type%s; %d of %d total retries remaining"
                                 err-type
                                 type-count
-                                (- scalpel-console-self-heal-max-per-type
-                                   type-count)
                                 scalpel-console-self-heal-max-per-type
+                                (if (= type-count
+                                       scalpel-console-self-heal-max-per-type)
+                                    " (last attempt)"
+                                  "")
                                 (- scalpel-console-self-heal-max
                                    self-heal-total)
                                 scalpel-console-self-heal-max))
