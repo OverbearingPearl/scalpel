@@ -2402,6 +2402,15 @@ nil on success."
 
 (defun scalpel-agent--perl-replacement-check (replacement)
   "Validate Perl replacement string REPLACEMENT from left to right.
+This is a static pre-check added by Scalpel, not a rule of perl
+itself.  In perl the escape sequences rejected here (\\n, \\t, ...)
+are perfectly legal; but Scalpel expands REPLACEMENT as a plain
+string before handing it to the replacement script, so any
+backslash sequence other than \\1..\\9 and \\& would fall through
+verbatim into the output text.  Rejecting them here is therefore a
+defensive design, catching the mistake at validation time rather
+than letting it silently corrupt output.
+
 A backslash escapes the following character: \\$ and \\\\ are
 literal, \\1..\\9 and \\& are capture references of this engine;
 these four are the only escapes supported.  Any other escape such
@@ -2430,11 +2439,11 @@ rejected with an error naming its position and advising \\$ or
                 )
               (setq i (1+ i)))
           (if (= ch ?$)
-              (error "Bare $ at position %d in replacement %S; use \\$ for a literal dollar or \\N for a capture reference"
+              (error "Scalpel replacement pre-check: bare $ at position %d in replacement %S; use \\$ for a literal dollar or \\N for a capture reference"
                      i replacement)
             (setq i (1+ i))))))
     (when unsupported
-      (user-error "Unsupported escape sequences in replacement %S: %s; this engine only supports \\$, \\\\, \\1..\\9 and \\& -- write the real character instead (e.g. an actual newline rather than \\n)"
+      (user-error "Scalpel replacement pre-check: unsupported escape sequences in replacement %S: %s; these are legal in perl itself, but Scalpel expands the replacement as a plain string, so only \\$, \\\\, \\1..\\9 and \\& are supported here -- write the real character instead (e.g. an actual newline rather than \\n)"
                   replacement
                   (mapconcat #'identity (nreverse unsupported) " ")))))
 

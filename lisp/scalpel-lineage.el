@@ -82,8 +82,10 @@ the old text, and the post-change file content, each with a
 whole-content sha1 hash.  Otherwise keep the passed segment
 texts.  Whole-file snapshots let a later restore of an earlier
 record succeed for a file edited several times in one session;
-hashes let a later restore detect that the file moved on since
-the change, so it refuses instead of clobbering user edits.
+the stored hashes are kept purely as record metadata and are
+never consulted by restore: both the restore decision and its
+conflict detection rely on segment-uniqueness checks rather
+than any whole-file hash comparison.
 Each record is also stamped with :index, a value drawn from the
 global monotonic sequence counter `scalpel-lineage--record-counter'
 incremented once per record, so record order in the flat list and
@@ -103,16 +105,15 @@ its sole argument."
                          (with-temp-buffer
                            (insert-file-contents file)
                            (buffer-string))))
-           (snapshot-p (and current
-                            (stringp new-text)
-                            (not (string= new-text ""))
-                            (equal
-                             (let ((first (string-search new-text current)))
-                               (and first
-                                    (not (string-search
-                                          new-text current
-                                          (1+ first)))))
-                             0)))
+           (snapshot-p
+            (and current
+                 (stringp new-text)
+                 (not (string= new-text ""))
+                 (let ((first (string-search new-text current)))
+                   (and (integerp first)
+                        (not (string-search
+                              new-text current
+                              (1+ first)))))))
            (record
             (if snapshot-p
                 (let* ((after current)
@@ -296,7 +297,9 @@ For text edits the check is segment-based: the recorded :new-text must
 occur in the file exactly once, mirroring the test
 `scalpel-lineage-restore' performs with `string-search'.  A restore in
 this state would either fail or clobber edits the user made after the
-change landed, so it is refused rather than guessed."
+change landed, so it is refused rather than guessed.  Records whose
+:new-text is the empty string are always treated as conflicts: an
+empty segment cannot be restored uniquely."
   (let ((file (plist-get record :file)))
     (cond
      ((eq (plist-get record :tool) 'file-create)
@@ -311,18 +314,20 @@ change landed, so it is refused rather than guessed."
       (not (and (file-exists-p file)
                 (not (file-exists-p (plist-get record :old-text))))))
      (t
-      (if (not (file-readable-p file))
-          t
-        (let* ((content (with-temp-buffer
-                          (insert-file-contents file)
-                          (buffer-string)))
-               (new-text (plist-get record :new-text))
-               (count 0)
-               (pos 0))
-          (while (string-search new-text content pos)
-            (setq count (1+ count)
-                  pos (1+ (string-search new-text content pos))))
-          (not (= count 1))))))))
+      (let ((new-text (plist-get record :new-text)))
+        (if (or (equal new-text "")
+                (not (file-readable-p file)))
+            t
+          (let* ((content (with-temp-buffer
+                            (insert-file-contents file)
+                            (buffer-string)))
+                 (len (length new-text))
+                 (count 0)
+                 (pos 0))
+            (while (string-search new-text content pos)
+              (setq count (1+ count)
+                    pos (+ (string-search new-text content pos) len)))
+            (not (= count 1)))))))))
 
 (defun scalpel-lineage-restore (record)
   "Undo the single change RECORD describes.
@@ -331,9 +336,11 @@ changed since the record was made; a conflicted restore is refused.
 On success the record is marked as processed by setting its
 :restored property to t, so the review buffer can later show
 restored blocks as already-handled instead of pending.
-For a text change the whole-file hash must match first, then the
-recorded new text must occur exactly once in the file, and only then
-is it replaced by the recorded old text.
+For a text change the recorded new text must occur exactly once
+in the file before it is replaced by the recorded old text;
+records whose :new-text is the empty string are refused as
+conflicts, since substituting an empty string would splice the
+old text at every character boundary.
 After each successful disk write, any clean buffer visiting the
 file is reverted so it cannot clobber the restore with stale
 contents."
@@ -372,10 +379,11 @@ contents."
                           (buffer-string)))
                (new-text (plist-get record :new-text))
                (old-text (plist-get record :old-text)))
-          ;; Restore only when the recorded new text occurs exactly once.
+          ;; An empty :new-text cannot be substituted safely; refuse.
           (if (and new-text
+                   (not (equal new-text ""))
                    (let ((first (string-search new-text current)))
-                     (and first
+                     (and (integerp first)
                           (not (string-search new-text current (1+ first))))))
               (let ((replaced (string-replace new-text old-text current)))
                 (with-temp-buffer
