@@ -252,6 +252,23 @@ back to the local variable."
          (buffer-string)))
     (error nil)))
 
+(defun scalpel-lineage--revert-clean-buffer (file)
+  "Revert an unmodified buffer visiting FILE after a restore-type write.
+Restores go to disk via `write-region', which does not update any
+buffer visiting the target file.  If such a buffer keeps its old
+contents, a subsequent save would write the stale contents back and
+undo the restore, so clean buffers must be reverted here.
+
+Only revert buffers whose modified flag is clear: a modified buffer
+holds unsaved user edits that a silent revert would destroy, so in
+that case leave it untouched."
+  (let ((buffer (get-file-buffer file)))
+    (when (and buffer
+               (buffer-live-p buffer)
+               (not (buffer-modified-p buffer)))
+      (with-current-buffer buffer
+        (revert-buffer :ignore-auto :noconfirm)))))
+
 (defun scalpel-lineage-conflict-p (record)
   "Return non-nil when the file no longer matches what RECORD expects.
 For text edits the check is segment-based: the recorded :new-text must
@@ -295,7 +312,10 @@ On success the record is marked as processed by setting its
 restored blocks as already-handled instead of pending.
 For a text change the whole-file hash must match first, then the
 recorded new text must occur exactly once in the file, and only then
-is it replaced by the recorded old text."
+is it replaced by the recorded old text.
+After each successful disk write, any clean buffer visiting the
+file is reverted so it cannot clobber the restore with stale
+contents."
   (catch 'result
     (let ((tool (plist-get record :tool))
           (file (plist-get record :file)))
@@ -315,6 +335,7 @@ is it replaced by the recorded old text."
                 (insert (plist-get record :old-text))
                 (write-region (point-min) (point-max) file nil 'silent))
               (plist-put record :restored t)
+              (scalpel-lineage--revert-clean-buffer file)
               (throw 'result t))
           (error (throw 'result 'conflict))))
        ((eq tool 'file-rename)
@@ -340,6 +361,7 @@ is it replaced by the recorded old text."
                   (insert replaced)
                   (write-region (point-min) (point-max) file nil 'silent))
                 (plist-put record :restored t)
+                (scalpel-lineage--revert-clean-buffer file)
                 t)
             'conflict)))))))
 

@@ -14,23 +14,20 @@
 (require 'scalpel-review-session)
 
 (ert-gwt-deftest
-  (:given ((consoles nil) (dialogues nil) (result nil)))
+  (:given ((dialogues nil) (result nil)))
   (:when (progn
-           (setq consoles (list :s1)
-                 dialogues (list (list :session :s1
+           (setq dialogues (list (list :session :s1
                                        :start 1 :end 2)))
            (with-temp-buffer
              (setq scalpel-lineage--records
                    (list (list :session :s1 :index 1 :file "a")
                          (list :session :s1 :index 2 :file "b")
                          (list :session :s1 :index 3 :file "c")))
-             (let ((scalpel-review-session--consoles consoles)
-                   (scalpel-lineage--dialogues dialogues))
+             (let ((scalpel-lineage--dialogues dialogues))
                (setq result
                      (scalpel-review-session--collect-records))))))
   (:then (should (equal result
-                        (list (list :session :s1 :index 1 :file "a")
-                              (list :session :s1 :index 2 :file "b"))))))
+                        (list (list :session :s1 :index 1 :file "a"))))))
 
 (ert-gwt-deftest
   (:given ((result nil)))
@@ -39,13 +36,10 @@
              (setq scalpel-lineage--records
                    (list (list :session :guest :index 1 :file "a")
                          (list :index 2 :file "b")))
-             (let ((scalpel-review-session--consoles nil)
-                   (scalpel-lineage--dialogues nil))
+             (let ((scalpel-lineage--dialogues nil))
                (setq result
                      (scalpel-review-session--collect-records))))))
-  (:then (should (equal result
-                        (list (list :session :guest :index 1 :file "a")
-                              (list :index 2 :file "b"))))))
+  (:then (should (null result))))
 
 (ert-gwt-deftest
   (:given ((result nil)))
@@ -53,8 +47,7 @@
            (with-temp-buffer
              (setq scalpel-lineage--records
                    (list (list :session :s1 :index 1 :file "a")))
-             (let ((scalpel-review-session--consoles (list :s1))
-                   (scalpel-lineage--dialogues
+             (let ((scalpel-lineage--dialogues
                     (list (list :session :s1 :start 1 :end nil))))
                (setq result
                      (scalpel-review-session--collect-records))))))
@@ -64,8 +57,7 @@
 (ert-gwt-deftest
   (:given ((result nil)))
   (:when (progn
-           (let ((scalpel-lineage--dialogues nil)
-                 (scalpel-review-session--consoles nil))
+           (let ((scalpel-lineage--dialogues nil))
              (setq result (scalpel-review-session-offer)))))
   (:then (should (null result)))
   (:then (should (null (get-buffer

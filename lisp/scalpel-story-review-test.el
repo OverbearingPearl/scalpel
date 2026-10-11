@@ -80,6 +80,18 @@
               (kill-buffer scalpel-story-review-test--buffer))
             (setq scalpel-story-review-test--buffer nil)))
 
+(ert-gwt-deftest
+  (:given ((ops nil)))
+  (:when (progn
+           (with-temp-buffer
+             (insert "@@ -1,3 +1,3 @@\n context\n-old tail\n+new tail\n\\ No newline at end of file\n")
+             (setq ops (scalpel-review--hunk-operations
+                        (point-min) (point-max))))))
+  (:then (should (equal ops
+                        '((context "context\n")
+                          (removed "old tail\n")
+                          (added "new tail"))))))
+
 (provide 'scalpel-story-review-test)
 
 ;;; scalpel-story-review-test.el ends here

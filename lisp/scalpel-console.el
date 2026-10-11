@@ -2045,10 +2045,11 @@ with the console buffer name.
 terminal point, so a second RET during a round is refused.  When
 an operation ends, the cursor in the target buffer is also moved
 to `point-max', signalling that the answer is finished.  At every
-terminal point the shared session review buffer
-`scalpel-review-session' is refreshed and popped exactly once per
-operation whenever the dialogue recorded changes; consoles whose
-dialogues made no changes are not registered.  The completion
+terminal point the session review buffer named by
+`scalpel-review-session--buffer-name' is offered exactly once per
+operation whenever the latest dialogue diff recorded changes; the
+dialogue chain is global across sessions, so no per-console
+registration happens.  The completion
 acknowledgement is only shown for a successful final round.  An
 interactive operation ends with a compression offer once the
 cumulative token growth since the last offer reaches
@@ -2085,11 +2086,6 @@ further growth."
                      (when (condition-case nil
                                (not (scalpel-lineage-clean-p))
                              (error nil))
-                       (unless (member (buffer-name)
-                                       scalpel-review-session--consoles)
-                         (setq scalpel-review-session--consoles
-                               (append scalpel-review-session--consoles
-                                       (list (buffer-name)))))
                        (scalpel-review-session-refresh)))
                  (error nil))))
            (close-lineage-session ()

@@ -172,7 +172,10 @@ inside a record's diff hunks."
   "Return the hunk's line operations between BEG and END.
 Each element is (KIND TEXT), where KIND is `context', `removed'
 or `added' and TEXT is the line's content including its newline.
-The @@ header line is skipped."
+The @@ header line is skipped.
+A \"\\ No newline at end of file\" marker removes the trailing
+newline from the preceding recorded operation, so the rebuilt
+text matches the file's missing final newline byte for byte."
   (save-excursion
     (let (ops)
       (goto-char beg)
@@ -184,8 +187,15 @@ The @@ header line is skipped."
                       ((string-prefix-p " " raw) 'context)
                       ((string-prefix-p "-" raw) 'removed)
                       ((string-prefix-p "+" raw) 'added))))
-          (when kind
-            (push (list kind (concat (substring raw 1) nl)) ops)))
+          (cond
+           (kind
+            (push (list kind (concat (substring raw 1) nl)) ops))
+           ((string-prefix-p "\\" raw)
+            (when ops
+              (let* ((last (car ops))
+                     (text (nth 1 last)))
+                (when (string-suffix-p "\n" text)
+                  (setcar (cdr last) (substring text 0 -1))))))))
         (forward-line 1))
       (nreverse ops))))
 
@@ -197,11 +207,14 @@ so the file is in the after state.  The hunk's after-side lines
 \(context and added) must occur exactly once in the file, then
 they are replaced by the before-side lines (context and removed).
 The record's :new-text is rewritten accordingly so later
-block-level restores stay consistent.  Once the hunk is rejected,
-its lines in the review buffer are struck through by applying the
-`scalpel-review-rejected' face to the hunk's region, as block
-rejection does.  Unlike `scalpel-review-reject-block' no later
-records for the same file are undone first; a stale file is
+block-level restores stay consistent.  After the rejection is
+written to disk, buffers visiting the file unmodified are
+reverted via `scalpel-lineage--revert-clean-buffer' so a later
+save cannot silently roll the rejection back.  Once the hunk is
+rejected, its lines in the review buffer are struck through by
+applying the `scalpel-review-rejected' face to the hunk's region,
+as block rejection does.  Unlike `scalpel-review-reject-block' no
+later records for the same file are undone first; a stale file is
 reported and nothing is changed."
   (interactive)
   (let ((region (scalpel-review--hunk-region-at-point)))
@@ -238,6 +251,7 @@ reported and nothing is changed."
                   (insert (string-replace after before current))
                   (write-region (point-min) (point-max)
                                 file nil 'silent))
+                (scalpel-lineage--revert-clean-buffer file)
                 (plist-put record :new-text
                            (string-replace after before
                                            (plist-get record :new-text)))
@@ -462,34 +476,36 @@ review buffer.
 Rendered records live buffer-locally on the edited file buffers,
 so a console buffer holds none of them and a purely local lookup
 would render nothing.  Softly require `scalpel-review-session'
-before collecting, then collect records by scanning every live
-buffer's buffer-local `scalpel-lineage--records' with no session
-filter, so consoles that never registered are not dropped; fall
-back to the calling buffer's local records (or all records when
-unbound) only when the collector is unavailable.
+and collect records with `scalpel-review-session--collect-records',
+so the review shows the diff between the two most recent adjacent
+nodes across all sessions; fall back to scanning live buffers and
+then to the calling buffer's local records only when the collector
+is unavailable.  The buffer name likewise comes from
+`scalpel-review-session--buffer-name' when available, so the
+collector's skip check never misses this buffer; fall back to the
+literal name only when the session module is unavailable.
 
 After popping to the review buffer, move its point and every
 displaying window's start back to the beginning on all frames, so
 a reused window never leaves the cursor at the end."
   (interactive)
   (unless (scalpel-lineage-clean-p)
-    (let ((buf (get-buffer-create "*scalpel session review*"))
-          (context-files (if (boundp 'scalpel-agent--context-files)
-                             scalpel-agent--context-files
-                           nil))
-          (records
-           (if (require 'scalpel-review-session nil t)
-               (let (collected)
-                 (dolist (b (buffer-list) collected)
-                   (with-current-buffer b
-                     (when (boundp 'scalpel-lineage--records)
-                       (setq collected
-                             (append collected
-                                     (copy-sequence
-                                      scalpel-lineage--records)))))))
-             (if (boundp 'scalpel-lineage--records)
-                 scalpel-lineage--records
-               (scalpel-lineage-changes)))))
+    (let* ((session-p (require 'scalpel-review-session nil t))
+           (buf (get-buffer-create
+                 (if session-p
+                     (symbol-value 'scalpel-review-session--buffer-name)
+                   "*scalpel session review*")))
+           (context-files (if (boundp 'scalpel-agent--context-files)
+                              scalpel-agent--context-files
+                            nil))
+           (records
+            (cond
+             (session-p
+              (funcall (symbol-function 'scalpel-review-session--collect-records)))
+             ((boundp 'scalpel-lineage--records)
+              scalpel-lineage--records)
+             (t
+              (scalpel-lineage-changes)))))
       (with-current-buffer buf
         (setq buffer-read-only nil)
         (unless (eq major-mode 'scalpel-review-mode)
@@ -500,6 +516,8 @@ a reused window never leaves the cursor at the end."
             (use-local-map scalpel-review-mode-map)))
         (let ((scalpel-agent--context-files context-files)
               (scalpel-lineage--records records))
+          (ignore scalpel-agent--context-files
+                  scalpel-lineage--records)
           (scalpel-review--render))
         (setq buffer-read-only t)
         (goto-char (point-min)))
