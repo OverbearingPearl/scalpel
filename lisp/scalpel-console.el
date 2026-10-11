@@ -287,12 +287,16 @@ console kills its reasoning buffer and its raw TOML echo buffer, and
 removes its entry (keyed by its buffer name) from variable
 `scalpel-token--console-totals', so neither reasoning buffers, raw
 TOML echo buffers nor token totals linger after the session is gone.
-When the session ends, the session review (via `scalpel-review-open')
-is offered exactly once, only if the session actually recorded changes
-\(checked with `scalpel-lineage-clean-p'); lineage state is reset
-afterwards via `scalpel-lineage-reset' so a later session starts clean.
-Everything stays silent when there is no change.  Safe when the
-reasoning buffer does not exist."
+When the session ends and it actually recorded changes (checked with
+`scalpel-lineage-clean-p'), the session review is offered via
+`scalpel-review-session-offer', which asks before opening; only when
+the review module is unavailable does this fall back to opening
+`scalpel-review-open' directly.  A session that was already offered
+when `run-rounds' ended (reported by
+`scalpel-lineage-session-closed-p') is not offered a second time.
+Teardown never resets global lineage state, so the dialogues chain
+survives the console being killed.  Everything stays silent when
+there is no change.  Safe when the reasoning buffer does not exist."
   (let ((buf (get-buffer (scalpel-llm--reasoning-buffer-name (current-buffer)))))
     (when (buffer-live-p buf)
       (kill-buffer buf)))
@@ -309,15 +313,20 @@ reasoning buffer does not exist."
   (when (and (fboundp 'scalpel-lineage-clean-p)
              (condition-case nil
                  (not (scalpel-lineage-clean-p))
-               (error nil)))
-    (when (fboundp 'scalpel-review-open)
+               (error nil))
+             (not (and (fboundp 'scalpel-lineage-session-closed-p)
+                       (condition-case nil
+                           (scalpel-lineage-session-closed-p (buffer-name))
+                         (error nil)))))
+    (cond
+     ((fboundp 'scalpel-review-session-offer)
+      (condition-case nil
+          (scalpel-review-session-offer)
+        (error nil)))
+     ((fboundp 'scalpel-review-open)
       (condition-case nil
           (scalpel-review-open)
-        (error nil)))
-    (when (fboundp 'scalpel-lineage-reset)
-      (condition-case nil
-          (scalpel-lineage-reset)
-        (error nil)))))
+        (error nil))))))
 
 (defconst scalpel-console--session-variables
   '(scalpel-console--root
@@ -1638,13 +1647,16 @@ that path."
       (goto-char (point-max)))
     (scalpel-agent-context-reset)
     (scalpel-console--show-context)
-    ;; Session-start lineage anchoring: each new console session begins
-    ;; with a clean lineage state and a freshly pinned git baseline.
-    ;; Errors are ignored so consoles in non-git directories still open.
+    ;; Session-start lineage anchoring: each new console session clears
+    ;; only its session-level lineage state (records, baseline, and the
+    ;; round counter) and pins a fresh git baseline; the global dialogues
+    ;; chain is left untouched, since session-begin appends a new entry
+    ;; to it by itself.  Errors are ignored so consoles in non-git
+    ;; directories still open.
     (require 'scalpel-lineage)
     (condition-case nil
         (progn
-          (scalpel-lineage-reset)
+          (scalpel-lineage-session-clear)
           (scalpel-lineage-start))
       (error nil))
     (goto-char (point-max))))

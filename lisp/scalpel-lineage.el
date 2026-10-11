@@ -206,6 +206,17 @@ aborted session cannot clear another console's registration."
   (when (equal scalpel-lineage--current-session session)
     (setq scalpel-lineage--current-session nil)))
 
+(defun scalpel-lineage-session-closed-p (session)
+  "Return non-nil when SESSION has an already-closed dialogue entry.
+An entry is closed once its :end is stamped, meaning the session
+ended and its review was already offered at run completion; the
+console teardown uses this so a console killed afterwards does not
+offer the same review a second time."
+  (seq-find (lambda (entry)
+              (and (equal (plist-get entry :session) session)
+                   (plist-get entry :end)))
+            scalpel-lineage--dialogues))
+
 (defun scalpel-lineage-dialogues ()
   "Return the list of dialogue entries."
   scalpel-lineage--dialogues)
@@ -240,6 +251,16 @@ back to the local variable."
   (setq scalpel-lineage--records nil
         scalpel-lineage--baseline nil
         scalpel-lineage--dialogues nil
+        scalpel-lineage-round 0))
+
+(defun scalpel-lineage-session-clear ()
+  "Clear this session's records, baseline and round counter.
+Unlike `scalpel-lineage-reset' the global dialogue chain
+`scalpel-lineage--dialogues' is left intact: it is a single history
+shared by every console session, so a console starting or ending
+must not wipe the boundaries other live sessions rely on."
+  (setq scalpel-lineage--records nil
+        scalpel-lineage--baseline nil
         scalpel-lineage-round 0))
 
 (defun scalpel-lineage--file-hash (file)
