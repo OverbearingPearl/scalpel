@@ -468,10 +468,10 @@ records the pre-rename path)."
 Do nothing at all -- no buffer, no message -- when
 `scalpel-lineage-clean-p' reports no recorded change.
 
-Capture `scalpel-agent--context-files' from the calling (console)
-buffer before switching, so the context filter reflects this
-session even though the variable is not buffer-local in the
-review buffer.
+Render with `scalpel-agent--context-files' bound to nil: the
+collected records already span all sessions, so filtering them by
+the calling session's context files would drop records from other
+sessions.
 
 Rendered records live buffer-locally on the edited file buffers,
 so a console buffer holds none of them and a purely local lookup
@@ -495,9 +495,6 @@ a reused window never leaves the cursor at the end."
                  (if session-p
                      (symbol-value 'scalpel-review-session--buffer-name)
                    "*scalpel session review*")))
-           (context-files (if (boundp 'scalpel-agent--context-files)
-                              scalpel-agent--context-files
-                            nil))
            (records
             (cond
              (session-p
@@ -514,7 +511,7 @@ a reused window never leaves the cursor at the end."
             (setq major-mode 'scalpel-review-mode
                   mode-name "Scalpel-Review")
             (use-local-map scalpel-review-mode-map)))
-        (let ((scalpel-agent--context-files context-files)
+        (let ((scalpel-agent--context-files nil)
               (scalpel-lineage--records records))
           (ignore scalpel-agent--context-files
                   scalpel-lineage--records)
