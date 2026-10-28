@@ -1508,7 +1508,15 @@ be sent after a name the file does not hold."
   (with-current-buffer (find-file-noselect file)
     (let ((range (scalpel-agent--verified-range file after expected-body)))
       (scalpel-execute-insert-after (cdr range) new-text)
-      (let* ((created (scalpel-agent--replacement-name new-text))
+      (let* ((lineage-note
+              (progn
+                (require 'scalpel-lineage nil t)
+                (when (fboundp 'scalpel-lineage-note)
+                  (let ((note (condition-case nil
+                                  (scalpel-lineage-note 'block-insert file nil new-text)
+                                (error nil))))
+                    (when (stringp note) note)))))
+             (created (scalpel-agent--replacement-name new-text))
              (other (and created (not (string= created symbol)) created))
              (locatable (scalpel-agent--locatable-p file symbol))
              (note (cond
@@ -1522,8 +1530,9 @@ be sent after a name the file does not hold."
                      (concat "; it cannot be located by that name, so the "
                              "next round will not find it"))
                     (t ""))))
-        (format "Created %s in %s%s" symbol (buffer-name (current-buffer))
-                note)))))
+        (format "Created %s in %s%s%s"
+                symbol (buffer-name (current-buffer)) note
+                (if lineage-note (concat "; " lineage-note) ""))))))
 
 (defun scalpel-agent-block-edit (file symbol instruction on-success on-error)
   "Edit SYMBOL in FILE per INSTRUCTION, without blocking.
