@@ -482,7 +482,7 @@ Use EXTRA as the new instruction."
 (defun scalpel-commit--abort ()
   "Abandon this commit and close its buffer."
   (interactive)
-  (when-let ((buffer (get-buffer (scalpel-commit--buffer-name))))
+  (when-let* ((buffer (get-buffer (scalpel-commit--buffer-name))))
     (kill-buffer buffer)))
 
 (defun scalpel-commit--commit ()

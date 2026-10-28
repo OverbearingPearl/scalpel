@@ -240,7 +240,7 @@ plain `user-error'."
 		  "kind.  Reply was:\n@scalpel@ error (rejected reply -- read to understand the failure, never copy back)\n"
 		  (scalpel-redact-apply raw)
 		  "\n@scalpel@ end of error"))
-	    (suggestion (when-let ((repair (scalpel-diagnose-advice-mechanical-repair (list :type (quote tool-call) :input raw))))
+	    (suggestion (when-let* ((repair (scalpel-diagnose-advice-mechanical-repair (list :type (quote tool-call) :input raw))))
 			  (concat "\n" repair))))
 	(signal 'scalpel-llm-dialect-tool-call-error
 		(list (concat msg (or suggestion ""))))))
@@ -261,7 +261,7 @@ plain `user-error'."
 		      "was:\n@scalpel@ error (rejected reply -- read to understand the failure, never copy back)\n"
 		      (scalpel-redact-apply raw)
 		      "\n@scalpel@ end of error"))
-		(suggestion (when-let ((repair (scalpel-diagnose-advice-mechanical-repair (list :type (quote parse) :input raw))))
+		(suggestion (when-let* ((repair (scalpel-diagnose-advice-mechanical-repair (list :type (quote parse) :input raw))))
 			      (concat "\n" repair))))
 	    (user-error (concat msg (or suggestion ""))))
 	(let ((msg (concat
@@ -273,7 +273,7 @@ plain `user-error'."
 		    "was:\n@scalpel@ error (rejected reply -- read to understand the failure, never copy back)\n"
 		    (scalpel-redact-apply raw)
 		    "\n@scalpel@ end of error"))
-	      (suggestion (when-let ((repair (scalpel-diagnose-advice-mechanical-repair (list :type (quote parse) :input raw))))
+	      (suggestion (when-let* ((repair (scalpel-diagnose-advice-mechanical-repair (list :type (quote parse) :input raw))))
 			    (concat "\n" repair))))
 	  (user-error (concat msg (or suggestion ""))))))
      ((and (zerop fences)
@@ -288,7 +288,7 @@ plain `user-error'."
 		  "Reply was:\n@scalpel@ error (rejected reply -- read to understand the failure, never copy back)\n"
 		  (scalpel-redact-apply raw)
 		  "\n@scalpel@ end of error"))
-	    (suggestion (when-let ((repair (scalpel-diagnose-advice-mechanical-repair (list :type (quote prose) :input raw))))
+	    (suggestion (when-let* ((repair (scalpel-diagnose-advice-mechanical-repair (list :type (quote prose) :input raw))))
 			  (concat "\n" repair))))
 	(signal 'scalpel-llm-dialect-prose-reply-error
 		(list (concat msg (or suggestion ""))))))
@@ -302,7 +302,7 @@ plain `user-error'."
 		  "triple-quoted literal instead.  Reply was:\n@scalpel@ error (rejected reply -- read to understand the failure, never copy back)\n"
 		  (scalpel-redact-apply raw)
 		  "\n@scalpel@ end of error"))
-	    (suggestion (when-let ((repair (scalpel-diagnose-advice-mechanical-repair (list :type (quote parse) :input raw))))
+	    (suggestion (when-let* ((repair (scalpel-diagnose-advice-mechanical-repair (list :type (quote parse) :input raw))))
 			  (concat "\n" repair))))
 	(user-error (concat msg (or suggestion "")))))
      (t
@@ -314,7 +314,7 @@ plain `user-error'."
 		  "was:\n@scalpel@ error (rejected reply -- read to understand the failure, never copy back)\n"
 		  (scalpel-redact-apply raw)
 		  "\n@scalpel@ end of error"))
-	    (suggestion (when-let ((repair (scalpel-diagnose-advice-mechanical-repair (list :type (quote parse) :input raw))))
+	    (suggestion (when-let* ((repair (scalpel-diagnose-advice-mechanical-repair (list :type (quote parse) :input raw))))
 			  (concat "\n" repair))))
 	(user-error (concat msg (or suggestion ""))))))))
 

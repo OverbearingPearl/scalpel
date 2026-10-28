@@ -832,7 +832,7 @@ names that git ignores, marked \"(gitignored)\".  Return the string
                                        file
                                        (string-join (scalpel-locate-list-symbols file) ", "))
                              (format "FILE: %s" file))))
-                 (if-let ((note (scalpel-agent-unregistered-definers-note file)))
+                 (if-let* ((note (scalpel-agent-unregistered-definers-note file)))
                      (concat base "\n" note)
                    base)))
              scalpel-agent--context-files)
@@ -3024,7 +3024,7 @@ can offer block-edit as the retry."
                     "No such file exists on disk")
                   (scalpel-agent--substitute-invocation pattern replacement)))
     (let ((resolved (file-truename (expand-file-name file))))
-      (when-let ((provider (scalpel-locate-provider-for-file resolved)))
+      (when-let* ((provider (scalpel-locate-provider-for-file resolved)))
         (when (not (plist-get provider :balanced-p))
           (signal 'scalpel-no-validation
                   (list (format (concat "Scalpel: file-substitute is a structured-language tool "

@@ -18,7 +18,7 @@
 #       root-main     -> lisp-business
 #       root-test     -> root-main, root-test, lisp-business, lisp-test
 #       lisp-business -> lisp-business
-#       lisp-test     -> root-main, lisp-business, lisp-test
+#       lisp-test     -> root-main, root-test, lisp-business, lisp-test
 #     Requires of features outside this repo (e.g. built-ins) are ignored.
 #     The repo main file <repo>.el must exist in the repo root or the hook
 #     aborts immediately.
@@ -45,8 +45,10 @@
 #   heading-comment         -- `;;;` comment lines (except `;;;###` autoload
 #                              cookies) must be surrounded by blank lines.
 #   banned-construct        -- forbids `;; package-lint: disable`,
-#                              `declare-function`, `ignore-errors`, and
-#                              `eval-and-compile`.
+#                              `declare-function`, `ignore-errors`,
+#                              `eval-and-compile`, `when-let`, and
+#                              `if-let`; each error message carries a
+#                              suggested replacement.
 #   meta-info               -- header/meta requirements:
 #                              * non-test files require `;; Copyright`,
 #                                `;; Author`, `;; Assisted-by`, `;; URL`,
@@ -59,7 +61,7 @@
 #                              * `;;; Commentary` is required and must be
 #                                non-empty.
 #                              * `;; Keywords:` entries must be known to
-#                                `finder-known-keywords`.
+#                                finder-known-keywords`.
 #   module-name-consistency -- the file must `(provide '<file-base>)`,
 #                              quoted or unquoted.
 #   module-prefix           -- definitions (defun, defmacro, defvar,
@@ -414,16 +416,22 @@ repos:
                             (setq banned-line-num (1+ banned-line-num))
                             (cond
                              ((string-match-p \";; package-lint: disable\" banned-line)
-                              (push (format \"banned construct `;; package-lint: disable` (line %d)\" banned-line-num)
+                              (push (format \"banned construct `;; package-lint: disable` (line %d); fix the underlying lint issue instead of suppressing it\" banned-line-num)
                                     banned-errors))
                              ((string-match-p (rx symbol-start \"declare-function\" symbol-end) banned-line)
-                              (push (format \"banned construct `declare-function` (line %d)\" banned-line-num)
+                              (push (format \"banned construct `declare-function` (line %d); require the providing feature instead\" banned-line-num)
                                     banned-errors))
                              ((string-match-p (rx symbol-start \"ignore-errors\" symbol-end) banned-line)
-                              (push (format \"banned construct `ignore-errors` (line %d)\" banned-line-num)
+                              (push (format \"banned construct `ignore-errors` (line %d); use `condition-case` with a specific error\" banned-line-num)
                                     banned-errors))
                              ((string-match-p (rx symbol-start \"eval-and-compile\" symbol-end) banned-line)
-                              (push (format \"banned construct `eval-and-compile` (line %d)\" banned-line-num)
+                              (push (format \"banned construct `eval-and-compile` (line %d); move the form or require it explicitly\" banned-line-num)
+                                    banned-errors))
+                             ((string-match-p (rx symbol-start \"when-let\" symbol-end) banned-line)
+                              (push (format \"banned construct `when-let` (line %d); use `when-let*` instead\" banned-line-num)
+                                    banned-errors))
+                             ((string-match-p (rx symbol-start \"if-let\" symbol-end) banned-line)
+                              (push (format \"banned construct `if-let` (line %d); use `if-let*` instead\" banned-line-num)
                                     banned-errors))))
                           (if banned-errors
                               (progn
@@ -605,7 +613,7 @@ repos:
                             (expand-file-name
                              (concat repository-name \"-test.el\")
                              git-root))
-                           ordered-files)
+                         ordered-files)
                       (dolist (file
                                (sort
                                 lisp-dir-files
