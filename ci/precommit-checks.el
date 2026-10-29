@@ -5,10 +5,87 @@
 ;; Extracted from the inline elisp that used to live in the `emacs-check'
 ;; hook of .pre-commit-config.yaml.  The hook now loads this file with
 ;; `load'; everything below is the same check suite, only lifted out of
-;; the --eval argument.  This file lives in scripts/ (not lisp/) on
-;; purpose: the emacs-check hook only enumerates lisp/*.el and the root
-;; modules, so tooling files placed here are not subject to the
-;; module-prefix and meta-info rules they themselves enforce.
+;; the --eval argument.  This file lives in ci/ (not lisp/) on purpose:
+;; the emacs-check hook only enumerates lisp/*.el and the root modules,
+;; so tooling files placed here are not subject to the module-prefix and
+;; meta-info rules they themselves enforce.
+;;
+;; This Commentary is the single source of truth for what is enforced.
+;; Whenever a check is added, removed, tightened, or relaxed below, YOU
+;; MUST update this Commentary in the same change so the two stay in
+;; sync.
+;;
+;; The checks run in `emacs -Q --batch'.  Per-file checks report only
+;; failing files; any failure prints to stderr and aborts the commit by
+;; exiting non-zero.
+;;
+;; Global checks (run once, before per-file checks)
+;; ------------------------------------------------
+;;   dependency-direction
+;;     Module requires must obey the module classes derived from the repo
+;;     layout.  Allowed require targets per class:
+;;       root-main     -> lisp-business
+;;       root-test     -> root-main, root-test, lisp-business, lisp-test
+;;       lisp-business -> lisp-business
+;;       lisp-test     -> root-main, root-test, lisp-business, lisp-test
+;;     Requires of features outside this repo (e.g. built-ins) are
+;;     ignored.  The repo main file <repo>.el must exist in the repo
+;;     root or the hook aborts immediately.
+;;
+;;   portability
+;;     This file is project-agnostic: no project-specific names are
+;;     hard-coded anywhere.  The repository name is derived at run time
+;;     from `git rev-parse --show-toplevel' and used to locate the root
+;;     entry module <repo>.el, whose defcustom forms register the user
+;;     options as special variables before test files are byte-compiled.
+;;     Copying this file into another elisp project with the same layout
+;;     (root main module, optional root test module, lisp/ business and
+;;     test sub-modules) works without edits.
+;;
+;; Per-file checks (applied to each matched .el file)
+;; --------------------------------------------------
+;;   checkdoc                -- checkdoc-current-buffer, autofix disabled.
+;;   package-lint            -- package-lint-current-buffer; the main
+;;                              file is pinned to <repo>.el at the repo
+;;                              root.
+;;   byte-compile            -- byte-compile-file; non-test files are
+;;                              loaded after compiling.
+;;   format-check            -- no trailing whitespace; no more than one
+;;                              consecutive blank line.
+;;   heading-comment         -- `;;;' comment lines (except `;;;###'
+;;                              autoload cookies) must be surrounded by
+;;                              blank lines.
+;;   banned-construct        -- forbids `;; package-lint: disable',
+;;                              `declare-function', `ignore-errors',
+;;                              `eval-and-compile', `when-let', and
+;;                              `if-let'; each error message carries a
+;;                              suggested replacement.
+;;   meta-info               -- header/meta requirements:
+;;                              * non-test files require `;; Copyright',
+;;                                `;; Author', `;; Assisted-by',
+;;                                `;; URL', and
+;;                                `;; SPDX-License-Identifier'.
+;;                              * test files forbid `;; Copyright',
+;;                                `;; Author', `;; Assisted-by',
+;;                                `;; URL', `;; Version',
+;;                                `;; Package-Requires', `;; Keywords',
+;;                                and `;; SPDX-License-Identifier'.
+;;                              * `;;; Commentary' is required and must
+;;                                be non-empty.
+;;                              * `;; Keywords:' entries must be known
+;;                                to `finder-known-keywords'.
+;;   module-name-consistency -- the file must `(provide '<file-base>)',
+;;                              quoted or unquoted.
+;;   module-prefix           -- definitions (defun, defmacro, defvar,
+;;                              defcustom, defconst, defalias, cl-defun,
+;;                              cl-defmacro, ert-deftest) must use the
+;;                              `<file-base>-' prefix; `defcustom' uses
+;;                              the `<repo>-' prefix; the root main file
+;;                              may define `<repo>' as its entry
+;;                              command.
+;;
+;; Checked files, in order: lisp/*.el production (sorted), root
+;; <repo>.el, lisp/*-test.el (sorted), root <repo>-test.el.
 
 ;;; Code:
 
