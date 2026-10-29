@@ -22,7 +22,8 @@
     define-generic-mode define-skeleton define-inline
     transient-define-prefix transient-define-suffix
     transient-define-argument
-    ert-deftest ert-gwt-deftest)
+    ert-deftest ert-gwt-deftest
+    use-package)
   "Top-level defining forms recognised as one complete definition.
 Structural contract shared by the definition regexes below and by
 `scalpel-locate-elisp--single-definition-p'.
@@ -32,7 +33,15 @@ the form defines, which is what lets `--def-name-regex' read that
 name and `--top-definition-range' find the form again from it.  The
 core Emacs Lisp definers come first, then the mode and group
 spellings, then the cl-lib ones, then the transient spellings this
-package's menus are written with, then ERT.
+package's menus are written with, then ERT, and finally
+`use-package'.
+
+`use-package' is the block-granularity case: its second element is
+the unquoted package name, so an init file holding only `require',
+`use-package' and `provide' still yields addressable symbols.  The
+definitions nested in its `:config' body remain unlisted -- the
+locator reads source rather than expansion, and only the top-level
+form is one complete definition.
 
 Membership is a contract of spellings, not of one package's
 vocabulary, so a macro from a package belongs here when the files a
