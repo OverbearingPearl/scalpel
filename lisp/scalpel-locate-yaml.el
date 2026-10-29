@@ -107,6 +107,174 @@ key's block ends."
               (forward-line 1))))))
     (nreverse keys)))
 
+(defun scalpel-locate-yaml-flow-brackets-balanced-p (file)
+  "Check that flow brackets in YAML text of FILE are balanced.
+Scans line by line, skipping comment lines and block scalar
+bodies, ignoring bracket characters inside quotes.  Tracks
+nesting depth of square and curly brackets; depth must never go
+negative and must return to zero at end of buffer.  Quotes are
+handled as simple single/double toggles; `#' starts a comment
+only at indentation position or after whitespace."
+  (with-current-buffer (find-file-noselect file)
+    (save-excursion
+      (save-restriction
+        (widen)
+        (goto-char (point-min))
+        (let ((depth 0)
+              (in-single nil)
+              (in-double nil)
+              (block-indent nil)
+              (bad nil))
+          (while (and (not bad) (not (eobp)))
+            (let* ((line-start (line-beginning-position))
+                   (line-end (line-end-position))
+                   (text (buffer-substring-no-properties line-start line-end)))
+              (let ((indent (if (string-match "\\`[ \t]*" text)
+                                (match-end 0) 0)))
+                (cond
+                 ;; Inside a block scalar body: skip non-indented-terminating lines.
+                 (block-indent
+                  (if (and (> indent block-indent)
+                           (not (string-blank-p text)))
+                      nil ; still inside block scalar body, skip.
+                    (setq block-indent nil)))
+                 ;; Empty or comment line: skip entirely.
+                 ((string-blank-p text) nil)
+                 ((string-match "\\`[ \t]*\\(#[^']*\\)?\\'" text)
+                  (when (string-match "#" text)
+                    (let ((hash-pos (string-match "#" text))
+                          (prev (when (> (string-match "#" text) 0)
+                                  (aref text (1- (string-match "#" text))))))
+                      (ignore (not (= hash-pos indent))
+                              (not (memq prev '(?  ?\t)))))))
+                 (t
+                  ;; Detect block scalar indicators on the line before scanning.
+                  (when (string-match "\\([|>][-+]?\\([0-9]*\\)\\)\\([ \t]*#.*\\)?\\'" text)
+                    (setq block-indent indent))
+                  ;; Scan characters.
+                  (let ((i 0) (n (length text)) (first-nonspace t))
+                    (while (and (not bad) (< i n))
+                      (let ((ch (aref text i)))
+                        (cond
+                         (in-single
+                          (setq in-single nil))
+                         (in-double
+                          (setq in-double nil))
+                         ((eq ch ?#)
+                          (when (or first-nonspace
+                                    (and (> i 0)
+                                         (memq (aref text (1- i)) '(?  ?\t))))
+                            (setq i (1- n)))) ; skip rest of line as comment
+                         ((eq ch ?\') (setq in-single t))
+                         ((eq ch ?\") (setq in-double t))
+                         ((eq ch ?\[) (setq depth (1+ depth)))
+                         ((eq ch ?\])
+                          (setq depth (1- depth))
+                          (when (< depth 0)
+                            (setq bad (point))))
+                         ((eq ch ?\{) (setq depth (1+ depth)))
+                         ((eq ch ?\})
+                          (setq depth (1- depth))
+                          (when (< depth 0)
+                            (setq bad (point))))))
+                      (setq i (1+ i))
+                      (when (and (> i 0) (< i n)
+                                 (not (memq (aref text i) '(?  ?\t))))
+                        (setq first-nonspace nil)))))))
+              (when in-single (setq in-single nil))
+              (when in-double (setq in-double nil))
+              (forward-line 1)))
+          (and (not bad) (= depth 0)))))))
+
+(defun scalpel-locate-yaml--balanced-p (text)
+  "Structural validation for text produced by a file-substitute rewrite.
+YAML is a bracket-pairing-free language, so indentation and flow
+brackets are only an approximation of a :balanced-p answer; this
+function returns t if TEXT's YAML structure is acceptable, nil
+otherwise.  Pure Emacs Lisp scanning, no external YAML parser.
+
+Checks:
+1. No line's indentation may contain a Tab character.
+2. Skipping full-line comments (lines whose content, after
+   stripping indentation, starts with `#') and block scalar bodies
+   (lines following a key line ending with `|' or `>' whose
+   indentation is deeper than that key line), strip quoted strings
+   (skip paired single and double quotes) from the remaining lines
+   and scan flow collection brackets [ ] { } with a stack.  Any
+   mismatched closing bracket (empty stack or wrong top type) or a
+   non-empty stack at the end returns nil.  Return t otherwise."
+  (let ((lines (split-string text "\n" nil))
+        (block-scalar-indent nil)   ; indent of the key line opening a block scalar
+        (stack '())
+        (ok t))
+    (catch 'bad
+      (dolist (line lines)
+        (when (> (length line) 0)
+          (let ((idx 0)
+                (len (length line)))
+            ;; Measure indentation; reject Tab in indentation.
+            (while (and (< idx len)
+                        (eq (aref line idx) ?\s))
+              (setq idx (1+ idx)))
+            (when (and (< idx len)
+                       (eq (aref line idx) ?\t))
+              (setq ok nil)
+              (throw 'bad nil))
+            (let ((indent idx)
+                  (content (substring line idx)))
+              (cond
+               ;; Full-line comment: skip entirely.
+               ((string-prefix-p "#" content))
+               ;; Block scalar body: content indented deeper than the
+               ;; key line that opened the block scalar.
+               ((and block-scalar-indent (> indent block-scalar-indent)))
+               (t
+                ;; A key line ending with | or > opens a block scalar
+                ;; body; its body lines must be indented deeper.
+                (setq block-scalar-indent
+                      (and (> len 0)
+                           (let ((last (aref line (1- len))))
+                             (if (or (eq last ?\|) (eq last ?>))
+                                 indent
+                               nil))))
+                ;; Strip quoted strings and scan flow brackets.
+                (let ((i 0) (n (length content)))
+                  (while (< i n)
+                    (let ((ch (aref content i)))
+                      (cond
+                       ((or (eq ch ?\') (eq ch ?\"))
+                        ;; Skip a paired quote; doubled quote inside is
+                        ;; an escape for single-quoted strings.
+                        (let ((q ch) (j (1+ i)) (closed nil))
+                          (while (and (< j n) (not closed))
+                            (cond
+                             ;; Doubled quote escapes itself.
+                             ((and (eq q ?\') (eq (aref content j) ?\')
+                                   (< (1+ j) n)
+                                   (eq (aref content (1+ j)) ?\'))
+                              (setq j (+ j 2)))
+                             ((eq (aref content j) q)
+                              (setq closed t)
+                              (setq j (1+ j)))
+                             (t (setq j (1+ j)))))
+                          (setq i j)))
+                       ((eq ch ?\[) (push ?\] stack) (setq i (1+ i)))
+                       ((eq ch ?\{) (push ?\} stack) (setq i (1+ i)))
+                       ((or (eq ch ?\]) (eq ch ?\}))
+                        (if (or (null stack)
+                                (not (eq (car stack) ch)))
+                            (progn
+                              (setq ok nil)
+                              (throw 'bad nil))
+                          (pop stack)
+                          (setq i (1+ i))))
+                       (t (setq i (1+ i)))))))))))))
+      ;; Any unclosed bracket at end of scan is unbalanced.
+      (when stack
+        (setq ok nil)
+        (throw 'bad nil)))
+    ok))
+
 (provide 'scalpel-locate-yaml)
 
 ;;; scalpel-locate-yaml.el ends here

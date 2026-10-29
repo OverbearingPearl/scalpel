@@ -188,7 +188,8 @@ larger than the number of names the file holds."
  "\\.ya?ml\\'"
  (list :locate #'scalpel-locate-yaml-range
        :list-symbols #'scalpel-locate-yaml-list-symbols
-       :single-definition-p #'scalpel-locate-yaml--single-definition-p))
+       :single-definition-p #'scalpel-locate-yaml--single-definition-p
+       :balanced-p #'scalpel-locate-yaml--balanced-p))
 
 ;; Built-in Emacs Lisp provider.
 (scalpel-locate-register-provider

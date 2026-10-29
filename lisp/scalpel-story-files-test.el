@@ -83,6 +83,26 @@
               (error nil))
             (setq scalpel-agent--context-files nil)))
 
+;; Story D: renaming into a missing directory creates it.
+(ert-gwt-deftest
+  (:given ((root (make-temp-file "scalpel-story-files-" t))
+           (scalpel-agent--context-files nil)
+           (old (expand-file-name "old.el" root))
+           (new (expand-file-name "sub/dir/new.el" root))
+           (result nil))
+          (with-temp-file old (insert "old\n")))
+  (:when (setq result (scalpel-agent-file-rename old new)))
+  (:then (should (string-match-p "\\`.*Renamed.*\\'" result)))
+  (:then (should (file-exists-p new)))
+  (:then (should (string= "old\n"
+                          (with-temp-buffer
+                            (insert-file-contents new)
+                            (buffer-string)))))
+  (:then (should (not (file-exists-p old))))
+  (:cleanup (condition-case nil
+                (delete-directory root t)
+              (error nil))))
+
 (provide 'scalpel-story-files-test)
 
 ;;; scalpel-story-files-test.el ends here

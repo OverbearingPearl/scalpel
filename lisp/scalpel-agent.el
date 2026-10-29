@@ -1815,7 +1815,10 @@ action or a missing file."
   "Rename or move FILE to TO.
 Only the file is moved: the definitions inside it are untouched,
 and no other file's require, import or path string is updated.
-The destination must not already exist.  A buffer visiting FILE
+The destination must not already exist.  The parent directory of
+TO is created automatically, including any missing parents, so
+the rename can land in a directory that does not exist yet; a
+failure to create it is signalled as usual.  A buffer visiting FILE
 is saved first and then follows the rename.  A context entry for
 FILE moves with it, and a rename never adds a file the session did
 not already hold.  Return a human-readable report string.  Signal
@@ -1827,6 +1830,9 @@ existing destination."
     (user-error "Scalpel: can't rename %s: no such file" file))
   (when (file-exists-p to)
     (user-error "Scalpel: can't rename %s: %s already exists" file to))
+  (let ((dir (file-name-directory (expand-file-name to))))
+    (unless (file-exists-p dir)
+      (make-directory dir t)))
   (let ((buffer (find-buffer-visiting file))
         ;; Asked while the old path still names a file: the session tracks
         ;; files by their resolved path, and nothing can be resolved
