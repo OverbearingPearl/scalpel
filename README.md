@@ -456,6 +456,8 @@ We keep the same hygiene rules across every commit:
 - Every edit obeys the boundary lock and is visible in the console.
 - Tests mock every external interaction, including LLM calls.
 
+We gratefully acknowledge the two third-party packages Scalpel depends on: **gptel** and **toml**. Both are hard dependencies declared in `Package-Requires`, and this project would not function without them. Thanks to their maintainers and contributors.
+
 ---
 
 ## License
