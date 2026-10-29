@@ -14,8 +14,10 @@
 ;; buffer is a normal editable text buffer, so users can review prior turns.
 ;;
 ;; The console is also where the accompanying policy lives: edits take effect as
-;; the plan is dispatched, with no per-hunk approval, and shell commands run\n;; inside the sandbox without a prompt.  A round whose shell output is
-;; small flows straight back to the planner; only a noisy round stops to ask.
+;; the plan is dispatched, with no per-hunk approval, and shell
+;; commands run inside the sandbox without a prompt.  A round whose
+;; shell output is small flows straight back to the planner; only a
+;; noisy round stops to ask.
 ;;
 ;; Because nothing is approved beforehand, the buffer is also the record: every
 ;; edit report and shell report stays in it, so a session can be read back, and

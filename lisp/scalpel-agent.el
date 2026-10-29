@@ -19,8 +19,8 @@
 ;; approval, since `scalpel-execute' pins each replacement to a verified range.
 ;; Every action returns a human-readable report instead, which is the trace the
 ;; console keeps -- applying without asking is only defensible because the
-;; result is reported.  Shell commands run inside the sandbox, so their reach is bounded and
-;; no prompt is ever raised.
+;; result is reported.  Shell commands run inside the sandbox, so their
+;; reach is bounded and no prompt is ever raised.
 
 ;;; Code:
 

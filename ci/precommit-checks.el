@@ -197,7 +197,37 @@
             (push (format "heading comment (;;;) at line %d must be surrounded by blank lines"
                           (1+ i))
                   errors)))))
-    (nreverse errors)))
+    (setq errors (nreverse errors))
+    (append errors (p/commentary-line-errors))))
+
+(defun p/commentary-line-errors ()
+  "Return errors for commentary lines wider than 80 characters.
+Scans the `;;; Commentary' block: it starts at the `;;; Commentary'
+heading (a trailing colon, as in `;;; Commentary:', is allowed) and
+ends at the next `;;;' heading line.  Autoload cookie lines (e.g.
+`;;;###autoload') are neither headings nor block terminators; they
+are still width-checked as commentary lines."
+  (save-excursion
+    (goto-char (point-min))
+    (let ((errs '())
+          (in-block nil))
+      (while (not (eobp))
+        (let ((line (buffer-substring-no-properties
+                     (line-beginning-position)
+                     (line-end-position))))
+          (cond
+           ((string-match-p "\\`;;;[ \t]*Commentary:?[ \t]*\\'" line)
+            (setq in-block t))
+           ((and in-block (string-match-p "\\`;;;[ \t]+[^;\t\n]" line))
+            ;; A real `;;;' heading (has a space after the semicolons)
+            ;; terminates the block; `;;;###autoload' does not.
+            (setq in-block nil)))
+          (when (and in-block (> (length line) 80))
+            (push (format "commentary line wider than 80 characters (line %d)"
+                          (line-number-at-pos))
+                  errs)))
+        (forward-line 1))
+      (nreverse errs))))
 
 (defvar p/repo-root-cache nil
   "Cached repository toplevel directory.")
