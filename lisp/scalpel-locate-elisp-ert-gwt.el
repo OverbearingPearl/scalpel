@@ -16,10 +16,18 @@
 ;; reads only the file-local property that `ert-gwt-deftest' expansion
 ;; already records on each generated symbol.
 
+;; ert-gwt is not on MELPA yet, so a hard `require' here breaks CI
+;; environments (melpazoid) that lack it.  Load it opportunistically
+;; instead: when it is absent the definer still registers, but name
+;; extraction quietly yields nil until ert-gwt is available.
+
 ;;; Code:
 
 (require 'scalpel-locate-elisp)
-(require 'ert-gwt)
+
+(condition-case nil
+    (require 'ert-gwt)
+  (file-missing nil))
 
 (defun scalpel-locate-elisp-ert-gwt--names (file)
   "Return, in source order, the ert-gwt test names defined in FILE.
@@ -36,8 +44,11 @@ tools like this locator.  The prefix does not depend on FILE, so
 generated names are determined solely by clause content and stay
 deterministic regardless of the file's own name.  No evaluation,
 no loading, and no session state is touched.  Return nil when
-FILE is nil or the file contains no `ert-gwt-deftest' call."
-  (when (and file (file-readable-p file))
+FILE is nil, the file contains no `ert-gwt-deftest' call, or
+ert-gwt is not loaded in this Emacs."
+  (when (and file
+             (file-readable-p file)
+             (fboundp 'ert-gwt-name-from-clauses))
     (let ((names nil)
           (seen (make-hash-table :test 'equal)))
       (with-temp-buffer
