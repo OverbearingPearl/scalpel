@@ -772,6 +772,17 @@ theme-adapted light background; other roles get no face."
                        '(scalpel-console-role scalpel-console-output
                          scalpel-console-collapsed display face))))
 
+(defun scalpel-console--model-tag ()
+  "Return a display tag for the current `gptel-model', like \"<gpt-4o>\".
+Return \"\" when the variable is unbound, nil, or an empty
+string.  Symbol and string values wrap identically in angle
+brackets.  Display text only: carries no dialect-dispatch
+meaning."
+  (let ((model (bound-and-true-p gptel-model)))
+    (if (or (null model) (equal model ""))
+        ""
+      (format "<%s>" model))))
+
 (defun scalpel-console--trim-report (text)
   "Replace the fenced body of a report in TEXT with a placeholder.
 TEXT is one assistant turn as recorded in the console buffer.  Only
@@ -1844,7 +1855,8 @@ holds the real paths the user typed."
                        ;; history it records -- always holds real paths,
                        ;; so the next round never round-trips a placeholder.
                        (scalpel-console--append
-                        (format "Scalpel: %s"
+                        (format "Scalpel%s: %s"
+                                (scalpel-console--model-tag)
                                 (scalpel-redact-restore
                                  (plist-get round-result :report)))
                         'assistant))
