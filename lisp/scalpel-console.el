@@ -1321,9 +1321,17 @@ expansion through gitignore rules."
     (let ((candidates scalpel-agent--context-files))
       (if (null candidates)
           (message "Scalpel: context is empty")
-        (let ((path (completing-read "Remove from Scalpel context: "
-                                     candidates nil nil)))
-          (scalpel-agent-context-remove path)
+        (let* ((dirs (delete-dups
+                      (mapcar #'file-name-directory candidates)))
+               (path (completing-read "Remove from Scalpel context: "
+                                      (append candidates dirs) nil nil))
+               (targets (if (member path dirs)
+                            (seq-filter (lambda (file)
+                                          (string-prefix-p path file))
+                                        candidates)
+                          (list path))))
+          (dolist (target targets)
+            (scalpel-agent-context-remove target))
           (scalpel-console--show-context))))))
 
 (defun scalpel-console-forget-history (&optional no-confirm)

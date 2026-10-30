@@ -54,6 +54,26 @@
   (:cleanup (setq scalpel-agent--context-files nil)
             (condition-case nil (delete-directory root t) (error nil))))
 
+(ert-gwt-deftest
+  (:given ((root (file-name-as-directory (make-temp-file "scalpel-gwt-" t)))
+           (sub (expand-file-name "sub" root))
+           (a (expand-file-name "a.txt" sub))
+           (b (expand-file-name "b.txt" sub))
+           (c (expand-file-name "c.txt" root)))
+          (make-directory sub t)
+          (with-temp-file a (insert "a"))
+          (with-temp-file b (insert "b"))
+          (with-temp-file c (insert "c"))
+          (setq scalpel-agent--context-files nil)
+          (scalpel-agent-context-add root))
+  (:when (scalpel-agent-context-remove (expand-file-name "sub/*.txt" root)))
+  (:then (should (not (member (file-truename a) scalpel-agent--context-files))))
+  (:then (should (not (member (file-truename b) scalpel-agent--context-files))))
+  (:then (should (member (file-truename c) scalpel-agent--context-files)))
+  (:cleanup (progn
+              (setq scalpel-agent--context-files nil)
+              (delete-directory root t))))
+
 (provide 'scalpel-story-context-test)
 
 ;;; scalpel-story-context-test.el ends here

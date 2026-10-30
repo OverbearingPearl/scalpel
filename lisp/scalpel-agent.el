@@ -396,29 +396,39 @@ gitfile (worktree or submodule)."
 
 (defun scalpel-agent--expanded-files (path &optional ignore-gitignore)
   "Return the file list that PATH expands to.
-PATH is a regular file or a directory.  A regular file is
-returned as-is.  Directory contents respect gitignore unless
-IGNORE-GITIGNORE is non-nil.  After expansion, directory results
-have files matched by .scalpelignore removed; the ignore file is
-looked up in the directory itself.  `scalpel-agent--scalpel-ignore-files'
-returns the set to remove; the kept set is the difference of the two."
-  (let* ((path (file-truename (expand-file-name path)))
-         (files
-          (cond
-           ((file-regular-p path) (list path))
-           ((file-directory-p path)
-            (let ((candidates
-                   (cond
-                    (ignore-gitignore (scalpel-agent--walk-all-files path))
-                    ((scalpel-agent--git-toplevel path)
-                     (scalpel-agent--git-listed-files path))
-                    (t (scalpel-agent--walk-all-files path)))))
-              (cl-set-difference
-               candidates
-               (scalpel-agent--scalpel-ignore-files candidates path)
-               :test #'string=)))
-           (t nil))))
-    files))
+PATH is a regular file, a directory, or a shell-style glob
+containing `*', `?' or `['.  A regular file is returned as-is.
+A glob is expanded with `file-expand-wildcards'; each match is
+processed recursively through this same function.  Directory
+contents respect gitignore unless IGNORE-GITIGNORE is non-nil.
+After expansion, directory results have files matched
+by .scalpelignore removed; the ignore file is looked up in the
+directory itself.  `scalpel-agent--scalpel-ignore-files' returns
+the set to remove; the kept set is the difference of the two."
+  (if (string-match-p "[*?[]" path)
+      (let (result)
+        (dolist (match (file-expand-wildcards path))
+          (setq result
+                (nconc result
+                       (scalpel-agent--expanded-files match ignore-gitignore))))
+        result)
+    (let* ((path (file-truename (expand-file-name path)))
+           (files
+            (cond
+             ((file-regular-p path) (list path))
+             ((file-directory-p path)
+              (let ((candidates
+                     (cond
+                      (ignore-gitignore (scalpel-agent--walk-all-files path))
+                      ((scalpel-agent--git-toplevel path)
+                       (scalpel-agent--git-listed-files path))
+                      (t (scalpel-agent--walk-all-files path)))))
+                (cl-set-difference
+                 candidates
+                 (scalpel-agent--scalpel-ignore-files candidates path)
+                 :test #'string=)))
+             (t nil))))
+      files)))
 
 (defun scalpel-agent-context-reset ()
   "Clear the session context."
@@ -454,11 +464,18 @@ expanded to."
 
 (defun scalpel-agent-context-remove (path)
   "Remove PATH from the session context.
-PATH is a file or a directory; a directory removes every file under
-it.  No-op with a message when nothing matched."
-  (let* ((path (file-truename (expand-file-name path)))
-         (prefix (file-name-as-directory path))
-         (match-p (lambda (f) (or (string= f path) (string-prefix-p prefix f))))
+PATH is a file, a directory, or a shell-style glob.  A glob is
+expanded with `file-expand-wildcards'; a directory removes every
+file under it.  No-op with a message when nothing matched."
+  (let* ((spec (expand-file-name path))
+         (expanded (if (cl-some (lambda (c) (memq c '(?* ?? ?\[))) spec)
+                       (mapcar #'file-truename (file-expand-wildcards spec))
+                     (list (file-truename spec))))
+         (prefixes (mapcar #'file-name-as-directory
+                           (cl-remove-if-not #'file-directory-p expanded)))
+         (match-p (lambda (f)
+                    (or (member f expanded)
+                        (cl-some (lambda (p) (string-prefix-p p f)) prefixes))))
          (removed (cl-remove-if-not match-p scalpel-agent--context-files)))
     (if (null removed)
         (message "Scalpel: %s is not in the context" path)
