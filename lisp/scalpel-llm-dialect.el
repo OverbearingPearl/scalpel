@@ -263,7 +263,7 @@ plain `user-error'."
 		      "\n@scalpel@ end of error"))
 		(suggestion (when-let* ((repair (scalpel-diagnose-advice-mechanical-repair (list :type (quote parse) :input raw))))
 			      (concat "\n" repair))))
-	    (user-error (concat msg (or suggestion ""))))
+	    (user-error "%s" (concat msg (or suggestion ""))))
 	(let ((msg (concat
 		    "Scalpel: planner wrongly sent a reply cut off before its TOML "
 		    "document closed (likely the backend's output limit); nothing "
@@ -275,7 +275,7 @@ plain `user-error'."
 		    "\n@scalpel@ end of error"))
 	      (suggestion (when-let* ((repair (scalpel-diagnose-advice-mechanical-repair (list :type (quote parse) :input raw))))
 			    (concat "\n" repair))))
-	  (user-error (concat msg (or suggestion ""))))))
+	  (user-error "%s" (concat msg (or suggestion ""))))))
      ((and (zerop fences)
 	   (not (string-match-p
 		 "\\(\\`\\|[\r\n]\\)[ \t]*[A-Za-z_][A-Za-z0-9_.-]*[ \t]*="
@@ -304,7 +304,7 @@ plain `user-error'."
 		  "\n@scalpel@ end of error"))
 	    (suggestion (when-let* ((repair (scalpel-diagnose-advice-mechanical-repair (list :type (quote parse) :input raw))))
 			  (concat "\n" repair))))
-	(user-error (concat msg (or suggestion "")))))
+	(user-error "%s" (concat msg (or suggestion "")))))
      (t
       (let ((msg (concat
 		  "Scalpel: planner wrongly returned invalid TOML.  The reply "
@@ -316,7 +316,7 @@ plain `user-error'."
 		  "\n@scalpel@ end of error"))
 	    (suggestion (when-let* ((repair (scalpel-diagnose-advice-mechanical-repair (list :type (quote parse) :input raw))))
 			  (concat "\n" repair))))
-	(user-error (concat msg (or suggestion ""))))))))
+	(user-error "%s" (concat msg (or suggestion ""))))))))
 
 (defun scalpel-llm-dialect--validate-string-delimiters (raw)
   "Validate string delimiters in the raw TOML document RAW."
@@ -401,18 +401,22 @@ plain `user-error'."
 
 (defun scalpel-llm-dialect--default-parse (raw)
   "Parse RAW to a list of action plists with the default dialect.
-RAW is the planner's whole TOML reply.  It is written verbatim to
-a temp file and parsed with `toml:read-from-file' in one round
-trip, and mirrored verbatim into a raw-TOML echo buffer named
-after the thinking buffer so the reader sees exactly what the
-planner wrote.  The string-delimiter validator runs before TOML
-parsing and reports delimiter violations with a useful diagnostic
-and, when safe, a mechanically repaired suggestion fence.  The
-contract is TOML: the parsed document is an alist of pairs
-\\(STRING-KEY . VALUE).  Either an [[action]] table array or a single
-top-level table carrying a `tool' key is accepted; each table's
-fields become the action plist keys.  Every unrelated TOML failure
-is routed through `scalpel-llm-dialect--parse-error'."
+RAW is the planner's whole reply.  Wrapper text around the document
+is shed before parsing, without guessing at markers: everything
+before the first [[action]] header is dropped whole, then at most
+eight trailing lines are dropped one at a time until the TOML parser
+accepts the text as an action document.  A reply that carries the
+document intact but wrongly wrapped -- prose in front, a stray
+closing tag or fence behind -- therefore still runs.  The echo
+buffer shows and every error reports the reply as received,
+unmodified.  The string-delimiter validator runs before TOML parsing
+and reports delimiter violations with a useful diagnostic and, when
+safe, a mechanically repaired suggestion fence.  The contract is
+TOML: the parsed document is an alist of pairs \\(STRING-KEY .
+VALUE).  Either an [[action]] table array or a single top-level table
+carrying a `tool' key is accepted; each table's fields become the
+action plist keys.  Every unrelated TOML failure is routed through
+`scalpel-llm-dialect--parse-error'."
   (when (string-empty-p (string-trim raw))
     ;; An empty reply is a backend failure, not a TOML syntax problem:
     ;; naming TOML here would send the user hunting for a syntax error
@@ -428,37 +432,65 @@ API key, quota and network, then retry"))
          (temp-file nil)
          (result nil)
          ;; Read KEY from an alist TABLE as produced by
-         ;; `toml:read-from-file'; return nil when absent.
+         ;; `toml:read-from-string'; return nil when absent.
          (table-value (lambda (table key) (cdr (assoc key table))))
-         ;; Comment the prose note ahead of the first table header so
-         ;; the parser accepts the reply and the reader sees the same
-         ;; commented text.
-         (raw-text raw))
+         ;; The contract shape: a non-empty alist holding either an
+         ;; [[action]] table array or a top-level `tool' key.
+         (action-document-p
+          (lambda (value)
+            (and (listp value)
+                 (cl-every #'consp value)
+                 (or (assoc "action" value)
+                     (assoc "tool" value)))))
+         ;; Longest prefix of RAW the parser accepts as an action
+         ;; document, or RAW itself when none does.  The head is the
+         ;; deterministic cut before the first [[action]] header; the
+         ;; tail is trimmed line by line, bounded to eight lines so a
+         ;; reply that parses nowhere cannot make this loop unbounded.
+         (raw-text
+          (let* ((head (save-match-data
+                         (if (string-match
+                              "^[ \t]*\\[\\[action\\]\\]" raw)
+                             (substring raw (match-beginning 0))
+                           raw)))
+                 (lines (split-string head "\n"))
+                 (limit (min 8 (length lines))))
+            (or (cl-loop for dropped from 0 to limit
+                         for candidate
+                         = (mapconcat #'identity
+                                      (if (zerop dropped)
+                                          lines
+                                        (butlast lines dropped))
+                                      "\n")
+                         when (funcall
+                               action-document-p
+                               (condition-case nil
+                                   (toml:read-from-string candidate)
+                                 (error nil)))
+                         return candidate)
+                raw))))
     ;; Mirror RAW verbatim so failures can be read against the reply
     ;; the planner actually wrote, unmodified.
     (with-current-buffer echo-buffer
       (let ((inhibit-read-only t))
         (erase-buffer)
-        (insert raw-text)))
+        (insert raw)))
     (unwind-protect
         (progn
           ;; Reject malformed string delimiters before TOML parsing.
           ;; The validator supplies a useful diagnostic and, when safe,
           ;; a mechanically repaired suggestion fence.
-          (scalpel-llm-dialect--validate-string-delimiters raw)
-          ;; Write RAW verbatim and parse in a single round trip.
+          (scalpel-llm-dialect--validate-string-delimiters raw-text)
+          ;; Write the tolerated text and parse in a single round trip.
           (setq temp-file (make-temp-file "scalpel-toml"))
           (with-temp-file temp-file
             (insert raw-text))
           (setq result (condition-case nil (toml:read-from-file temp-file) (error nil)))
-          (unless (and (listp result)
-                       (cl-every #'consp result))
+          (unless (funcall action-document-p result)
             (scalpel-llm-dialect--parse-error raw))
           ;; Either an [[action]] table array or a single top-level
           ;; table with a `tool' key is a valid contract shape.
           (let ((raw-actions (funcall table-value result "action")))
-            (unless (or (funcall table-value result "tool") raw-actions)
-              (scalpel-llm-dialect--parse-error raw))
             (when (vectorp raw-actions)
               (setq raw-actions (append raw-actions nil)))
             (when (and (null raw-actions)

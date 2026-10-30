@@ -375,7 +375,7 @@ Applies `scalpel-redact-apply' before returning."
                                           (mapconcat #'identity parsed-lines
                                                      "\n"))))
                       ;; Keep only segments that parse and carry a tool key.
-                      (when (and table (gethash "tool" table))
+                      (when (and table (or (assoc "tool" table) (assoc "action" table)))
                         (push parsed-lines kept))))))))
             (setq kept (nreverse kept))
             (when (and ok kept)
