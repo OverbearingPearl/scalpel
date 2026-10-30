@@ -3152,7 +3152,7 @@ can offer block-edit as the retry."
                   (progn
                     (require 'scalpel-lineage nil t)
                     (when (fboundp 'scalpel-lineage-note)
-                      (funcall 'scalpel-lineage-note
+                      (funcall #'scalpel-lineage-note
                                'file-substitute
                                resolved
                                old
@@ -3280,7 +3280,7 @@ the substitution is applied directly, subject to a confirmation
 threshold gate unless unattended.  Both file-substitute and the
 apply-after-dry-run path are subject to the confirmation
 threshold unless unattended: when the total match count meets
-scalpel-agent-file-substitute-confirm-threshold, the user is asked
+`scalpel-agent-file-substitute-confirm-threshold', the user is asked
 before the substitution is applied.  A rejected or unclear
 review is reported as a self-healable substitution-preview-mismatch
 planner error so the action can be revised.  Callbacks run outside

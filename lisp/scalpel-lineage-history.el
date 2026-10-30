@@ -291,7 +291,7 @@ back to any point of the recorded history."
   (interactive)
   (let ((buf (get-buffer-create scalpel-lineage-history--buffer-name)))
     (with-current-buffer buf
-      (unless (eq major-mode 'scalpel-lineage-history-mode)
+      (unless (derived-mode-p 'scalpel-lineage-history-mode)
         (kill-all-local-variables)
         (setq major-mode 'scalpel-lineage-history-mode
               mode-name "Scalpel-Lineage-History")

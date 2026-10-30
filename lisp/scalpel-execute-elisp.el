@@ -36,7 +36,7 @@ unchanged: there is then no line above it to carry."
     (goto-char beg)
     (if (not (bolp))
         beg
-      (while (and (> (point) (point-min))
+      (while (and (not (bobp))
                   (save-excursion
                     (forward-line -1)
                     (looking-at-p scalpel-execute-elisp--cookie-regexp)))

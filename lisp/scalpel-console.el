@@ -689,7 +689,7 @@ occupied."
                  ;; (following the tail) before the rewrite; save-excursion
                  ;; would otherwise restore an integer position that lands
                  ;; inside the rewritten spinner line.
-                 (let ((follow-tail (= (point) (point-max))))
+                 (let ((follow-tail (eobp)))
                    (save-excursion
                      (let ((inhibit-read-only t))
                        (goto-char beg)
@@ -1087,7 +1087,7 @@ previous report's output, so the previous body stops being sent."
       ;; Read the user's position BEFORE moving: whether the user was
       ;; reading the end is decided from where they actually were, and
       ;; the move below then places the insertion at the end.
-      (let* ((follow (>= (point) (point-max)))
+      (let* ((follow (eobp))
              ;; A marker, not a position: the insert below shifts it,
              ;; and the user's place in the history must follow the
              ;; text they were reading, not the byte offset.
@@ -1099,7 +1099,7 @@ previous report's output, so the previous body stops being sent."
           ;; role runs would merge and only the first output fence of
           ;; the merged block would ever be trimmed or marked.
           (when (and role
-                     (> (point) (point-min))
+                     (not (bobp))
                      (eq (get-text-property (1- (point))
                                             'scalpel-console-role)
                          role))
@@ -1202,7 +1202,7 @@ buffer, so one call never leaves a half-expanded console."
             ;; call folds.  `expand' names the action to take, not the
             ;; state found.
             (setq found t
-                  expand (not (null (get-text-property pos 'display)))))
+                  expand (get-text-property pos 'display)))
           (setq pos next)))
       (when found
         (setq pos (point-min))
@@ -1629,7 +1629,7 @@ that path."
                (generate-new-buffer-name (scalpel-console--buffer-name root mnemonic)))))
     (switch-to-buffer buf)
     (setq buffer-read-only nil)
-    (unless (eq major-mode 'scalpel-console-mode)
+    (unless (derived-mode-p 'scalpel-console-mode)
       (scalpel-console-mode))
     (setq-local scalpel-console--root root)
     (setq-local default-directory root)
@@ -2285,7 +2285,7 @@ after %s: %s."
                                   (or (plist-get round-result :shells)
                                       (plist-get round-result :reads)
                                       (plist-get round-result :changes))))
-                            (finish-operation (not (null round-result))))
+                            (finish-operation round-result))
                            ((>= round round-limit)
                             (if (unattended-p)
                                 (progn
@@ -2338,7 +2338,7 @@ before the prompt is inserted."
   (with-current-buffer (scalpel-console--target-buffer)
     (scalpel-console--delete-pending-input-regions)
     (goto-char (point-max))
-    (insert (concat scalpel-prompt--decide-for-me "\n"))
+    (insert scalpel-prompt--decide-for-me "\n")
     (scalpel-console-send-line)))
 
 (defun scalpel-console-send-replan ()
@@ -2378,7 +2378,7 @@ purpose, beside the planner's other prompt text."
   (with-current-buffer (scalpel-console--target-buffer)
     (scalpel-console--delete-pending-input-regions)
     (goto-char (point-max))
-    (insert (concat scalpel-prompt--summarize "\n"))
+    (insert scalpel-prompt--summarize "\n")
     (scalpel-console-send-line)))
 
 (defun scalpel-console-send-retry ()
@@ -2390,7 +2390,7 @@ Unsent pending input is discarded first, so the fixed prompt is sent alone."
   (with-current-buffer (scalpel-console--target-buffer)
     (scalpel-console--delete-pending-input-regions)
     (goto-char (point-max))
-    (insert (concat scalpel-prompt--retry "\n"))
+    (insert scalpel-prompt--retry "\n")
     (scalpel-console-send-line)))
 
 (defun scalpel-console-send-resume ()

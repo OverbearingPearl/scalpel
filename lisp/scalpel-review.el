@@ -97,7 +97,7 @@ is struck through the same way afterwards."
           (goto-char (next-single-property-change
                       pos 'scalpel-review-record nil (point-max)))
           (catch 'blocked
-            (while (< (point) (point-max))
+            (while (not (eobp))
               (let* ((beg (point))
                      (newer (get-text-property beg 'scalpel-review-record))
                      (end (next-single-property-change
@@ -505,12 +505,11 @@ a reused window never leaves the cursor at the end."
               (scalpel-lineage-changes)))))
       (with-current-buffer buf
         (setq buffer-read-only nil)
-        (unless (eq major-mode 'scalpel-review-mode)
-          (progn
-            (kill-all-local-variables)
-            (setq major-mode 'scalpel-review-mode
-                  mode-name "Scalpel-Review")
-            (use-local-map scalpel-review-mode-map)))
+        (unless (derived-mode-p 'scalpel-review-mode)
+          (kill-all-local-variables)
+          (setq major-mode 'scalpel-review-mode
+                mode-name "Scalpel-Review")
+          (use-local-map scalpel-review-mode-map))
         (let ((scalpel-agent--context-files nil)
               (scalpel-lineage--records records))
           (ignore scalpel-agent--context-files

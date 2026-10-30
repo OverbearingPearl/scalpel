@@ -37,7 +37,7 @@ when SYMBOL is absent."
         (let ((beg (match-beginning 0)))
           (goto-char beg)
           (end-of-line)
-          (when (< (point) (point-max))
+          (when (not (eobp))
             (forward-char 1))
           (cons beg (point)))))))
 

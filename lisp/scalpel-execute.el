@@ -130,13 +130,13 @@ boundary there is no second definition for a blank line to separate
 the survivor from.  Return nil."
   (let ((after-end (save-excursion
                      (goto-char pos)
-                     (while (and (< (point) (point-max))
+                     (while (and (not (eobp))
                                  (looking-at "[ \t]*\n"))
                        (forward-line 1))
                      (point)))
         (before-start (save-excursion
                         (goto-char pos)
-                        (while (and (> (point) (point-min))
+                        (while (and (not (bobp))
                                     (save-excursion
                                       (forward-line -1)
                                       (looking-at "[ \t]*$")))
@@ -205,7 +205,7 @@ NEW-TEXT is structurally unbalanced."
     ;; when both edges are code; an existing blank line is left alone.
     ;; At `point-max' there is no following definition to separate
     ;; the insertion from, so no blank line is added.
-    (when (and (< (point) (point-max))
+    (when (and (not (eobp))
                (not (scalpel-execute--blank-line-p (point)))
                (save-excursion (forward-line -1)
                                (not (scalpel-execute--blank-line-p (point)))))

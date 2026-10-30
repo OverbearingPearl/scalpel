@@ -269,7 +269,7 @@ never returns at all."
           (while (progn (skip-chars-forward " \t\n\r")
                         (forward-comment 1)
                         (skip-chars-forward " \t\n\r")
-                        (< (point) (point-max)))
+                        (not (eobp)))
             (let* ((from (point))
                    (next (scan-sexps from 1)))
               ;; `scan-sexps' returns the end of the form without moving

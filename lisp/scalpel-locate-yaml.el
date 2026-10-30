@@ -58,7 +58,7 @@ lines are excluded.  Return nil when SYMBOL is absent."
           ;; The block ends at the next line that starts without
           ;; indentation: a top-level key or a document marker.
           (forward-line 1)
-          (while (and (< (point) (point-max))
+          (while (and (not (eobp))
                       (or (looking-at-p "[ \t]")
                           (looking-at-p "[ \t]*$")))
             (forward-line 1))

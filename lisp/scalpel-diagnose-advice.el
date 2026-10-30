@@ -52,10 +52,16 @@ next round; the refusal is what frees the retry, so nothing is
 broken.  To try again anyway: C-c C-e")
     (pattern-no-match
      . "the pattern matched nothing in any file, so nothing was
-executed.  The target text may already have been rewritten by an
-earlier round, leaving the pattern stale.  The planner must
-re-read the file with file-peek to confirm the current text
-before rewriting the pattern or giving up; resending the
+executed.  The commonest cause is an Emacs-style escaped
+grouping parenthesis: a pattern written as \\(group\\) is a
+literal paren in Perl, where grouping parentheses are written
+bare as (group), so the escaped form matches nothing where the
+group was meant.  The target text may also already have been
+rewritten by an earlier round, leaving the pattern stale.  The
+planner must re-read the file with file-peek to confirm the
+current text, rewrite the pattern with bare grouping
+parentheses, compile-test the corrected pattern in Perl before
+resending, and only then re-emit the action; resending the
 identical action only repeats the refusal")
     (tool-call
      . "the planner violated the output contract by wrapping its answer
@@ -318,9 +324,9 @@ Applies `scalpel-redact-apply' before returning."
      ((eq type 'no-such-symbol)
       (when (string-match
              (rx "No such symbol:" (one-or-more blank)
-                 (group (one-or-more (not (any "." ","))))
+                 (group (one-or-more (not (in "." ","))))
                  ", did you mean:" (one-or-more blank)
-                 (group (one-or-more (not (any ".")))))
+                 (group (one-or-more (not (in ".")))))
              message)
         (let ((bad-symbol (match-string 1 message))
               (good-symbol (match-string 2 message)))
