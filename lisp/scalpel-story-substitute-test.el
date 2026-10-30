@@ -23,6 +23,23 @@
 (ert-gwt-deftest
   (:given ((root (make-temp-file "scalpel-story-" t))
            (a (expand-file-name "a.el" root))
+           (scalpel-agent--context-files nil))
+          (with-temp-file a (insert "(defun alpha () 1)\n"))
+          (scalpel-agent-context-add a))
+  (:when (setq scalpel-story-substitute-test-report
+               (scalpel-agent-file-substitute
+                (list a) "alpha" "(regexp \"[^.$1]\")")))
+  (:then (should (string-search
+                  "(regexp \"[^.$1]\")"
+                  (with-temp-buffer
+                    (insert-file-contents a)
+                    (buffer-string)))))
+  (:cleanup (delete-directory root t)
+            (setq scalpel-agent--context-files nil)))
+
+(ert-gwt-deftest
+  (:given ((root (make-temp-file "scalpel-story-" t))
+           (a (expand-file-name "a.el" root))
            (b (expand-file-name "b.el" root))
            (scalpel-agent--context-files nil))
           (with-temp-file a (insert "(defun old-name () 1)\n"))

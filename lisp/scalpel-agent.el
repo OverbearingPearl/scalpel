@@ -2431,9 +2431,13 @@ literal, \\1..\\9 and \\& are capture references of this engine;
 these four are the only escapes supported.  Any other escape such
 as \\n or \\t is rejected with a `user-error' listing all
 unsupported escapes and suggesting the real character be written
-literally (e.g. an actual newline instead of \\n).  Any bare $ is
-rejected with an error naming its position and advising \\$ or
-\\N.  Return nil when valid."
+literally (e.g. an actual newline instead of \\n).
+
+A bare dollar sign is ordinary text, never a capture reference:
+this engine spells captures with backslash digits, never with $N,
+so a replacement carrying a literal $ -- an elisp regexp such as
+\"[^.$1]\", say -- is accepted exactly as written.  Return nil when
+valid."
   (let ((i 0)
         (len (length replacement))
         (unsupported '()))
@@ -2453,10 +2457,7 @@ rejected with an error naming its position and advising \\$ or
                 ;; Trailing backslash: harmless literal, skip.
                 )
               (setq i (1+ i)))
-          (if (= ch ?$)
-              (error "Scalpel replacement pre-check: bare $ at position %d in replacement %S; use \\$ for a literal dollar or \\N for a capture reference"
-                     i replacement)
-            (setq i (1+ i))))))
+          (setq i (1+ i)))))
     (when unsupported
       (user-error "Scalpel replacement pre-check: unsupported escape sequences in replacement %S: %s; these are legal in perl itself, but Scalpel expands the replacement as a plain string, so only \\$, \\\\, \\1..\\9 and \\& are supported here -- write the real character instead (e.g. an actual newline rather than \\n)"
                   replacement
