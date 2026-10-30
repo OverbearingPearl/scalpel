@@ -326,7 +326,10 @@ Inside the console:
 - `C-c C-c` – also send the pending instruction
 - `C-c C-k` – cancel the in-flight request
 - `C-c C-b` – switch the active gptel backend (model) for future requests
-- `C-c C-a` – add a file or directory to the context (read-only)
+- `C-c C-a` – add a file or directory to the context (writable)
+- `C-c C-A` – add a file or directory to the context read-only: the agent
+  can read it, but no mutation tool may write it; adding the same path
+  again with `C-c C-a` lifts the restriction
 - `C-c C-d` – remove a file or directory from the context
 - `C-c C-r` – clear the context
 - `C-c C-f` – forget the conversation; keeps the context files

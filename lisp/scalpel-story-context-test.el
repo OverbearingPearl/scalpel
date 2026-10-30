@@ -74,6 +74,97 @@
               (setq scalpel-agent--context-files nil)
               (delete-directory root t))))
 
+(ert-gwt-deftest
+  (:given ((root (make-temp-file "context-gwt-" t))
+           (path (expand-file-name "readonly.txt" root))
+           (scalpel-agent--context-files nil)
+           (scalpel-agent--context-readonly-files nil))
+          (with-temp-file path (insert "read only")))
+  (:when (scalpel-agent-context-add-readonly path))
+  (:then (should (member (file-truename path)
+                         (mapcar #'file-truename
+                                 scalpel-agent--context-files))))
+  (:then (should (member (file-truename path)
+                         (mapcar #'file-truename
+                                 scalpel-agent--context-readonly-files))))
+  (:cleanup (setq scalpel-agent--context-files nil
+                  scalpel-agent--context-readonly-files nil)
+            (delete-directory root t)))
+
+(ert-gwt-deftest
+  (:given ((temp-dir (make-temp-file "context-gwt-" t))
+           (temp-file (expand-file-name "upgrade.txt" temp-dir))
+           (scalpel-agent--context-files nil)
+           (scalpel-agent--context-readonly-files nil))
+          (with-temp-file temp-file (insert "upgrade"))
+          (scalpel-agent-context-add-readonly temp-file))
+  (:when (scalpel-agent-context-add temp-file))
+  (:then (should (member (file-truename temp-file)
+                         (mapcar #'file-truename
+                                 scalpel-agent--context-files))))
+  (:then (should (not (member (file-truename temp-file)
+                              scalpel-agent--context-readonly-files))))
+  (:cleanup (setq scalpel-agent--context-files nil
+                  scalpel-agent--context-readonly-files nil)
+            (delete-directory temp-dir t)))
+
+(ert-gwt-deftest
+  (:given ((temp-dir (make-temp-file "context-gwt-" t))
+           (temp-file (expand-file-name "removeme.txt" temp-dir))
+           (scalpel-agent--context-files nil)
+           (scalpel-agent--context-readonly-files nil))
+          (with-temp-file temp-file (insert "remove me"))
+          (scalpel-agent-context-add-readonly temp-file))
+  (:when (scalpel-agent-context-remove temp-file))
+  (:then (should (not (member (file-truename temp-file)
+                              (mapcar #'file-truename
+                                      scalpel-agent--context-files)))))
+  (:then (should (not (member (file-truename temp-file)
+                              (mapcar #'file-truename
+                                      scalpel-agent--context-readonly-files)))))
+  (:cleanup (setq scalpel-agent--context-files nil
+                  scalpel-agent--context-readonly-files nil)
+            (delete-directory temp-dir t)))
+
+(ert-gwt-deftest
+  (:given ((temp-dir (make-temp-file "context-gwt-" t))
+           (temp-file (expand-file-name "reset.txt" temp-dir))
+           (_ (with-temp-file temp-file (insert "reset")))
+           (_ (setq scalpel-agent--context-files nil
+                    scalpel-agent--context-readonly-files nil))
+           (_ (scalpel-agent-context-add-readonly temp-file))))
+  (:when (scalpel-agent-context-reset))
+  (:then (should (null scalpel-agent--context-files)))
+  (:then (should (null scalpel-agent--context-readonly-files)))
+  (:cleanup (setq scalpel-agent--context-files nil
+                  scalpel-agent--context-readonly-files nil)
+            (delete-directory temp-dir t)))
+
+(ert-gwt-deftest
+  (:given ((temp-dir (make-temp-file "context-gwt-" t))
+           (file-gone (expand-file-name "gone.txt" temp-dir))
+           (file-kept (expand-file-name "kept.txt" temp-dir))
+           (_ (with-temp-file file-gone (insert "gone")))
+           (_ (with-temp-file file-kept (insert "kept")))
+           (_ (setq scalpel-agent--context-files nil
+                    scalpel-agent--context-readonly-files nil))
+           (_ (scalpel-agent-context-add-readonly file-gone))
+           (_ (scalpel-agent-context-add-readonly file-kept))
+           (_ (delete-file file-gone))))
+  (:when (scalpel-agent-context-prune-missing))
+  (:then (should (not (member (file-truename file-gone)
+                              (mapcar #'file-truename
+                                      scalpel-agent--context-readonly-files)))))
+  (:then (should (member (file-truename file-kept)
+                         (mapcar #'file-truename
+                                 scalpel-agent--context-readonly-files))))
+  (:then (should (member (file-truename file-kept)
+                         (mapcar #'file-truename
+                                 scalpel-agent--context-files))))
+  (:cleanup (setq scalpel-agent--context-files nil
+                  scalpel-agent--context-readonly-files nil)
+            (delete-directory temp-dir t)))
+
 (provide 'scalpel-story-context-test)
 
 ;;; scalpel-story-context-test.el ends here

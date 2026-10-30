@@ -336,6 +336,7 @@ there is no change.  Safe when the reasoning buffer does not exist."
     scalpel-console--compression-baseline
     scalpel-console--last-instruction
     scalpel-agent--context-files
+    scalpel-agent--context-readonly-files
     scalpel-commit--style
     scalpel-commit--language)
   "Buffer-local variables that together hold one console session.
@@ -358,7 +359,10 @@ The commit style and language defaults chosen from a console are
 carried here so they survive a module reload.
 `scalpel-console--compression-baseline' carries the compression
 baseline at the last compression offer so it survives a module reload
-too.")
+too.
+`scalpel-agent--context-readonly-files' is carried here so read-only
+markers survive a module reload instead of silently degrading to
+writable.")
 
 (defconst scalpel-console--session-globals
   '(scalpel-token--console-totals
@@ -551,6 +555,10 @@ later ones are removed.  Must be called inside the console buffer."
     (define-key map (kbd "C-c C-k") #'scalpel-console-abort)
     (define-key map (kbd "C-c C-b") #'scalpel-llm-select-backend)
     (define-key map (kbd "C-c C-a") #'scalpel-console-add-file)
+    ;; Uppercase A is the read-only add variant: after adding, mutation-type
+    ;; tool actions refuse to write to that file; C-c C-a stays the normal
+    ;; writable add.
+    (define-key map (kbd "C-c C-A") #'scalpel-console-add-file-readonly)
     (define-key map (kbd "C-c C-d") #'scalpel-console-remove-file)
     (define-key map (kbd "C-c C-r") #'scalpel-console-reset-context)
     (define-key map (kbd "C-c C-f") #'scalpel-console-forget-history)
@@ -1321,6 +1329,24 @@ expansion through gitignore rules."
   (with-current-buffer (scalpel-console--target-buffer)
     (let ((path (read-file-name "Add to Scalpel context: ")))
       (scalpel-agent-context-add path ignore-gitignore)
+      (scalpel-console--show-context))))
+
+(defun scalpel-console-add-file-readonly (&optional ignore-gitignore)
+  "Add a file to the console context in read-only mode.
+With non-nil prefix argument IGNORE-GITIGNORE, skip .gitignore
+filtering, exactly as `scalpel-console-add-file' does.
+
+Read-only semantics: the file enters the context for reading
+only; the action-layer guard rejects every mutation tool that
+targets it.  Adding the same path again with
+`scalpel-console-add-file' upgrades it back to writable."
+  (interactive "P")
+  ;; The buffer switch is not cosmetic: read-file-name completes
+  ;; against the buffer-local default-directory, so the path prompt
+  ;; must run with the target buffer current.
+  (with-current-buffer (scalpel-console--target-buffer)
+    (let ((path (read-file-name "Add file to context (read-only): ")))
+      (scalpel-agent-context-add-readonly path ignore-gitignore)
       (scalpel-console--show-context))))
 
 (defun scalpel-console-remove-file ()

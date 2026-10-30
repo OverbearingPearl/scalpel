@@ -188,6 +188,24 @@ that touches this must run in the console buffer; the agent's
 callbacks do, because `scalpel-agent-run' re-selects the buffer it
 was called in.")
 
+(defvar-local scalpel-agent--context-readonly-files nil
+  "Files added read-only to this buffer's agent session.
+Elements are absolute truename paths.
+Invariant: every file in this list must also appear in
+`scalpel-agent--context-files'; identity is judged by truename in both
+lists, and a file must never be present in this list without being in
+the context list.
+Maintenance: this list is populated by `scalpel-agent-context-add-readonly';
+a plain `scalpel-agent-context-add' on the same path takes upgrade
+semantics and removes the path from this list, making it writable;
+`scalpel-agent-context-remove', `scalpel-agent-context-reset' and
+`scalpel-agent-context-prune-missing' drop a file from this list in
+step with removing it from the context.
+Usage: the action-layer guard consults this list to reject every
+mutation-class tool call hitting these paths; the shell sandbox needs
+no extra handling, since context files are already bound read-only as
+a whole.")
+
 (defvar-local scalpel-agent--shell-output nil
   "Metadata plist for the most recent shell action in this session.
 Set by `scalpel-agent-shell' right after the command runs and read
@@ -431,19 +449,23 @@ the set to remove; the kept set is the difference of the two."
       files)))
 
 (defun scalpel-agent-context-reset ()
-  "Clear the session context."
-  (setq scalpel-agent--context-files nil))
+  "Clear the session context and its read-only markers."
+  (setq scalpel-agent--context-files nil
+        scalpel-agent--context-readonly-files nil))
 
 (defun scalpel-agent-context-add (path &optional ignore-gitignore)
   "Add PATH (a file or directory) to the session context.
 A directory expands to every regular file under it, whether or not
 a locator handles it, so a log or a config that is only meant to be
 read can be added alongside code.  Gitignored files are excluded
-unless IGNORE-GITIGNORE is non-nil.  Signal `user-error' when PATH
-expands to no file, or when the result would hold more than
-`scalpel-agent-context-max-files' files; the refusal is whole, so
-the context is left exactly as it was.  Return the files PATH
-expanded to."
+unless IGNORE-GITIGNORE is non-nil.  Re-adding is the only way an
+entry is promoted from read-only to writable: a plain add drops the
+files it carries from `scalpel-agent--context-readonly-files', and
+adding never downgrades an already writable entry.  Signal
+`user-error' when PATH expands to no file, or when the result would
+hold more than `scalpel-agent-context-max-files' files; the refusal
+is whole, so the context is left exactly as it was.  Return the
+files PATH expanded to."
   (let ((files (scalpel-agent--expanded-files path ignore-gitignore)))
     (unless files
       (user-error "Scalpel: no addable files under %s (try C-u to include gitignored)" path))
@@ -460,13 +482,53 @@ expanded to."
       ;; Only after the check: a refused add must leave the context
       ;; untouched, not partially applied.
       (setq scalpel-agent--context-files merged))
+    ;; A plain add is the only promotion channel: drop this batch
+    ;; from the read-only list.  Placed after the limit check so a
+    ;; refused add cannot flip writability either.
+    (setq scalpel-agent--context-readonly-files
+          (cl-set-difference scalpel-agent--context-readonly-files files
+                             :test #'string=))
     files))
+
+(defun scalpel-agent-context-add-readonly (path &optional ignore-gitignore)
+  "Add PATH to the read-only context.
+
+Delegate the work to `scalpel-agent-context-add' so PATH goes
+through exactly the same directory expansion, gitignore
+filtering and context size-limit validation as a writable add.
+IGNORE-GITIGNORE is passed through to that call unchanged, so
+when non-nil gitignored files can also enter the context as
+read-only entries.  Only after that shared validation succeeds
+are the expanded entries merged into
+`scalpel-agent--context-readonly-files', the list the write
+guard actually consults.
+
+Rejection is all-or-nothing: if any expanded entry fails the
+shared checks, PATH is refused as a whole and
+`scalpel-agent--context-readonly-files' is left unmodified.
+An entry ceases to be read-only only through the read-only
+list shrinking that `scalpel-agent-context-add' itself
+performs when it is added again normally.
+
+Return the expanded entries on success, nil when PATH is
+rejected."
+  (let ((expanded (scalpel-agent-context-add path ignore-gitignore)))
+    (when expanded
+      ;; Merge idempotently: an entry already on the read-only
+      ;; list is not pushed twice.
+      (dolist (entry expanded)
+        (unless (member entry scalpel-agent--context-readonly-files)
+          (push entry scalpel-agent--context-readonly-files))))
+    expanded))
 
 (defun scalpel-agent-context-remove (path)
   "Remove PATH from the session context.
 PATH is a file, a directory, or a shell-style glob.  A glob is
 expanded with `file-expand-wildcards'; a directory removes every
-file under it.  No-op with a message when nothing matched."
+file under it.  Matching entries are also dropped from
+`scalpel-agent--context-readonly-files', keeping the read-only
+list a subset of the context.  No-op with a message when nothing
+matched."
   (let* ((spec (expand-file-name path))
          (expanded (if (cl-some (lambda (c) (memq c '(?* ?? ?\[))) spec)
                        (mapcar #'file-truename (file-expand-wildcards spec))
@@ -480,7 +542,9 @@ file under it.  No-op with a message when nothing matched."
     (if (null removed)
         (message "Scalpel: %s is not in the context" path)
       (setq scalpel-agent--context-files
-            (cl-remove-if match-p scalpel-agent--context-files))
+            (cl-remove-if match-p scalpel-agent--context-files)
+            scalpel-agent--context-readonly-files
+            (cl-remove-if match-p scalpel-agent--context-readonly-files))
       (message "Scalpel: removed %d file(s)" (length removed)))))
 
 (defun scalpel-agent-context-prune-missing ()
@@ -490,13 +554,17 @@ Operates in the current console buffer.  A file deleted outside Emacs
 with \"File no longer exists\", so pruning stale entries before a send
 lets work continue without manual cleanup.  Iterates over the variable
 `scalpel-agent--context-files', keeping entries for which
-`file-exists-p' is non-nil.  When any were dropped, update
-`scalpel-agent--context-files' with the kept list and return the
-removed file names \(a list).  When nothing was dropped, return nil
-and leave the list alone.  Does not signal or message -- the caller
-decides how to report the result."
+`file-exists-p' is non-nil, and reuses that same existence check to
+prune `scalpel-agent--context-readonly-files': only entries whose file
+survives in the kept list are retained, so the read-only list keeps
+its subset invariant as the context shrinks.  When any were dropped,
+update both lists with the kept entries and return the removed file
+names \(a list).  When nothing was dropped, return nil and leave both
+lists alone.  Does not signal or message -- the caller decides how to
+report the result."
   (let ((kept nil)
-        (removed nil))
+        (removed nil)
+        (readonly-kept nil))
     (dolist (file scalpel-agent--context-files)
       (if (file-exists-p file)
           (push file kept)
@@ -504,6 +572,10 @@ decides how to report the result."
     (setq kept (nreverse kept))
     (when removed
       (setq scalpel-agent--context-files kept)
+      (dolist (rofile scalpel-agent--context-readonly-files)
+        (when (member rofile kept)
+          (push rofile readonly-kept)))
+      (setq scalpel-agent--context-readonly-files (nreverse readonly-kept))
       (nreverse removed))))
 
 (defun scalpel-agent--context-track (file)
@@ -570,6 +642,7 @@ names compare case-insensitively."
 (defun scalpel-agent--context-marker (node)
   "Return attribute suffix for NODE, e.g. \" (gitignored) (1.2 kB) (12 symbols)\"."
   (concat (if (plist-get node :ignored) " (gitignored)" "")
+          (if (plist-get node :readonly) " [R]" "")
           (let ((size (plist-get node :size)))
             (if size
                 (format " (%s)" (file-size-human-readable size))
@@ -711,9 +784,11 @@ no subprocess; each repository is queried once."
   "Return one (FILE . FLAGS) entry per file in the session context.
 IGNORED-FILES lists absolute names that git ignores; matching
 entries get :ignored set.  FLAGS is the plist consumed by the tree
-builder: :ignored, :size, :symbols, plus :status once a caller has
-annotated the entry.  :size is the file size in bytes, or nil when
-the file cannot be stat'ed.  :symbols is the number of top-level
+builder: :ignored, :readonly, :size, :symbols, plus :status once a
+caller has annotated the entry.  :readonly is t when the file's
+truename appears in `scalpel-agent--context-readonly-files', and
+nil otherwise.  :size is the file size in bytes, or nil when the
+file cannot be stat'ed.  :symbols is the number of top-level
 symbols in the file, or nil when no provider exists for the file
 or the count fails."
   (mapcar
@@ -727,6 +802,9 @@ or the count fails."
                          (error nil)))))
        (cons file
              (list :ignored (and (member file ignored-files) t)
+                   :readonly (and (member (file-truename file)
+                                          scalpel-agent--context-readonly-files)
+                                  t)
                    :size (when attrs (nth 7 attrs))
                    :symbols symbols))))
    scalpel-agent--context-files))
@@ -910,8 +988,16 @@ planner's extra keys never reach dispatch."
 
 (defun scalpel-agent--validate-action (action)
   "Validate ACTION plist against its tool's field contract.
-Signal `user-error' when the tool is unknown or a required field
-is missing."
+Signal `user-error' in three cases: the tool is unknown; a
+required field is missing; and, as the third rejection case, a
+change tool targets a file whose truename appears in
+`scalpel-agent--context-readonly-files'.  For that last case
+file-substitute checks every entry of :files, file-rename checks
+both :file and :to (renaming over a read-only file is a write),
+and every other change tool checks :file.  Read-only context
+files enter the context for reading only and are never written;
+the model must use a confirm action to ask the user to re-add
+the file normally (C-c C-a) to lift the restriction."
   (let* ((tool (plist-get action :tool))
          (fields (cdr (assoc tool scalpel-agent--tool-fields))))
     (unless fields
@@ -919,6 +1005,19 @@ is missing."
     (dolist (field fields)
       (unless (plist-get action field)
         (user-error "Scalpel: action %s missing required field %s" tool field)))
+    (when (memq tool scalpel-agent--change-tools)
+      (dolist (file (cond ((eq tool 'file-substitute)
+                           (plist-get action :files))
+                          ((eq tool 'file-rename)
+                           (list (plist-get action :file)
+                                 (plist-get action :to)))
+                          (t
+                           (list (plist-get action :file)))))
+        (when (and file
+                   (member (file-truename file)
+                           scalpel-agent--context-readonly-files))
+          (user-error "Scalpel: tool %s refuses to write %S: read-only files enter the context for reading only and are never written; use a confirm action to ask the user to re-add the file normally (C-c C-a) to lift the restriction"
+                      tool file))))
     action))
 
 (defun scalpel-agent--prompt (instruction history)
