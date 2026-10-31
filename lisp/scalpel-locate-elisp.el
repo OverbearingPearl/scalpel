@@ -176,6 +176,95 @@ walk ends early on a read error."
                           (setq seen (1+ seen)))))))
               (error nil))))))))
 
+(defun scalpel-locate-elisp--tree-holds-definer-call (tree symbol)
+  "Return t if TREE hold a defining call for SYMBOL, nil otherwise.
+
+A defining call is a subform whose car is a member of
+`scalpel-locate-elisp--defining-forms' and whose cadr is `equal'
+to SYMBOL.  That is the same shape
+`scalpel-locate-elisp--def-name-regex' matches at top level, so a
+definition nested anywhere in TREE is judged by the same contract
+as a top-level one.
+
+The walk runs on the data produced by the Lisp reader, not on the
+file text.  A text search for a definer spelling cannot tell code
+from prose: the same word inside a docstring, a comment, or a
+quoted literal would be misread as a nested definition.  Comments
+never reach the reader's output, and docstrings and quoted
+literals sit in the tree as inert objects -- quoted ones are cut
+off by the `quote' branch -- so a data walk is immune to all
+three."
+  (cond
+   ((not (consp tree)) nil)
+   ((and (memq (car tree) scalpel-locate-elisp--defining-forms)
+         (equal (cadr tree) symbol))
+    t)
+   ;; A definer spelling inside a quote is data, not structure.
+   ((eq (car tree) 'quote) nil)
+   (t (or (scalpel-locate-elisp--tree-holds-definer-call (car tree) symbol)
+          (scalpel-locate-elisp--tree-holds-definer-call (cdr tree) symbol)))))
+
+(defun scalpel-locate-elisp--nested-definition-block (symbol)
+  "Report the block carrying a nested definition of SYMBOL.
+SYMBOL is a definition name given as a string or a symbol; a
+string is coerced with `intern'.  Read the current buffer's
+top-level forms from `point-min' and return, for the first form
+that is a cons whose car is a member of
+`scalpel-locate-elisp--defining-forms', whose cadr differs from
+SYMBOL, and whose cddr holds a defining call for SYMBOL per
+`scalpel-locate-elisp--tree-holds-definer-call', the definer
+keyword and the cadr joined by a single space, e.g. \"use-package
+foo\", so callers can name the block an edit must target.  The
+granularity contract of `scalpel-locate-elisp--defining-forms' is
+unchanged, so a nested definition stays unlocatable and this
+report only names where an edit must land.  Return nil when no
+top-level form carries the name in its body.  The walk runs on
+reader output, so comments, docstrings and quoted literals cannot
+false-match, the same immunity
+`scalpel-locate-elisp--tree-holds-definer-call' is written for."
+  (when (stringp symbol)
+    (setq symbol (intern symbol)))
+  (save-excursion
+    (goto-char (point-min))
+    (catch 'done
+      (condition-case nil
+          (while t
+            (let ((form (read (current-buffer))))
+              (when (and (consp form)
+                         (member (car form)
+                                 scalpel-locate-elisp--defining-forms)
+                         (not (equal (cadr form) symbol))
+                         (scalpel-locate-elisp--tree-holds-definer-call
+                          (cddr form) symbol))
+                (throw 'done
+                       (format "%s %s" (car form) (cadr form))))))
+        (end-of-file (throw 'done nil))
+        (invalid-read-syntax (throw 'done nil))
+        (scan-error (throw 'done nil))))))
+
+(defun scalpel-locate-elisp--form-defines-p (form symbol)
+  "Return non-nil if FORM contain a defining form for SYMBOL.
+FORM is a form as produced by `read'; the search recurses over every
+sub-list of the form tree and never looks at buffer text, so a name
+spelled inside a comment or inside a string cannot match: the reader
+drops comments, and the contents of a string are a string object,
+not a symbol.  A bare call site does not count as a defining call
+either, because a sub-list only matches when its head is a member of
+`scalpel-locate-elisp--defining-forms' and its second element is a
+symbol spelled exactly like SYMBOL.  This is the same spelling
+contract the top-level scan applies.  Improper lists such as dotted
+pairs are guarded, so `cadr' is never taken from a list too short to
+have a second element."
+  (cond
+   ((atom form) nil)
+   ((and (memq (car form) scalpel-locate-elisp--defining-forms)
+         (consp (cdr form))
+         (symbolp (cadr form))
+         (equal (symbol-name (cadr form)) (symbol-name symbol)))
+    t)
+   (t (or (scalpel-locate-elisp--form-defines-p (car form) symbol)
+          (scalpel-locate-elisp--form-defines-p (cdr form) symbol)))))
+
 (defun scalpel-locate-elisp-range (file symbol)
   "Return byte range of SYMBOL definition as (BEG . END) in current buffer.
 Current buffer is the Emacs Lisp file referenced by FILE.  A

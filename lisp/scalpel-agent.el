@@ -1275,6 +1275,42 @@ empty string when the context holds no such file."
                                         (file-name-base resolved))))
                     collect (scalpel-agent--resolve-hint resolved symbol)))))
 
+(defun scalpel-agent--nested-block-note (file symbol)
+  "Return a one-line note for SYMBOL nested in FILE.
+
+The locator only resolves top-level definitions, so when SYMBOL is
+not a top-level definition of FILE but is written inside some
+block-granularity top-level form (typically the :config body of a
+`use-package' declaration), a zero-hit rejection only says \"not
+found\".  This function surfaces that fact as one extra hint line.
+
+Only Elisp files are inspected; FILE must match \\.el\\'.  SYMBOL,
+a string or symbol, is passed through to the function
+`scalpel-locate-elisp--nested-definition-block', which reads the
+top-level forms of the buffer visiting FILE (opened via
+`find-file-noselect') and returns the name of the block hosting
+SYMBOL, e.g. \"use-package gptel\", or nil.
+
+On a hit, return a line beginning with a newline and two spaces, in
+the style of the existing hint sub-lines.  It states that SYMBOL is
+written inside the named block form, which the locator cannot
+address individually, and offers two ways out: edit that form as a
+whole, or hoist the definition to the file's top level.  Return nil
+when FILE is not an Elisp file, when no hosting block is found, or
+when anything signals (degradation point: any error is swallowed
+and reported as nil).  A nil return means \"nothing to add\", not
+that SYMBOL is absent from FILE."
+  (when (and (stringp file)
+             (string-match-p "\\.el\\'" file))
+    (condition-case nil
+        (let ((block-name
+               (with-current-buffer (find-file-noselect file)
+                 (scalpel-locate-elisp--nested-definition-block symbol))))
+          (when block-name
+            (format "\n  %s is written inside `%s', a block-granularity top-level form the locator cannot address individually; edit that form as a whole, or hoist the definition to the file's top level."
+                    symbol block-name)))
+      (error nil))))
+
 (defun scalpel-agent--resolve-symbol (file symbol)
   "Return (FILE . RANGE) for SYMBOL, falling back to a context search.
 FILE is tried first.  A planner that hallucinated the path -- the
@@ -1293,12 +1329,21 @@ without the list; the two cases have different remedies and must not
 read alike.  The refusal describes the context files named after
 SYMBOL as well, through `scalpel-agent--namesake-hint': the scan that
 found nothing walked every file, and the module a symbol is named
-after is where it usually lives."
+after is where it usually lives.  Definitions embedded in a
+block-granularity top-level form (the :config body of a `use-package'
+declaration) are named too, through `scalpel-agent--nested-block-note',
+with two ways out: edit the whole form, or hoist the definition to the
+file's top level.  The nested-block note is produced by
+`scalpel-agent--nested-block-note' from what the locator reads in
+FILE, and only when FILE is already part of the context."
   (let ((direct (condition-case nil
                     (cons file (scalpel-locate-range file symbol))
                   (error nil))))
     (or direct
-        (let ((hits (scalpel-agent--locate-candidates symbol)))
+        (let ((hits (scalpel-agent--locate-candidates symbol))
+              (note (if (and file (scalpel-agent--context-file-p file))
+                        (scalpel-agent--nested-block-note file symbol)
+                      nil)))
           (pcase (length hits)
             (1
              (message "Scalpel: %s is not in %s; it is defined in %s"
@@ -1307,7 +1352,7 @@ after is where it usually lives."
             (0
              (user-error
               (concat "Scalpel: symbol %s not found in %s nor anywhere in "
-                      "the context (%s)%s%s")
+                      "the context (%s)%s%s%s")
               symbol file
               (if scalpel-agent--context-files
                   (string-join scalpel-agent--context-files ", ")
@@ -1325,7 +1370,10 @@ after is where it usually lives."
               ;; so the file named after SYMBOL is described too: that is
               ;; where the planner's name came from when the symbol is
               ;; not the spelling the file holds.
-              (scalpel-agent--namesake-hint file symbol)))
+              (scalpel-agent--namesake-hint file symbol)
+              (if note
+                  (concat "\n" note)
+                "")))
             (_
              (user-error
               (concat "Scalpel: symbol %s is defined in several context "

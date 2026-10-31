@@ -549,31 +549,22 @@ later ones are removed.  Must be called inside the console buffer."
 (defvar scalpel-console-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "RET") #'scalpel-console-send-line)
-    ;; S-RET inserts a literal newline; RET sends the whole composed block.
     (define-key map (kbd "S-<return>") #'newline)
-    ;; Aborts the in-flight round.
     (define-key map (kbd "C-c C-k") #'scalpel-console-abort)
     (define-key map (kbd "C-c C-b") #'scalpel-llm-select-backend)
     (define-key map (kbd "C-c C-a") #'scalpel-console-add-file)
-    ;; Uppercase A is the read-only add variant: after adding, mutation-type
-    ;; tool actions refuse to write to that file; C-c C-a stays the normal
-    ;; writable add.
-    (define-key map (kbd "C-c C-A") #'scalpel-console-add-file-readonly)
+    (define-key map (kbd "C-c C-v") #'scalpel-console-add-file-readonly)
     (define-key map (kbd "C-c C-d") #'scalpel-console-remove-file)
     (define-key map (kbd "C-c C-r") #'scalpel-console-reset-context)
     (define-key map (kbd "C-c C-f") #'scalpel-console-forget-history)
     (define-key map (kbd "C-c C-e") #'scalpel-console-repeat)
     (define-key map (kbd "C-c C-o") #'scalpel-console-toggle-output)
-    ;; Fixed-prompt quick messages.
     (define-key map (kbd "C-c C-y") #'scalpel-console-send-decide-for-me)
     (define-key map (kbd "C-c C-n") #'scalpel-console-send-replan)
     (define-key map (kbd "C-c C-w") #'scalpel-console-send-why)
     (define-key map (kbd "C-c C-s") #'scalpel-console-send-summarize)
-    ;; Resume after an interrupted round.
     (define-key map (kbd "C-c C-j") #'scalpel-console-send-resume)
-    ;; Analyze deeply and try again.
     (define-key map (kbd "C-c C-t") #'scalpel-console-send-retry)
-    ;; Prepares an LLM commit for the current console's project.
     (define-key map (kbd "C-c C-c") #'scalpel-commit-run)
     map)
   "Keymap used in Scalpel console buffers.")
