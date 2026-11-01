@@ -179,13 +179,17 @@ The file is synced into a temporary buffer via
       (kill-buffer buffer))))
 
 (defun scalpel-locate-markdown-register-provider ()
-  "Register the markdown locate provider with Scalpel."
+  "Register the markdown locate provider with `scalpel-locate'.
+The regexp matches files ending in .md or .markdown, and the plist
+carries :locate, :list-symbols, :single-definition-p and
+:definer-names, all pointing at functions defined in this file."
   (scalpel-locate-register-provider
    "\\.\\(?:md\\|markdown\\)\\'"
-   (list :locate 'scalpel-locate-markdown-range
-         :list-symbols 'scalpel-locate-markdown-list-symbols
-         :single-definition-p 'scalpel-locate-markdown--single-definition-p
-         :definer-names 'scalpel-locate-markdown-definer-names)))
+   (list
+    :locate #'scalpel-locate-markdown-range
+    :list-symbols #'scalpel-locate-markdown-list-symbols
+    :single-definition-p #'scalpel-locate-markdown--single-definition-p
+    :definer-names #'scalpel-locate-markdown-definer-names)))
 
 (provide 'scalpel-locate-markdown)
 

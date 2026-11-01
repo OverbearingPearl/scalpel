@@ -44,6 +44,8 @@ balance.  `scalpel-locate-balanced-p' answers t when a provider
 registers no :balanced-p: a language that says nothing about bracket
 shape must not be reported as having a bracket problem.")
 
+(require 'scalpel-locate-org)
+
 (defun scalpel-locate-register-provider (regexp provider)
   "Register PROVIDER for file names matching REGEXP.
 PROVIDER is a plist with :locate and :list-symbols entries.
@@ -56,6 +58,12 @@ Registering the same REGEXP replaces the previous provider."
               (cl-remove-if (lambda (entry)
                               (string= (car entry) regexp))
                             scalpel-locate-providers))))
+
+(scalpel-locate-register-provider
+ "\\.org\\'"
+ (list :locate #'scalpel-locate-org-range
+       :list-symbols #'scalpel-locate-org-list-symbols
+       :single-definition-p #'scalpel-locate-org--single-definition-p))
 
 (defun scalpel-locate-provider-for-file (file)
   "Return provider plist for FILE, or nil."

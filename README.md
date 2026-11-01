@@ -170,6 +170,7 @@ Components live in focused modules:
 - `scalpel-locate-markdown` – built-in structural locator provider for Markdown (heading sections)
 - `scalpel-locate-yaml` – built-in structural locator provider for YAML (top-level key blocks)
 - `scalpel-locate-gitignore` – built-in structural locator provider for .gitignore (pattern lines)
+- `scalpel-locate-org` – built-in structural locator provider for Org (headline subtrees)
 - `scalpel-execute` – boundary-locked edit application and deletion,
   written to disk as applied
 - `scalpel-sandbox` – command sandbox for shell actions (`bubblewrap` on Linux, `sandbox-exec` on macOS)
@@ -227,6 +228,7 @@ Emacs point to that block; point is the strongest coordinate Scalpel knows.
 | Markdown | built-in structural scan (ATX headings) | none | heading sections |
 | YAML | built-in structural scan (top-level keys) | none | top-level key blocks |
 | .gitignore | built-in structural scan (pattern lines) | none | pattern lines |
+| Org | built-in structural scan (Org headlines) | none | headline subtrees |
 | Rust | rust-analyzer (LSP) | tree-sitter | functions, methods, impl items |
 | TypeScript / JS | tsserver (LSP) | tree-sitter | function/class/module blocks |
 | Go | gopls (LSP) | tree-sitter | funcs, types |
@@ -237,8 +239,6 @@ Emacs point to that block; point is the strongest coordinate Scalpel knows.
 When no LSP and no tree-sitter grammar exist, Scalpel falls back to bracket
 depth scanning (`syntax-ppss`) and supports only **cursor-driven block edits** –
 never speculative whole-file changes.
-
----
 
 ## Installation
 
@@ -386,9 +386,9 @@ Inside the console:
 Scalpel is in active, deliberately small MVP stages.
 
 **Currently implemented**
-- Emacs Lisp, Markdown, YAML, and .gitignore structural location, plus the
+- Emacs Lisp, Markdown, YAML, Org, and .gitignore structural location, plus the
   provider dispatch API (`scalpel-locate`, `scalpel-locate-elisp`,
-  `scalpel-locate-markdown`, `scalpel-locate-yaml`, and
+  `scalpel-locate-markdown`, `scalpel-locate-yaml`, `scalpel-locate-org`, and
   `scalpel-locate-gitignore`)
 - The console and the multi-round agent loop: context management, shell-output
   continuation, and conversation replay
