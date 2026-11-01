@@ -104,12 +104,24 @@ not reset when another backend is created or selected, so a stale
 name would otherwise let a dialect registered for one model answer
 for a backend that does not serve it -- and a session that had once
 selected that model would keep reading every later reply in its
-dialect."
+dialect.
+
+Before the comparison, both sides are normalized by stripping the
+vendor prefix: the part after the last slash.  Providers such as
+ofoxai/openrouter carry a vendor prefix in the model name while
+dialects register under the bare name, so the raw strings never
+match and the declared model would be rejected."
   (let* ((model (and (boundp 'gptel-model)
                      (symbol-value 'gptel-model)))
          (name (scalpel-llm-dialect--name-string model)))
-    (when (member name (scalpel-llm-dialect--served-model-names))
-      name)))
+    (when name
+      (let ((bare (car (last (split-string name "/" t))))
+            (served (mapcar
+                     (lambda (s)
+                       (car (last (split-string s "/" t))))
+                     (scalpel-llm-dialect--served-model-names))))
+        (when (member bare served)
+          bare)))))
 
 (defun scalpel-llm-dialect--provider ()
   "Return the provider plist for the active gptel backend, or nil.

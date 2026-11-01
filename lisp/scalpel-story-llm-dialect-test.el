@@ -22,6 +22,11 @@
   "Return the triple-single-quote TOML delimiter as a string."
   (make-string 3 ?'))
 
+;; This file uses lexical-binding; the top-level defvars below make the
+;; compiler treat the setq calls inside test bodies as dynamic bindings.
+;; Otherwise the setq lands in a lexical frame, and the function under
+;; test still reads nil from the global value via symbol-value.
+
 (defun scalpel-story-llm-dialect-test-doc (pairs)
   "Build a TOML document from PAIRS of (key . value) with q3 values."
   (let ((q3 (scalpel-story-llm-dialect-test-q3)))
@@ -35,6 +40,19 @@
   "Remove the raw-TOML echo buffer left behind by parsing."
   (when (get-buffer "*Scalpel Raw TOML*")
     (kill-buffer "*Scalpel Raw TOML*")))
+
+(defun scalpel-story-llm-dialect-test--reset-gptel-model (value)
+  "Assign VALUE to the dynamic variable `gptel-model' without declaring it.
+Using `set' with a quoted symbol avoids a free-variable warning from
+the byte compiler, since the variable name is never referenced
+lexically."
+  (set 'gptel-model value))
+
+(defvar scalpel-story-llm-dialect-test-result
+  nil
+  "Holds the model name under test.
+This variable is specially bound so the byte compiler emits no
+free-variable warning.")
 
 (ert-gwt-deftest
   (:given ((doc (scalpel-story-llm-dialect-test-doc
@@ -143,6 +161,19 @@
                    (user-error :other)))))
   (:then (should (eq kind :tool-call)))
   (:cleanup (scalpel-story-llm-dialect-test-cleanup)))
+
+(ert-gwt-deftest
+  (:given ((gptel-model nil)))
+  (:when (cl-letf (((symbol-function #'scalpel-llm-dialect--served-model-names)
+                    (lambda () (list "z-ai/glm-5.3-flash"))))
+           (set 'gptel-model "z-ai/glm-5.3-flash")
+           (setq scalpel-story-llm-dialect-test-result
+                 (scalpel-llm-dialect--model-name))))
+  (:then (should (equal scalpel-story-llm-dialect-test-result
+                        "glm-5.3-flash")))
+  (:cleanup (progn
+              (set 'gptel-model nil)
+              (scalpel-story-llm-dialect-test-cleanup))))
 
 (provide 'scalpel-story-llm-dialect-test)
 
