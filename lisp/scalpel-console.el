@@ -534,6 +534,62 @@ caller can delete them without invalidating earlier ones."
         (setq pos next)))
     (nreverse regions)))
 
+(defun scalpel-console--placeholder-refresh (&rest _)
+  "Two-phase shadow hint for the console input area.
+Phase one, empty input (no pending-input region or blank text):
+show a one-line listing of the three accepted input forms.
+Phase two, prefixed input: replace it with a one-line
+explanation of the mode that `scalpel-console-parse-prefix'
+detects; \"! \" announces shell mode, \"? \" announces the
+read-only consult mode, and any other non-empty input hides the
+hint entirely.  No timer is needed: the hint is rebuilt from
+scratch on every `after-change-functions' event (hook arguments
+are ignored), and overlay deletion is cheap enough to keep the
+logic free of incremental state.  The hint sits at the end of
+the first pending-input region with `front-advance', trailing
+the typed text so it renders behind the cursor instead of
+popping in ahead of it.  The `cursor' property is carried both
+by the overlay and by the propertized `after-string' itself,
+since a zero-width overlay does not reliably honor the
+overlay-level property; point is drawn before the hint text."
+  (when (overlayp scalpel-console--placeholder-overlay)
+    (delete-overlay scalpel-console--placeholder-overlay))
+  (setq scalpel-console--placeholder-overlay nil)
+  (let* ((region (car (scalpel-console--pending-input-regions)))
+         (text (when region
+                 (buffer-substring-no-properties
+                  (car region) (cdr region))))
+         (kind (when text
+                 (car (scalpel-console-parse-prefix text))))
+         (hint (cond
+                ((or (null region)
+                     (string-empty-p (string-trim text)))
+                 "< ! shell    ? consult    plain instruction >")
+                ((eq kind 'shell-mode)
+                 (concat "< shell mode: input is automatically "
+                         "analyzed and translated into shell "
+                         "commands >"))
+                ((eq kind 'consult)
+                 (concat "< consult mode: read-only consultation, "
+                         "nothing is ever modified >")))))
+    (when hint
+      (let ((ov (make-overlay (or (cdr region) (point-max))
+                              (or (cdr region) (point-max))
+                              nil t t)))
+        (overlay-put ov 'cursor t)
+        (overlay-put
+         ov 'after-string
+         (propertize hint 'face 'shadow 'cursor t))
+        (setq scalpel-console--placeholder-overlay ov)))))
+
+(defvar-local scalpel-console--placeholder-overlay nil
+  "Overlay holding the input-area hint line.
+The hint is shown on an empty pending-input area and removed as
+soon as the user types; because it lives in an overlay after-string
+and carries no `scalpel-console-role' or `scalpel-console-output'
+tag, it is never sent as an instruction and never enters the
+history.  nil when no hint overlay is live.")
+
 (defun scalpel-console--delete-pending-input-regions ()
   "Delete all pending input regions in the console buffer.
 Pending input regions are the text carrying neither
@@ -726,6 +782,11 @@ Not a user entry point: open a console with `scalpel-open', which
 also anchors the buffer to a root directory."
   (setq-local electric-indent-mode nil)
   (setq-local comment-start "")
+  ;; Keep the placeholder prompt in the empty input area up to date as
+  ;; the user types or clears the pending instruction.  Buffer-local,
+  ;; so only console buffers pay for the hook.
+  (add-hook 'after-change-functions
+            #'scalpel-console--placeholder-refresh nil t)
   (setq buffer-read-only nil)
   ;; Yank restores the killed text's properties, so text killed from a
   ;; tagged region (header, context tree, a report) would paste back
@@ -743,7 +804,9 @@ also anchors the buffer to a root directory."
             #'scalpel-console--confirm-kill nil t)
   ;; Buffer-local: the hook tears down reasoning buffers and token
   ;; totals when the console dies, so they cannot accumulate.
-  (add-hook 'kill-buffer-hook #'scalpel-console--teardown nil t))
+  (add-hook 'kill-buffer-hook #'scalpel-console--teardown nil t)
+  ;; Show the placeholder immediately in a fresh, empty console.
+  (scalpel-console--placeholder-refresh))
 
 (defun scalpel-console--insert-tagged (text role)
   "Insert TEXT at point tagged with ROLE in `scalpel-console-role'.
@@ -2544,9 +2607,34 @@ retry instead of a send refusal."
             ;; so they are visible before the synchronous work inside
             ;; --run-rounds (e.g. token counting) hogs the display.
             (redisplay)
-            (scalpel-console--run-rounds instr history)
+            (let ((parsed (scalpel-console-parse-prefix instr)))
+              (unwind-protect
+                  (let ((scalpel-agent--instruction-mode (or (car parsed) :normal)))
+                    (scalpel-console--run-rounds (cdr parsed) history))
+                (setq scalpel-agent--instruction-mode :normal)))
             (goto-char (point-max))
             (message "Scalpel: instruction sent.")))))))
+
+(cl-defun scalpel-console-parse-prefix (text)
+  "Split TEXT into a (MODE . REST) cons by its leading prefix.
+
+A leading \"?\" followed by whitespace selects MODE `consult'; a
+leading \"!\" followed by whitespace selects MODE `shell-mode';
+anything else yields MODE nil and REST equal to the original TEXT.
+REST has the prefix and its trailing whitespace removed.  The
+prefix is only recognized at the very beginning of TEXT; a bare
+\"?\" or \"!\" without following whitespace stays ordinary text."
+  (let ((char (when (> (length text) 0) (aref text 0)))
+        (ws (lambda (i)
+              (and (< i (length text))
+                   (memq (aref text i) '(?\s ?\n ?\t ?\r))))))
+    (cond
+     ((and (eq char ??) (funcall ws 1))
+      (cons 'consult (string-trim-left (substring text 1) "[ \t\n\r]+")))
+     ((and (eq char ?!) (funcall ws 1))
+      (cons 'shell-mode (string-trim-left (substring text 1) "[ \t\n\r]+")))
+     (t (cons nil text)))))
+
 (defun scalpel-console-abort ()
   "Cancel the operation currently in flight for this console, if any.
 This cancels the whole console operation -- not only the current

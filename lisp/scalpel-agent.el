@@ -46,6 +46,24 @@ Structural contract, not user configuration: dispatch in
 `file-substitute-dry-run', and the client issues `file-substitute'
 itself after the user approves the dry-run preview.")
 
+(defun scalpel-agent--tools-for-mode (mode)
+  "Return the planner-allowed tool names for run MODE.
+MODE is `consult', `shell-mode', or nil; nil yields the full
+vocabulary.  The result is always a subset of
+`scalpel-agent--tool-vocabulary', so it stays in sync with that
+constant."
+  (let ((excluded
+         (pcase mode
+           ('consult '("block-edit" "block-insert" "block-delete"
+                       "file-create" "file-rename" "file-delete"
+                       "file-substitute-dry-run" "confirm"))
+           ('shell-mode '("block-edit" "block-insert" "block-delete"
+                          "file-create" "file-rename" "file-delete"
+                          "file-substitute-dry-run"))
+           (_ nil))))
+    (seq-remove (lambda (tool) (member tool excluded))
+                scalpel-agent--tool-vocabulary)))
+
 (require 'scalpel-user-prompt)
 
 (require 'scalpel-prompt-elisp)
@@ -997,7 +1015,18 @@ both :file and :to (renaming over a read-only file is a write),
 and every other change tool checks :file.  Read-only context
 files enter the context for reading only and are never written;
 the model must use a confirm action to ask the user to re-add
-the file normally (C-c C-a) to lift the restriction."
+the file normally (C-c C-a) to lift the restriction.  When the
+buffer-local `scalpel-agent--instruction-mode' is not :normal,
+the tool must also appear in the list returned by
+`scalpel-agent--tools-for-mode' for the current mode, and is
+rejected otherwise with an explanation of the allowed tools."
+  (let ((mode scalpel-agent--instruction-mode))
+    (when (and mode (not (eq mode :normal)))
+      (let ((tool (plist-get action :tool))
+            (allowed (scalpel-agent--tools-for-mode mode)))
+        (unless (memq tool allowed)
+          (user-error "Scalpel: action tool %s rejected in %s mode; the tool is forbidden by the current instruction mode (ask/shell), remove the prefix and resend; allowed tools: %s"
+                      tool mode allowed)))))
   (let* ((tool (plist-get action :tool))
          (fields (cdr (assoc tool scalpel-agent--tool-fields))))
     (unless fields
@@ -1042,7 +1071,13 @@ own: everything the LLM may rely on arrives here."
              (when (and rules (not (string-empty-p rules)))
                (format scalpel-prompt--project-rules-header rules)))
            (format scalpel-prompt--instruction-header
-                   instruction))))
+                   instruction)
+           (pcase scalpel-agent--instruction-mode
+             ((or 'consult 'shell-mode)
+              (string-trim-right
+               (scalpel-prompt-rule--action-mode-rule
+                scalpel-agent--instruction-mode)))
+             (_ nil)))))
 
 (defun scalpel-agent-plan (instruction history on-success on-error)
   "Ask the LLM for a structured plan for INSTRUCTION, without blocking.
@@ -2062,6 +2097,9 @@ The report always states the true output size, so a command that
 dumped far more than it should is visible to the user and to the
 planner.  Output holding a NUL byte is reported as binary and its
 contents are dropped.
+When the command exits with a non-zero or unknown status, the
+clipboard hint produced by `scalpel-agent-shell--clipboard-hint' is
+appended to the report; a zero exit keeps the report unchanged.
 Signal `user-error' when the sandbox is unavailable or fails its
 probe, so a command is never run outside the sandbox."
   (unless (and command reason)
@@ -2102,8 +2140,33 @@ probe, so a command is never run outside the sandbox."
     (setq scalpel-agent--shell-output
           (list :bytes raw-bytes :truncated truncated :binary binary))
     (format (concat "Shell: %s\nReason: %s\nExit: %s\nOutput: %d bytes\n"
-                    "--- output ---\n%s\n--- end output ---")
-            command reason (or exit "unknown") raw-bytes body)))
+                    "--- output ---\n%s\n--- end output ---%s")
+            command reason (or exit "unknown") raw-bytes body
+            ;; Failure path only: a zero exit keeps the report bare.
+            (if (and (numberp exit) (zerop exit))
+                ""
+              (concat "\n" (scalpel-agent-shell--clipboard-hint command))))))
+
+(defun scalpel-agent-shell--clipboard-hint (command)
+  "Copy COMMAND to the system clipboard when manual copy is impractical.
+
+Multi-line commands in a graphical frame are placed on the `kill-ring' and
+pushed through `interprogram-cut-function', so the failure report can ask
+the user to paste instead of re-type.  Returns a paste instruction string,
+or nil when the command is single-line or the frame is a terminal — cases
+where displaying the text suffices.  Clipboard failure is degraded to nil
+with a logged warning; a reporting helper must never signal."
+  (when (and (string-match-p "\n" command)
+             (display-graphic-p))
+    (condition-case err
+        (progn
+          (kill-new command)
+          (funcall interprogram-cut-function
+                   (car kill-ring))
+          "Paste the command from the clipboard.")
+      (error
+       (warn "scalpel-agent-shell: clipboard copy failed: %S" err)
+       nil))))
 
 (defun scalpel-agent--context-file-p (file)
   "Return non-nil when FILE is a member of the session context.
@@ -3926,6 +3989,19 @@ chain of an aborted round stops firing.
 Deliberately not added to `scalpel-console--session-variables':
 this is transient per-round state that must reset to zero across
 reload and must not survive reloads.")
+
+(defvar-local scalpel-agent--instruction-mode :normal
+  "Per-buffer restriction on which tools the planner may use for the current run.
+
+:normal is the default and grants the unrestricted vocabulary.
+:ask is set by the console when an instruction carries the \"? \"
+prefix; it restricts the planner to read-only tools (file-peek,
+shell, reply).  :shell is set for the \"! \" prefix and restricts the
+planner to shell-flavoured tools (file-peek, shell, reply, confirm).
+
+The console resets this variable to :normal around each run so the
+restriction never leaks across rounds.  It is deliberately transient
+state and is therefore not added to `scalpel-console--session-variables'.")
 
 (provide 'scalpel-agent)
 

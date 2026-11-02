@@ -489,6 +489,17 @@ The format string is filled with the required language name.")
   (when language
     (format scalpel-prompt-rule--reply-language-format language)))
 
+(defun scalpel-prompt-rule--action-mode-rule (mode)
+  "Return the English rule text injected for the current action MODE.
+MODE is one of `normal', `consult' or `shell-mode'.  Return nil for
+`normal' so that no extra text is injected."
+  (pcase mode
+    (`consult
+     (format "The action vocabulary this turn has been pruned to read-only operations by the consult mode. You may only inspect, search, or read files and buffers. Any action that modifies files, buffers, or repository state is forbidden. Treat every requested task as a read-only inspection: gather the information the planner needs and report it.\n"))
+    (`shell-mode
+     (format "The action vocabulary this turn has been pruned by the shell mode. Prefer completing the user's request through shell commands and file-peek; both are restricted to read-only inspection. Any action that modifies files, buffers, or repository state is forbidden.\n"))
+    (_ nil)))
+
 (defun scalpel-prompt-rule--shell-action-reason-language-rule (language)
   "Return a natural-language rule for shell action reasons.
 The rule requires the reason field of shell actions to be written in

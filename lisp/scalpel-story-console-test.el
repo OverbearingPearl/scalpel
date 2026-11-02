@@ -88,6 +88,26 @@
                   (point-min) (point-max) 'face 'shadow)))
   (:cleanup (delete-directory root t)))
 
+(ert-deftest scalpel-story-console-test-parse-prefix-boundary
+  ()
+  (ert-info ("'? ' prefix yields consult with leading whitespace stripped")
+    (should (equal (scalpel-console-parse-prefix "?  hello")
+                   (cons 'consult "hello"))))
+  (ert-info ("'! ' prefix yields shell-mode with leading whitespace stripped")
+    (should (equal (scalpel-console-parse-prefix "!  ls -la")
+                   (cons 'shell-mode "ls -la"))))
+  (ert-info ("bare '?' at start without following whitespace is plain text")
+    (should (equal (scalpel-console-parse-prefix "?hello")
+                   (cons nil "?hello"))))
+  (ert-info ("bare '!' at start without following whitespace is plain text")
+    (should (equal (scalpel-console-parse-prefix "!ls")
+                   (cons nil "!ls"))))
+  (ert-info ("'?' not at position 0 does not trigger prefix parsing")
+    (should (equal (scalpel-console-parse-prefix "what? yes")
+                   (cons nil "what? yes")))
+    (should (equal (scalpel-console-parse-prefix "why! no")
+                   (cons nil "why! no")))))
+
 (ert-gwt-deftest
   (:given ((root (make-temp-file "scalpel-story-" t))
            (scalpel-console-collapse-output t)
