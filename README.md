@@ -220,6 +220,15 @@ Scalpel is a **conversational editor**, not a one-shot command.
 Anonymous targets such as "the second if branch" are handled by first moving the
 Emacs point to that block; point is the strongest coordinate Scalpel knows.
 
+Each console session can run its own gptel backend and model. Switch with
+`C-c C-b` in the console; the choice is snapshotted into the session, so module
+reloads keep it.
+
+Multiple consoles on the same project root work concurrently without git
+worktrees. Per-request staleness baselines refuse writes to files another
+console just touched, and every change stays reviewable and revertible per
+session.
+
 ## Deterministic Location By Language
 
 | Language | Primary Locator | Fallback | Supported Granularity |
