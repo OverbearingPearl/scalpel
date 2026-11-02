@@ -536,36 +536,25 @@ caller can delete them without invalidating earlier ones."
 
 (defun scalpel-console--placeholder-refresh (&rest _)
   "Two-phase shadow hint for the console input area.
-Phase one, empty input (no pending-input region or blank text):
-show a one-line listing of the three accepted input forms.
-Phase two, prefixed input: replace it with a one-line
-explanation of the mode that `scalpel-console-parse-prefix'
-detects; \"! \" announces shell mode, \"? \" announces the
-read-only consult mode, and any other non-empty input hides the
-hint entirely.  No timer is needed: the hint is rebuilt from
-scratch on every `after-change-functions' event (hook arguments
-are ignored), and overlay deletion is cheap enough to keep the
-logic free of incremental state.  Hint glyph semantics are
-two-phase.  Phase one shows a bare placeholder with no leading
-glyph: on empty input there is nothing on the left for a symbol
-to annotate, so a leading mark would carry no meaning.  Phase
-two opens every hint with \" ◂ \" (space, U+25C2 black
-left-pointing small triangle, space): the leftward point casts
-the hint as a comment on the typed text beside it.  The former
-\" · \" separator (space, U+00B7, space) is deprecated: it had
-to double as a comment separator beside typed text and a list
-bullet on empty input, so the glyph flipped meaning with buffer
-state, and in phase one it advertised membership in a list that
-does not exist.  Poker-suit glyphs were rejected as the marking
-symbol too: none of them points anywhere, so none can present
-the hint as a comment on the text to its left, and a card suit
-would import unrelated gaming connotations.  The hint sits at
-the end of the first pending-input region with `front-advance',
-trailing the typed text so it renders behind the cursor instead
-of popping in ahead of it.  The `cursor' property is carried
-both by the overlay and by the propertized `after-string'
-itself, since a zero-width overlay does not reliably honor the
-overlay-level property; point is drawn before the hint text."
+Empty input shows a plain waiting message whose ellipsis only
+marks waiting, followed by a parenthetical description of the
+two accepted prefixes
+\( \"!␣\" shell, \"?␣\" consult); prefixed input gets a one-line
+explanation of the mode `scalpel-console-parse-prefix' detects.
+The blank after \"!\" and \"?\" is mandatory in the prefix
+grammar, so it is drawn as U+2423 to make the otherwise
+invisible space visible; \" ◂ \" opens every phase-two hint
+because its leftward point reads as a comment on the typed text
+beside it.  Rebuilding from scratch on each
+`after-change-functions' event (hook arguments are ignored) is
+deliberate: overlay deletion is cheap, so no timer or
+incremental state is needed.  The hint sits at the end of the
+first pending-input region with `front-advance' so it trails the
+cursor instead of popping in ahead of it, and the `cursor'
+property is carried by both the overlay and the propertized
+`after-string' because a zero-width overlay does not reliably
+honor the overlay-level property; point is drawn before the hint
+text."
   (when (overlayp scalpel-console--placeholder-overlay)
     (delete-overlay scalpel-console--placeholder-overlay))
   (setq scalpel-console--placeholder-overlay nil)
@@ -578,11 +567,11 @@ overlay-level property; point is drawn before the hint text."
          (hint (cond
                 ((or (null region)
                      (string-empty-p (string-trim text)))
-                 "Input what you want  (! shell, ? consult)")
+                 "Input what you want to do … (Special prefixes: \"!␣\" shell, \"?␣\" consult)")
                 ((eq kind 'shell-mode)
-                 " ◂ shell mode: input is automatically analyzed and translated into shell commands")
+                 " ◂ input is translated into shell commands")
                 ((eq kind 'consult)
-                 " ◂ consult mode: read-only consultation, nothing is ever modified"))))
+                 " ◂ read-only consultation, nothing is ever modified"))))
     (when hint
       (let ((ov (make-overlay (or (cdr region) (point-max))
                               (or (cdr region) (point-max))
