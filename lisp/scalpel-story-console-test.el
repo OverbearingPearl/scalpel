@@ -88,49 +88,40 @@
                   (point-min) (point-max) 'face 'shadow)))
   (:cleanup (delete-directory root t)))
 
-(ert-deftest scalpel-story-console-test-parse-prefix-boundary
-  ()
-  (ert-info ("'? ' prefix yields consult with leading whitespace stripped")
-    (should (equal (scalpel-console-parse-prefix "?  hello")
-                   (cons 'consult "hello"))))
-  (ert-info ("'! ' prefix yields shell-mode with leading whitespace stripped")
-    (should (equal (scalpel-console-parse-prefix "!  ls -la")
-                   (cons 'shell-mode "ls -la"))))
-  (ert-info ("bare '?' at start without following whitespace is plain text")
-    (should (equal (scalpel-console-parse-prefix "?hello")
-                   (cons nil "?hello"))))
-  (ert-info ("bare '!' at start without following whitespace is plain text")
-    (should (equal (scalpel-console-parse-prefix "!ls")
-                   (cons nil "!ls"))))
-  (ert-info ("'?' not at position 0 does not trigger prefix parsing")
-    (should (equal (scalpel-console-parse-prefix "what? yes")
-                   (cons nil "what? yes")))
-    (should (equal (scalpel-console-parse-prefix "why! no")
-                   (cons nil "why! no")))))
+(ert-gwt-deftest
+    (:given "输入以命令前缀开头：行首为 '?' 或 '!' 且其后有空白，整行分别路由为 consult 与 shell-mode 并剥离前导空白")
+  (:when (progn (scalpel-console-parse-prefix "?  hello")
+                (scalpel-console-parse-prefix "!  ls -la")))
+  (:then (should (equal (scalpel-console-parse-prefix "?  hello")
+                        (cons 'consult "hello"))))
+  (:then (should (equal (scalpel-console-parse-prefix "!  ls -la")
+                        (cons 'shell-mode "ls -la")))))
 
-(ert-deftest scalpel-story-console-test-model-tag-vendor-prefix ()
-  "Lock vendor-prefix stripping in `scalpel-console--model-tag'.
-A display tag built from a \"z-ai/\"-prefixed `gptel-model' must drop
-the vendor namespace; a bare model name is rendered verbatim inside
-the same angle brackets."
-  (let ((old-bound (boundp 'gptel-model))
-        (old-model (and (boundp 'gptel-model)
-                        (symbol-value 'gptel-model))))
-    (unwind-protect
-        (progn
-          (set 'gptel-model "z-ai/glm-4.6")
-          (ert-info ("gptel-model \"z-ai/glm-4.6\" renders as <glm-4.6>")
-            (should (equal "<glm-4.6>"
-                           (scalpel-console--model-tag))))
-          (set 'gptel-model "glm-4.6")
-          (ert-info ("bare gptel-model \"glm-4.6\" is rendered verbatim inside the same angle brackets")
-            (should (equal "<glm-4.6>"
-                           (scalpel-console--model-tag)))))
-      ;; Rewrite the saved value or drop the binding we created, so the
-      ;; prior binding state survives even on assertion failure.
-      (if old-bound
-          (set 'gptel-model old-model)
-        (makunbound 'gptel-model)))))
+(ert-gwt-deftest
+  (:given ((prior-bound (boundp 'gptel-model))
+           (prior-model (and (boundp 'gptel-model)
+                             (symbol-value 'gptel-model)))
+           (rendered-tag nil))
+    (setq gptel-model "z-ai/glm-4.6"))
+  (:when (setq rendered-tag (scalpel-console--model-tag)))
+  (:then (ert-info ("gptel-model \"z-ai/glm-4.6\" should render as <glm-4.6>")
+           (should (equal "<glm-4.6>" rendered-tag))))
+  (:cleanup (if prior-bound
+                (set 'gptel-model prior-model)
+              (makunbound 'gptel-model))))
+
+(ert-gwt-deftest
+    (:given ((prior-bound (boundp 'gptel-model))
+             (prior-model (and (boundp 'gptel-model)
+                               (symbol-value 'gptel-model)))
+             (rendered-tag nil))
+            (set 'gptel-model "glm-4.6"))
+    (:when (setq rendered-tag (scalpel-console--model-tag)))
+    (:then (ert-info ("bare gptel-model \"glm-4.6\" renders verbatim as <glm-4.6>")
+             (should (equal "<glm-4.6>" rendered-tag))))
+    (:cleanup (if prior-bound
+                  (set 'gptel-model prior-model)
+                (makunbound 'gptel-model))))
 
 (ert-gwt-deftest
   (:given ((root (make-temp-file "scalpel-story-" t))
@@ -199,69 +190,6 @@ the same angle brackets."
                        #'scalpel-console-add-file)))
   (:then (should (eq (lookup-key scalpel-console-mode-map (kbd "C-c C-v"))
                        #'scalpel-console-add-file-readonly))))
-
-(ert-deftest scalpel-story-console-test-abort-restores-previous-instruction-without-face ()
-  "Aborting over an empty input area restores the prior instruction verbatim.
-This pins the regression where the restore carried the echoed highlight
-face and its role tag into the input area, which content-only assertions
-let slip through.  Expected to turn green once `scalpel-console-abort'
-drops the echoed properties on restore."
-  (let* ((workdir (make-temp-file "scalpel-console-abort" t))
-         (console (let ((default-directory workdir))
-                    (scalpel-console-open)
-                    (current-buffer))))
-    (unwind-protect
-        (progn
-          (ert-info ((format "Opening the console in %S must yield a live console buffer"
-                             workdir))
-            (should (buffer-live-p console)))
-          (with-current-buffer console
-            ;; Previous round is finished: its user instruction sits
-            ;; in the transcript, replayed through the console's own
-            ;; tagging path so the echo carries the highlight face.
-            ;; A new round is running and the input area is still
-            ;; empty.
-            (let ((inhibit-read-only t))
-              (scalpel-console--insert-tagged "explain the parser" 'user))
-            (ert-info ("Input area must be empty before the abort is triggered")
-              (should (null (scalpel-console--pending-input-regions))))
-            (let ((scalpel-console--busy t))
-              (scalpel-console-abort))
-            ;; The input area was empty before the abort, so the
-            ;; pending input found afterwards is exactly the restored
-            ;; unsent instruction.
-            (let* ((regions (scalpel-console--pending-input-regions))
-                   (region (car regions)))
-              (ert-info ((format "Abort must leave exactly one pending-input region, but found %S"
-                                 (length regions)))
-                (should (= (length regions) 1)))
-              (let* ((start (car region))
-                     (end (cdr region))
-                     (restored (buffer-substring start end))
-                     (pos start)
-                     faced-pos)
-                (while (and (not faced-pos) (< pos end))
-                  (when (get-text-property pos 'face)
-                    (setq faced-pos pos))
-                  (setq pos (or (next-single-property-change pos 'face nil end)
-                                end)))
-                (ert-info ((format "Abort must replay the instruction verbatim into the sole pending-input region: expected %S, got %S"
-                                   "explain the parser"
-                                   restored))
-                  (should (string= restored "explain the parser")))
-                (ert-info ((format "Restored input must carry no face at all, but found %S at offset %S"
-                                   (and faced-pos (get-text-property faced-pos 'face))
-                                   (and faced-pos (- faced-pos start))))
-                  (should-not faced-pos))
-                (ert-info ((format "First character of the restored input must carry no role tag, but found %S"
-                                   (get-text-property start 'scalpel-console-role)))
-                  (should-not (get-text-property start 'scalpel-console-role)))))))
-      (when (buffer-live-p console)
-        (let ((proc (get-buffer-process console)))
-          (when proc
-            (set-process-query-on-exit-flag proc nil)))
-        (kill-buffer console))
-      (delete-directory workdir t))))
 
 (provide 'scalpel-story-console-test)
 

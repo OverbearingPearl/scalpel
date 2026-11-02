@@ -9,6 +9,7 @@
 ;;; Code:
 
 (require 'ert)
+(require 'ert-gwt)
 (require 'scalpel-locate-elisp)
 (require 'scalpel-agent)
 
@@ -25,47 +26,90 @@
 "
   "A file whose bar-helper sits in a `use-package' :config body.")
 
-(defmacro scalpel-story-locate-nested-test-with-sample (&rest body)
-  "Write the sample to a temp file and run BODY with it visited.
-Cleans the buffer and file either way."
-  (declare (indent 0))
-  `(let ((file (make-temp-file "scalpel-nested-" nil ".el")))
-     (unwind-protect
-         (progn
-           (write-region scalpel-story-locate-nested-test-sample nil
-                         file nil 'silent)
-           (with-current-buffer (find-file-noselect file)
-             ,@body))
-       (let ((buffer (find-buffer-visiting file)))
-         (when buffer (kill-buffer buffer)))
-       (delete-file file))))
+(ert-gwt-deftest
+  (:given ((sample scalpel-story-locate-nested-test-sample)
+           (file (make-temp-file "scalpel-story-nested-" nil ".el"))
+           (_ (with-temp-file file (insert sample)))
+           (buffer (find-file-noselect file))
+           (reported nil)))
+  (:when (setq reported
+              (with-current-buffer buffer
+                (scalpel-locate-elisp--nested-definition-block
+                 "bar-helper"))))
+  (:then (ert-info ("A defun inside use-package :config reports use-package bar")
+           (should (equal reported "use-package bar"))))
+  (:cleanup
+   (progn
+     (when (buffer-live-p buffer)
+       (with-current-buffer buffer
+         (set-buffer-modified-p nil))
+       (kill-buffer buffer))
+     (when (file-exists-p file)
+       (delete-file file)))))
 
-(ert-deftest scalpel-story-locate-nested-test-block-found ()
-  (ert-info ("A defun inside use-package :config reports use-package bar")
-    (scalpel-story-locate-nested-test-with-sample
-     (should (equal (scalpel-locate-elisp--nested-definition-block
-                     "bar-helper")
-                    "use-package bar")))))
+(ert-gwt-deftest
+  (:given ((sample scalpel-story-locate-nested-test-sample)
+           (file (make-temp-file "scalpel-story-nested-" nil ".el"))
+           (_ (with-temp-file file (insert sample)))
+           (buffer (find-file-noselect file))
+           (reported 'unset)))
+  (:when (setq reported
+               (with-current-buffer buffer
+                 (scalpel-locate-elisp--nested-definition-block
+                  "top-name"))))
+  (:then (ert-info ("A top-level definition reports nil, not a block")
+           (should (null reported))))
+  (:cleanup
+   (progn
+     (when (buffer-live-p buffer)
+       (with-current-buffer buffer
+         (set-buffer-modified-p nil))
+       (kill-buffer buffer))
+     (when (file-exists-p file)
+       (delete-file file)))))
 
-(ert-deftest scalpel-story-locate-nested-test-top-level-nil ()
-  (ert-info ("A top-level definition reports nil, not a block")
-    (scalpel-story-locate-nested-test-with-sample
-     (should (null (scalpel-locate-elisp--nested-definition-block
-                    "top-name"))))))
+(ert-gwt-deftest
+  (:given ((sample scalpel-story-locate-nested-test-sample)
+           (file (make-temp-file "scalpel-story-nested-" nil ".el"))
+           (_ (with-temp-file file (insert sample)))
+           (buffer (find-file-noselect file))
+           (note nil)))
+  (:when (setq note
+               (with-current-buffer buffer
+                 (scalpel-agent--nested-block-note
+                  (buffer-file-name buffer) "bar-helper"))))
+  (:then (ert-info ("The agent note names the block and both remedies")
+           (should (string-match-p "use-package bar" note))
+           (should (string-match-p "hoist" note))))
+  (:cleanup
+   (progn
+     (when (buffer-live-p buffer)
+       (with-current-buffer buffer
+         (set-buffer-modified-p nil))
+       (kill-buffer buffer))
+     (when (file-exists-p file)
+       (delete-file file)))))
 
-(ert-deftest scalpel-story-locate-nested-test-note-suggests-remedies ()
-  (ert-info ("The agent note names the block and both remedies")
-    (scalpel-story-locate-nested-test-with-sample
-     (let ((note (scalpel-agent--nested-block-note
-                  (buffer-file-name) "bar-helper")))
-       (should (string-match-p "use-package bar" note))
-       (should (string-match-p "hoist" note))))))
-
-(ert-deftest scalpel-story-locate-nested-test-note-nil-for-top-level ()
-  (ert-info ("A top-level name adds no note")
-    (scalpel-story-locate-nested-test-with-sample
-     (should (null (scalpel-agent--nested-block-note
-                    (buffer-file-name) "top-name"))))))
+(ert-gwt-deftest
+  (:given ((sample scalpel-story-locate-nested-test-sample)
+           (file (make-temp-file "scalpel-story-nested-" nil ".el"))
+           (_ (with-temp-file file (insert sample)))
+           (buffer (find-file-noselect file))
+           (note 'unset)))
+  (:when (setq note
+              (with-current-buffer buffer
+                (scalpel-agent--nested-block-note
+                 (buffer-file-name buffer) "top-name"))))
+  (:then (ert-info ("A top-level name adds no note")
+           (should (null note))))
+  (:cleanup
+   (progn
+     (when (buffer-live-p buffer)
+       (with-current-buffer buffer
+         (set-buffer-modified-p nil))
+       (kill-buffer buffer))
+     (when (file-exists-p file)
+       (delete-file file)))))
 
 (provide 'scalpel-story-locate-nested-test)
 
