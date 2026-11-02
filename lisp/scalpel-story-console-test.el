@@ -200,6 +200,69 @@ the same angle brackets."
   (:then (should (eq (lookup-key scalpel-console-mode-map (kbd "C-c C-v"))
                        #'scalpel-console-add-file-readonly))))
 
+(ert-deftest scalpel-story-console-test-abort-restores-previous-instruction-without-face ()
+  "Aborting over an empty input area restores the prior instruction verbatim.
+This pins the regression where the restore carried the echoed highlight
+face and its role tag into the input area, which content-only assertions
+let slip through.  Expected to turn green once `scalpel-console-abort'
+drops the echoed properties on restore."
+  (let* ((workdir (make-temp-file "scalpel-console-abort" t))
+         (console (let ((default-directory workdir))
+                    (scalpel-console-open)
+                    (current-buffer))))
+    (unwind-protect
+        (progn
+          (ert-info ((format "Opening the console in %S must yield a live console buffer"
+                             workdir))
+            (should (buffer-live-p console)))
+          (with-current-buffer console
+            ;; Previous round is finished: its user instruction sits
+            ;; in the transcript, replayed through the console's own
+            ;; tagging path so the echo carries the highlight face.
+            ;; A new round is running and the input area is still
+            ;; empty.
+            (let ((inhibit-read-only t))
+              (scalpel-console--insert-tagged "explain the parser" 'user))
+            (ert-info ("Input area must be empty before the abort is triggered")
+              (should (null (scalpel-console--pending-input-regions))))
+            (let ((scalpel-console--busy t))
+              (scalpel-console-abort))
+            ;; The input area was empty before the abort, so the
+            ;; pending input found afterwards is exactly the restored
+            ;; unsent instruction.
+            (let* ((regions (scalpel-console--pending-input-regions))
+                   (region (car regions)))
+              (ert-info ((format "Abort must leave exactly one pending-input region, but found %S"
+                                 (length regions)))
+                (should (= (length regions) 1)))
+              (let* ((start (car region))
+                     (end (cdr region))
+                     (restored (buffer-substring start end))
+                     (pos start)
+                     faced-pos)
+                (while (and (not faced-pos) (< pos end))
+                  (when (get-text-property pos 'face)
+                    (setq faced-pos pos))
+                  (setq pos (or (next-single-property-change pos 'face nil end)
+                                end)))
+                (ert-info ((format "Abort must replay the instruction verbatim into the sole pending-input region: expected %S, got %S"
+                                   "explain the parser"
+                                   restored))
+                  (should (string= restored "explain the parser")))
+                (ert-info ((format "Restored input must carry no face at all, but found %S at offset %S"
+                                   (and faced-pos (get-text-property faced-pos 'face))
+                                   (and faced-pos (- faced-pos start))))
+                  (should-not faced-pos))
+                (ert-info ((format "First character of the restored input must carry no role tag, but found %S"
+                                   (get-text-property start 'scalpel-console-role)))
+                  (should-not (get-text-property start 'scalpel-console-role)))))))
+      (when (buffer-live-p console)
+        (let ((proc (get-buffer-process console)))
+          (when proc
+            (set-process-query-on-exit-flag proc nil)))
+        (kill-buffer console))
+      (delete-directory workdir t))))
+
 (provide 'scalpel-story-console-test)
 
 ;;; scalpel-story-console-test.el ends here

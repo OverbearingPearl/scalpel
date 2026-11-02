@@ -2666,8 +2666,7 @@ round's history as a dead question.  The newest text region whose
 changes the same way `scalpel-console--history' collects turns.  The
 restored region is deleted and re-inserted at the end of the buffer
 as plain untagged text, minus the leading \"User: \" prefix and with
-outer whitespace trimmed, carrying neither
-`scalpel-console-role' nor `scalpel-console-output', so
+outer whitespace trimmed, all text properties stripped, so
 `scalpel-console--pending-input-regions' reads it as typed-but-unsent
 input again; point is placed at the start of the restored text, just
 below the abort notice, ready for editing or resending.
@@ -2740,7 +2739,7 @@ remains intact, and point is left at the end of the buffer."
                               user-end next))
                       (setq pos next)))
                   (when user-start
-                    (let* ((text (buffer-substring user-start user-end))
+                    (let* ((text (buffer-substring-no-properties user-start user-end))
                            (prefix-len 0))
                       (when (string-prefix-p "User: " text)
                         (setq prefix-len (length "User: ")))
@@ -2751,13 +2750,9 @@ remains intact, and point is left at the end of the buffer."
                         (let ((inhibit-read-only t))
                           (goto-char (point-max))
                           (let ((insert-start (point)))
-                            (insert stripped)
                             ;; Plain untagged text: typed-but-unsent input
                             ;; again for scalpel-console--pending-input-regions.
-                            (remove-text-properties
-                             insert-start (point)
-                             '(scalpel-console-role nil
-                               scalpel-console-output nil))
+                            (insert stripped)
                             (goto-char insert-start))))))))
               (when cancel
                 (funcall cancel))
