@@ -1276,30 +1276,25 @@ empty string when the context holds no such file."
                     collect (scalpel-agent--resolve-hint resolved symbol)))))
 
 (defun scalpel-agent--nested-block-note (file symbol)
-  "Return a one-line note for SYMBOL nested in FILE.
+  "Answer why SYMBOL cannot be edited individually within FILE.
 
-The locator only resolves top-level definitions, so when SYMBOL is
-not a top-level definition of FILE but is written inside some
-block-granularity top-level form (typically the :config body of a
-`use-package' declaration), a zero-hit rejection only says \"not
-found\".  This function surfaces that fact as one extra hint line.
+When the locator reports zero hits for SYMBOL in FILE, the symbol
+may still exist there, written inside a block-granularity top-level
+form (typically the :config body of a `use-package' declaration)
+that the locator cannot address on its own.  This function produces
+the one-line hint explaining that situation.
 
-Only Elisp files are inspected; FILE must match \\.el\\'.  SYMBOL,
-a string or symbol, is passed through to the function
-`scalpel-locate-elisp--nested-definition-block', which reads the
-top-level forms of the buffer visiting FILE (opened via
-`find-file-noselect') and returns the name of the block hosting
-SYMBOL, e.g. \"use-package gptel\", or nil.
+FILE must be a string naming an Elisp file (matching \\.el\\');
+SYMBOL may be a string or a symbol.
 
-On a hit, return a line beginning with a newline and two spaces, in
-the style of the existing hint sub-lines.  It states that SYMBOL is
-written inside the named block form, which the locator cannot
-address individually, and offers two ways out: edit that form as a
-whole, or hoist the definition to the file's top level.  Return nil
-when FILE is not an Elisp file, when no hosting block is found, or
-when anything signals (degradation point: any error is swallowed
-and reported as nil).  A nil return means \"nothing to add\", not
-that SYMBOL is absent from FILE."
+Return a hint line beginning with a newline and two spaces when
+SYMBOL is found inside such a hosting block: it names the block,
+states that the locator cannot address it individually, and offers
+two ways out -- edit the form as a whole, or hoist the definition to
+the file's top level.  Return nil when FILE is not an Elisp file,
+when no hosting block is found, or when anything signals (degradation
+point: any error is swallowed and reported as nil).  A nil return
+means \"nothing to add\", not that SYMBOL is absent from FILE."
   (when (and (stringp file)
              (string-match-p "\\.el\\'" file))
     (condition-case nil
@@ -2128,22 +2123,20 @@ unrelated entries elsewhere on the filesystem do not flood the
 note.")
 
 (defun scalpel-agent--context-near-miss (file &optional min-prefix)
-  "Suggest the context entries closest to FILE for a refusal note.
+  "Return the context entries closest to FILE, for use in refusal notes.
 
-Resolve FILE the same way `scalpel-agent--context-file-p' does (via
-`file-truename' and `expand-file-name'), then score each entry in
-`scalpel-agent--context-files' by the length of the common
-directory-style prefix, comparing path components split on \"/\" so
-that /Users/madachuan and /Users/madaduan stop differing at the
-component level, not mid-word.  As a tiebreak within the same prefix
-length, prefer the entry whose basename is closest.
+FILE is resolved the same way `scalpel-agent--context-file-p' resolves
+paths (`file-truename' plus `expand-file-name').  Each entry in
+`scalpel-agent--context-files' is scored by how many leading path
+components it shares with FILE, so /Users/madachuan and /Users/madaduan
+differ at a component boundary rather than mid-word.  Ties on the
+shared-prefix length are broken by basename proximity.
 
 Only entries sharing at least MIN-PREFIX path components (default
-`scalpel-agent--context-near-miss-min-prefix') are considered.
-Return nil when no entry qualifies, or the list of qualifying
-absolute path strings (all ties) otherwise.  This function never
-decides a correction, it only ranks facts for the caller to print as
-\"closest context entries (for comparison)\"."
+`scalpel-agent--context-near-miss-min-prefix') qualify.  Returns nil
+when nothing qualifies; otherwise returns the list of qualifying
+absolute paths — all ties included.  The result is a ranking of
+candidates for the caller to present, not a suggested correction."
   (let* ((min (or min-prefix scalpel-agent--context-near-miss-min-prefix))
          (target (file-truename (expand-file-name file)))
          (target-parts (split-string target "/" t))
@@ -2978,23 +2971,19 @@ alist of file names and match counts."
 
 (defun scalpel-agent-review-file-substitute (action preview callback)
   "Ask the LLM to review ACTION and PREVIEW, then report its decision via CALLBACK.
-This function performs a mechanical-correctness review only; no
-pre-review human confirmation is performed here regardless of the
-match counts.  Human confirmation at execution time is governed
-uniformly by `scalpel-agent-file-substitute-confirm-threshold' when
-the client generates the file-substitute action.
-
-The verdict is detected leniently: after trimming the response and
-stripping an optional leading \"Review:\" marker, the response is
-treated as approval when it begins with the word APPROVE.  The
-word is word-bounded so DISAPPROVED does not count; if the whole
-response also mentions REJECT or \"Do not apply\", the verdict is
-instead a denial.  When the verdict is a denial, the denial text
-passed to CALLBACK is augmented with the perlre table of contents
-via `scalpel-agent--perlre-toc-for-refusal', so a rejected
-substitution review carries the same learning material a perl
-compile failure does.  This toc lookup is failure-safe and yields
-an empty string on error, leaving the denial text unchanged."
+The review checks only mechanical correctness of the proposed
+substitution — not the user's motivation, and not any human
+confirmation, which is handled separately at execution time by
+`scalpel-agent-file-substitute-confirm-threshold'.  The verdict is
+read leniently: after trimming and stripping an optional leading
+\"Review:\" marker, a response beginning with the word APPROVE
+\(word-bounded, so DISAPPROVED does not count) counts as approval,
+unless it also mentions REJECT or \"Do not apply\", in which case
+it is a denial.  Denial text passed to CALLBACK is augmented with
+the perlre table of contents via `scalpel-agent--perlre-toc-for-refusal',
+so a rejected substitution carries the same learning material a
+perl compile failure does; the lookup is failure-safe and leaves
+the denial text unchanged on error."
   (let* ((files (plist-get action :files))
          (pattern (plist-get action :pattern))
          (replacement (plist-get action :replacement))

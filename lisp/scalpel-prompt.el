@@ -63,9 +63,10 @@ constraint is imposed."
      scalpel-thinking-language)))
 
 (defcustom scalpel-thinking-language nil
-  "Optional language the model's reasoning/thinking output is written in.
-When nil, the model chooses the language freely.
-This variable is read by a later prompt rule."
+  "Language the model is asked to write its reasoning/thinking output in.
+When nil, the model picks whatever language it prefers; set this to a
+language name (e.g. \"English\") to force its thinking to use that language.
+This only affects the model's internal reasoning, not the final answer."
   :type '(choice (const :tag "Model chooses freely" nil)
                  (string :tag "Language"))
   :group 'scalpel)
