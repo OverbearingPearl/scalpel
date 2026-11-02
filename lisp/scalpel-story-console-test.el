@@ -108,6 +108,30 @@
     (should (equal (scalpel-console-parse-prefix "why! no")
                    (cons nil "why! no")))))
 
+(ert-deftest scalpel-story-console-test-model-tag-vendor-prefix ()
+  "Lock vendor-prefix stripping in `scalpel-console--model-tag'.
+A display tag built from a \"z-ai/\"-prefixed `gptel-model' must drop
+the vendor namespace; a bare model name is rendered verbatim inside
+the same angle brackets."
+  (let ((old-bound (boundp 'gptel-model))
+        (old-model (and (boundp 'gptel-model)
+                        (symbol-value 'gptel-model))))
+    (unwind-protect
+        (progn
+          (set 'gptel-model "z-ai/glm-4.6")
+          (ert-info ("gptel-model \"z-ai/glm-4.6\" renders as <glm-4.6>")
+            (should (equal "<glm-4.6>"
+                           (scalpel-console--model-tag))))
+          (set 'gptel-model "glm-4.6")
+          (ert-info ("bare gptel-model \"glm-4.6\" is rendered verbatim inside the same angle brackets")
+            (should (equal "<glm-4.6>"
+                           (scalpel-console--model-tag)))))
+      ;; Rewrite the saved value or drop the binding we created, so the
+      ;; prior binding state survives even on assertion failure.
+      (if old-bound
+          (set 'gptel-model old-model)
+        (makunbound 'gptel-model)))))
+
 (ert-gwt-deftest
   (:given ((root (make-temp-file "scalpel-story-" t))
            (scalpel-console-collapse-output t)

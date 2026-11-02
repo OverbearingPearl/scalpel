@@ -545,12 +545,26 @@ read-only consult mode, and any other non-empty input hides the
 hint entirely.  No timer is needed: the hint is rebuilt from
 scratch on every `after-change-functions' event (hook arguments
 are ignored), and overlay deletion is cheap enough to keep the
-logic free of incremental state.  The hint sits at the end of
-the first pending-input region with `front-advance', trailing
-the typed text so it renders behind the cursor instead of
-popping in ahead of it.  The `cursor' property is carried both
-by the overlay and by the propertized `after-string' itself,
-since a zero-width overlay does not reliably honor the
+logic free of incremental state.  Hint glyph semantics are
+two-phase.  Phase one shows a bare placeholder with no leading
+glyph: on empty input there is nothing on the left for a symbol
+to annotate, so a leading mark would carry no meaning.  Phase
+two opens every hint with \" ◂ \" (space, U+25C2 black
+left-pointing small triangle, space): the leftward point casts
+the hint as a comment on the typed text beside it.  The former
+\" · \" separator (space, U+00B7, space) is deprecated: it had
+to double as a comment separator beside typed text and a list
+bullet on empty input, so the glyph flipped meaning with buffer
+state, and in phase one it advertised membership in a list that
+does not exist.  Poker-suit glyphs were rejected as the marking
+symbol too: none of them points anywhere, so none can present
+the hint as a comment on the text to its left, and a card suit
+would import unrelated gaming connotations.  The hint sits at
+the end of the first pending-input region with `front-advance',
+trailing the typed text so it renders behind the cursor instead
+of popping in ahead of it.  The `cursor' property is carried
+both by the overlay and by the propertized `after-string'
+itself, since a zero-width overlay does not reliably honor the
 overlay-level property; point is drawn before the hint text."
   (when (overlayp scalpel-console--placeholder-overlay)
     (delete-overlay scalpel-console--placeholder-overlay))
@@ -564,14 +578,11 @@ overlay-level property; point is drawn before the hint text."
          (hint (cond
                 ((or (null region)
                      (string-empty-p (string-trim text)))
-                 "< ! shell    ? consult    plain instruction >")
+                 "Input what you want  (! shell, ? consult)")
                 ((eq kind 'shell-mode)
-                 (concat "< shell mode: input is automatically "
-                         "analyzed and translated into shell "
-                         "commands >"))
+                 " ◂ shell mode: input is automatically analyzed and translated into shell commands")
                 ((eq kind 'consult)
-                 (concat "< consult mode: read-only consultation, "
-                         "nothing is ever modified >")))))
+                 " ◂ consult mode: read-only consultation, nothing is ever modified"))))
     (when hint
       (let ((ov (make-overlay (or (cdr region) (point-max))
                               (or (cdr region) (point-max))
@@ -836,14 +847,21 @@ theme-adapted light background; other roles get no face."
 
 (defun scalpel-console--model-tag ()
   "Return a display tag for the current `gptel-model', like \"<gpt-4o>\".
-Return \"\" when the variable is unbound, nil, or an empty
-string.  Symbol and string values wrap identically in angle
-brackets.  Display text only: carries no dialect-dispatch
+The name is first normalized to a string, then reduced to the
+segment after its last slash, so a vendor-qualified value such as
+\"openai/gpt-4o\" displays as \"<gpt-4o>\".  Return \"\" when the
+variable is unbound, nil, an empty string, or when stripping
+leaves nothing.  Display text only: carries no dialect-dispatch
 meaning."
-  (let ((model (bound-and-true-p gptel-model)))
-    (if (or (null model) (equal model ""))
+  (let* ((model (bound-and-true-p gptel-model))
+         (name (cond ((null model) "")
+                     ((symbolp model) (symbol-name model))
+                     ((stringp model) model)
+                     (t (format "%s" model))))
+         (base (replace-regexp-in-string "\\`.*/" "" name)))
+    (if (equal base "")
         ""
-      (format "<%s>" model))))
+      (format "<%s>" base))))
 
 (defun scalpel-console--trim-report (text)
   "Replace the fenced body of a report in TEXT with a placeholder.
