@@ -57,7 +57,9 @@
 Prompt for the directory, defaulting to the current
 `default-directory'; the console is anchored there.
 Also prompt for an optional session suffix string
-\\(empty input allowed\\) and pass it to the console."
+\\(empty input allowed\\) and pass it to the console.
+Use `gptel-menu' (C-c C-b) and its scope switching to change
+the model for this session or globally."
   (interactive
    (list (read-directory-name "Scalpel console root: "
                               default-directory nil t)))

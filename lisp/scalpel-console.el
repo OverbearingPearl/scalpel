@@ -335,8 +335,6 @@ there is no change.  Safe when the reasoning buffer does not exist."
     scalpel-console--context-baseline
     scalpel-console--compression-baseline
     scalpel-console--last-instruction
-    gptel-backend
-    gptel-model
     scalpel-agent--context-files
     scalpel-agent--context-readonly-files
     scalpel-commit--style
@@ -365,10 +363,10 @@ too.
 `scalpel-agent--context-readonly-files' is carried here so read-only
 markers survive a module reload instead of silently degrading to
 writable.
-`gptel-backend' and `gptel-model' carry the console's per-session
-gptel backend and model, chosen with `scalpel-console-select-model';
-they are buffer-local, so concurrent consoles each keep their own
-choice across a module reload.")
+`gptel-backend' and `gptel-model'` are deliberately not listed because
+they are gptel's own variables.  Scalpel's module reload does not touch
+gptel symbols, so the buffer-local values each console holds survive a
+reload on their own.")
 
 (defconst scalpel-console--session-globals
   '(scalpel-token--console-totals
@@ -613,7 +611,7 @@ later ones are removed.  Must be called inside the console buffer."
     (define-key map (kbd "RET") #'scalpel-console-send-line)
     (define-key map (kbd "S-<return>") #'newline)
     (define-key map (kbd "C-c C-k") #'scalpel-console-abort)
-    (define-key map (kbd "C-c C-b") #'scalpel-console-select-model)
+    (define-key map (kbd "C-c C-b") #'gptel-menu)
     (define-key map (kbd "C-c C-a") #'scalpel-console-add-file)
     (define-key map (kbd "C-c C-v") #'scalpel-console-add-file-readonly)
     (define-key map (kbd "C-c C-d") #'scalpel-console-remove-file)
@@ -857,45 +855,6 @@ meaning."
     (if (equal base "")
         ""
       (format "<%s>" base))))
-
-(defun scalpel-console-select-model ()
-  "Switch the gptel backend and model for the current console session only.
-Other consoles keep their own backend and model settings.
-
-`gptel-menu' is a transient menu: the suffix commands that actually
-set the model run only after the user presses a key, by which time a
-`let' binding of `gptel--set-buffer-locally' has already been unwound.
-The suffix commands would then see a nil scope and take the
-kill-local plus global-set branch, changing the model of every
-session at once.  Instead, save the old value of
-`gptel--set-buffer-locally', set it to t globally, and restore the
-old value from `transient-exit-hook' when the menu exits, so the
-binding survives for the whole transient session."
-  (interactive)
-  (make-local-variable 'gptel-backend)
-  (make-local-variable 'gptel-model)
-  (let ((old-value gptel--set-buffer-locally))
-    ;; scalpel-console--restore-scope is defined at run time via
-    ;; defalias, so the byte compiler cannot see it; the reference is
-    ;; correct at run time and only invisible at compile time.
-    (with-no-warnings
-      ;; Define the named restore function first so the very same
-      ;; symbol can be added to the hook and removed by itself.
-      (defalias 'scalpel-console--restore-scope
-        (lambda ()
-          (setq gptel--set-buffer-locally old-value)
-          (remove-hook 'transient-exit-hook
-                       #'scalpel-console--restore-scope
-                       t)))
-      ;; Add the named symbol locally so a stale closure from a
-      ;; previous invocation can never linger on the global hook.
-      (add-hook 'transient-exit-hook
-                #'scalpel-console--restore-scope
-                nil
-                t)))
-  (call-interactively #'gptel-menu)
-  (unless header-line-format
-    (scalpel-console--placeholder-refresh)))
 
 (defun scalpel-console--trim-report (text)
   "Replace the fenced body of a report in TEXT with a placeholder.
@@ -1774,11 +1733,11 @@ The console is anchored to `default-directory' at call time: the
 buffer name embeds the path and the buffer's `default-directory' is
 pinned to it, so any file-system command run inside the console uses
 that path.
-Each console buffer makes `gptel-backend' and `gptel-model'
-buffer-local, seeded from the globals at open time, so requests and
-reply parsing launched from this session resolve to its own model
-choice while other sessions keep theirs; `scalpel-console-select-model'
-changes them for this console only."
+All console buffers share the global `gptel-backend' and
+`gptel-model' defaults until a buffer sets them itself.  \\[gptel-menu]
+opens `gptel-menu' directly, and its scope switch (=) controls
+whether changes land buffer-locally or globally, exactly as in any
+other gptel buffer."
   (let* ((root (file-name-as-directory (expand-file-name default-directory)))
          (mnemonic (or mnemonic ""))
          (buf (get-buffer-create
@@ -1790,10 +1749,6 @@ changes them for this console only."
     (setq-local scalpel-console--root root)
     (setq-local default-directory root)
     (setq-local scalpel-console--context-baseline 'none-yet)
-    (when (boundp 'gptel-backend)
-      (setq-local gptel-backend gptel-backend))
-    (when (boundp 'gptel-model)
-      (setq-local gptel-model gptel-model))
     (let ((inhibit-read-only t))
       (erase-buffer)
       (goto-char (point-min))
