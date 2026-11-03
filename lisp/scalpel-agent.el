@@ -224,6 +224,17 @@ mutation-class tool call hitting these paths; the shell sandbox needs
 no extra handling, since context files are already bound read-only as
 a whole.")
 
+(add-hook 'scalpel-execute-write-refusal-hook
+          (lambda (file)
+            "Refuse writes to files that entered the context as read-only."
+            (let ((truename (file-truename file)))
+              (when (member truename
+                            (mapcar #'file-truename
+                                    scalpel-agent--context-readonly-files))
+                (user-error "%s entered the context as read-only; \
+remove the restriction by re-adding it normally with C-c C-a"
+                            truename)))))
+
 (defvar-local scalpel-agent--shell-output nil
   "Metadata plist for the most recent shell action in this session.
 Set by `scalpel-agent-shell' right after the command runs and read

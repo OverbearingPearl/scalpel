@@ -41,6 +41,28 @@ a definition whose own range begins at BEG should start at.  Most
 providers return BEG; one extends it upward to carry language syntax
 that belongs to the definition without being part of its range.")
 
+(defvar scalpel-execute-write-refusal-hook nil
+  "Non-nil if a function, or nil otherwise.
+The agent layer registers its read-only check here.  When bound to
+a function, it is invoked before write execution and may refuse
+the operation; nil disables the check.")
+
+(defun scalpel-execute--write-refusal-check ()
+  "Check whether a write to the current buffer's file should be refused.
+Run each function in `scalpel-execute-write-refusal-hook' in order,
+passing the current variable `buffer-file-name' as the sole argument; a
+non-nil string return value is the refusal reason.  Return nil when
+no effective hook function exists or all of them return nil,
+meaning the write is not refused.  Buffers that do not visit any
+file (i.e., the variable `buffer-file-name' is nil, as in `with-temp-buffer')
+are allowed through without calling the hook, avoiding a
+`file-truename' error on nil.  All three write primitives call this
+function before touching the file."
+  (and (buffer-file-name)
+       (run-hook-with-args-until-success
+        'scalpel-execute-write-refusal-hook
+        (buffer-file-name))))
+
 (defun scalpel-execute-register (regexp provider)
   "Register PROVIDER for file names matching REGEXP.
 PROVIDER is a plist with a :deletion-start entry.  Registering the
@@ -92,8 +114,11 @@ in a test, say -- has nothing to write and is left alone."
 (defun scalpel-execute-replace (beg end new-text)
   "Replace region BEG..END in current buffer with NEW-TEXT.
 The buffer is saved when it visits a file, so the change is on disk
-before this returns.  Signal user-error when NEW-TEXT is
-structurally unbalanced."
+before this returns.  Signal user-error when the file is in a
+read-only context and `scalpel-execute--write-refusal-check'
+rejects the write, or when NEW-TEXT is structurally unbalanced."
+  (when (scalpel-execute--write-refusal-check)
+    (user-error "Scalpel: file is in a read-only context; write refused by the write guard"))
   (unless (scalpel-execute--brackets-balanced-p new-text)
     (user-error "Scalpel: replacement has unbalanced brackets; edit refused"))
   (let ((inhibit-read-only t))
@@ -178,7 +203,11 @@ and is separated from the anchor and from whatever follows by
 exactly one blank line whenever the touching lines are code; a
 blank line already present at a join is kept, never doubled.  The
 buffer is saved when it visits a file.  Signal `user-error' when
-NEW-TEXT is structurally unbalanced."
+the write is refused by `scalpel-execute--write-refusal-check' or
+when NEW-TEXT is structurally unbalanced."
+  (let ((refusal (scalpel-execute--write-refusal-check)))
+    (when refusal
+      (user-error "Scalpel: %s" refusal)))
   (unless (scalpel-execute--brackets-balanced-p new-text)
     (user-error "Scalpel: replacement has unbalanced brackets; edit refused"))
   (let ((inhibit-read-only t))
@@ -221,8 +250,12 @@ one blank line behind and not two.  A block with no blank line
 around it leaves none: deleting it puts its neighbours on adjacent
 lines.  The start may be carried upward by the provider registered
 for the buffer's file, so syntax that belongs to the block without
-being part of its range goes with it.  The buffer is saved when it
+being part of its range goes with it.  The deletion is refused with
+a `user-error' when `scalpel-execute--write-refusal-check' reports
+a pending write-refusal for the buffer.  The buffer is saved when it
 visits a file."
+  (when (scalpel-execute--write-refusal-check)
+    (user-error "Cannot delete: buffer has unsaved changes pending refusal"))
   (let* ((start (scalpel-execute--extended-deletion-start beg))
          (inhibit-read-only t))
     (delete-region start (scalpel-execute--block-deletion-end start end))

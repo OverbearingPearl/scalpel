@@ -860,11 +860,15 @@ meaning."
 
 (defun scalpel-console-select-model ()
   "Switch the gptel backend and model for the current console session only.
-Other consoles keep their own backend and model settings."
+Other consoles keep their own backend and model settings.
+The menu is invoked under a temporary `gptel--set-buffer-locally' binding
+so its setters write buffer-local values directly: no kill-local on the
+existing locals, no pollution of the global default."
   (interactive)
   (make-local-variable 'gptel-backend)
   (make-local-variable 'gptel-model)
-  (call-interactively #'gptel-menu)
+  (let ((gptel--set-buffer-locally t))
+    (call-interactively #'gptel-menu))
   (unless header-line-format
     (scalpel-console--placeholder-refresh)))
 
