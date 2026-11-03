@@ -861,14 +861,39 @@ meaning."
 (defun scalpel-console-select-model ()
   "Switch the gptel backend and model for the current console session only.
 Other consoles keep their own backend and model settings.
-The menu is invoked under a temporary `gptel--set-buffer-locally' binding
-so its setters write buffer-local values directly: no kill-local on the
-existing locals, no pollution of the global default."
+
+`gptel-menu' is a transient menu: the suffix commands that actually
+set the model run only after the user presses a key, by which time a
+`let' binding of `gptel--set-buffer-locally' has already been unwound.
+The suffix commands would then see a nil scope and take the
+kill-local plus global-set branch, changing the model of every
+session at once.  Instead, save the old value of
+`gptel--set-buffer-locally', set it to t globally, and restore the
+old value from `transient-exit-hook' when the menu exits, so the
+binding survives for the whole transient session."
   (interactive)
   (make-local-variable 'gptel-backend)
   (make-local-variable 'gptel-model)
-  (let ((gptel--set-buffer-locally t))
-    (call-interactively #'gptel-menu))
+  (let ((old-value gptel--set-buffer-locally))
+    ;; scalpel-console--restore-scope is defined at run time via
+    ;; defalias, so the byte compiler cannot see it; the reference is
+    ;; correct at run time and only invisible at compile time.
+    (with-no-warnings
+      ;; Define the named restore function first so the very same
+      ;; symbol can be added to the hook and removed by itself.
+      (defalias 'scalpel-console--restore-scope
+        (lambda ()
+          (setq gptel--set-buffer-locally old-value)
+          (remove-hook 'transient-exit-hook
+                       #'scalpel-console--restore-scope
+                       t)))
+      ;; Add the named symbol locally so a stale closure from a
+      ;; previous invocation can never linger on the global hook.
+      (add-hook 'transient-exit-hook
+                #'scalpel-console--restore-scope
+                nil
+                t)))
+  (call-interactively #'gptel-menu)
   (unless header-line-format
     (scalpel-console--placeholder-refresh)))
 
