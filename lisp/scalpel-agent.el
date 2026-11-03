@@ -224,16 +224,14 @@ mutation-class tool call hitting these paths; the shell sandbox needs
 no extra handling, since context files are already bound read-only as
 a whole.")
 
-(add-hook 'scalpel-execute-write-refusal-hook
-          (lambda (file)
-            "Refuse writes to files that entered the context as read-only."
-            (let ((truename (file-truename file)))
-              (when (member truename
-                            (mapcar #'file-truename
-                                    scalpel-agent--context-readonly-files))
-                (user-error "%s entered the context as read-only; \
-remove the restriction by re-adding it normally with C-c C-a"
-                            truename)))))
+(defun scalpel-agent--refuse-readonly-write (file)
+  "Refuse writes to FILE if it entered the context as read-only."
+  (let ((truename (file-truename file)))
+    (when (member truename
+                  (mapcar #'file-truename
+                          scalpel-agent--context-readonly-files))
+      (user-error "%s entered the context as read-only; remove the restriction by re-adding it normally with C-c C-a"
+                  truename))))
 
 (defvar-local scalpel-agent--shell-output nil
   "Metadata plist for the most recent shell action in this session.
@@ -478,9 +476,11 @@ the set to remove; the kept set is the difference of the two."
       files)))
 
 (defun scalpel-agent-context-reset ()
-  "Clear the session context and its read-only markers."
+  "Clear the session context and its read-only markers.
+Also re-registers the write-refusal hook for the session."
   (setq scalpel-agent--context-files nil
-        scalpel-agent--context-readonly-files nil))
+        scalpel-agent--context-readonly-files nil)
+  (add-hook 'scalpel-execute-write-refusal-hook #'scalpel-agent--refuse-readonly-write))
 
 (defun scalpel-agent-context-add (path &optional ignore-gitignore)
   "Add PATH (a file or directory) to the session context.
@@ -2176,7 +2176,7 @@ with a logged warning; a reporting helper must never signal."
                    (car kill-ring))
           "Paste the command from the clipboard.")
       (error
-       (warn "scalpel-agent-shell: clipboard copy failed: %S" err)
+       (warn "Scalpel-agent-shell: clipboard copy failed: %S" err)
        nil))))
 
 (defun scalpel-agent--context-file-p (file)
