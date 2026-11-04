@@ -752,8 +752,8 @@ When enabling, just clear the cache so the next request re-probes the
 current backend+model pair."
   (interactive)
   (when scalpel-llm-probe-minimize-reasoning
-    (maphash (lambda (key _value)
-               (put (cdr key) :request-params nil))
+    (maphash (lambda (_key value)
+               (put value :request-params nil))
              scalpel-llm-probe-reasoning-cache))
   (clrhash scalpel-llm-probe-reasoning-cache)
   (setq scalpel-llm-probe-minimize-reasoning
