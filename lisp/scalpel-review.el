@@ -75,24 +75,28 @@ Signal with a message when there is no earlier block."
 
 Records for the same file that are newer than the one under point
 may have rewritten or removed its region, so they are undone too
-\\(cascade).  Every block successfully restored by the cascade is
-immediately struck through with `scalpel-review-rejected' so the
-display stays in sync with the on-disk state; the clicked block
-is struck through the same way afterwards."
+\\(cascade).  Each newer record successfully restored by the
+cascade is collected; if the cascade is blocked, or the clicked
+record itself refuses to restore, everything already restored is
+undone again through `scalpel-review--rollback-cascade'.  On full
+success the clicked block and every cascade entry are struck
+through with `scalpel-review-rejected' so the display stays in
+sync with the on-disk state."
   (interactive)
   (let ((record (scalpel-review--record-at-point)))
     (if (not record)
         (message "No block under point")
       (let ((file (plist-get record :file))
             (pos (point))
-            (blocked nil))
+            (blocked nil)
+            (restored nil))
         ;; A later edit to the same file can rewrite or remove the
         ;; region this record's new text occupies.  Undo every newer
         ;; record for the same file (newest first, i.e. buffer order
         ;; below point) so the earlier record's new text is present
-        ;; again and restores cleanly.  Each restored cascade block's
-        ;; text range is recorded and struck through immediately, so
-        ;; the buffer view reflects what is now on disk.
+        ;; again and restores cleanly.  Each restored entry is kept
+        ;; as (beg end record) so a blocked cascade can be rolled
+        ;; back instead of leaving the file half-restored.
         (save-excursion
           (goto-char (next-single-property-change
                       pos 'scalpel-review-record nil (point-max)))
@@ -108,13 +112,15 @@ is struck through the same way afterwards."
                      (setq blocked t)
                      (throw 'blocked nil))
                     (`t
-                     (let ((inhibit-read-only t))
-                       (put-text-property beg end
-                                          'face 'scalpel-review-rejected))))))
-              (goto-char (next-single-property-change
-                          (point) 'scalpel-review-record nil (point-max))))))
+                     (setq restored
+                           (cons (list beg end newer) restored)))))
+                (goto-char (next-single-property-change
+                            (point) 'scalpel-review-record
+                            nil (point-max)))))))
         (if blocked
-            (message "Refused: the file changed since this change landed")
+            (if (scalpel-review--rollback-cascade restored)
+                (message "Partially cascaded: rollback of the newer changes failed")
+              (message "Refused: the file changed since this change landed"))
           (pcase (scalpel-lineage-restore record)
             (`t
              ;; Strike the whole block under point: from here to the
@@ -122,13 +128,21 @@ is struck through the same way afterwards."
              ;; a record under point always has a text range.
              (save-excursion
                (let ((end (next-single-property-change
-                           pos 'scalpel-review-record nil (point-max))))
-                 (let ((inhibit-read-only t))
-                   (put-text-property pos end
-                                      'face 'scalpel-review-rejected))))
+                           pos 'scalpel-review-record nil (point-max)))
+                     (inhibit-read-only t))
+                 (put-text-property pos end
+                                    'face 'scalpel-review-rejected)))
+             (dolist (entry restored)
+               (let ((beg (nth 0 entry))
+                     (end (nth 1 entry))
+                     (inhibit-read-only t))
+                 (put-text-property beg end
+                                    'face 'scalpel-review-rejected)))
              (message "Restored one change"))
             (`conflict
-             (message "Refused: the file changed since this change landed"))
+             (if (scalpel-review--rollback-cascade restored)
+                 (message "Partially cascaded: rollback of the newer changes failed")
+               (message "Refused: the file changed since this change landed")))
             (other (message "Restore returned %S" other))))))))
 
 (defun scalpel-review--hunk-region-at-point ()
@@ -199,6 +213,29 @@ text matches the file's missing final newline byte for byte."
         (forward-line 1))
       (nreverse ops))))
 
+(defun scalpel-review--rollback-cascade (entries)
+  "Roll back an unsuccessful cascade of hunk operations.
+
+ENTRIES is a list of restored records, each shaped as (beg end
+record), in the order they were originally applied.  Each record
+is re-applied via `scalpel-lineage-restore' in original order;
+re-application stops at the first one that does not return t.
+Ranges whose re-application succeeded have their face cleared;
+ranges never re-applied remain visible on disk and are marked
+with the `scalpel-review-rejected' face instead.
+
+Return t when any re-application failed (partial rollback), nil
+when every record was re-applied successfully."
+  (let ((failed nil))
+    (dolist (entry entries)
+      (pcase-let ((`(,beg ,end ,record) entry))
+        (if (and (not failed) (scalpel-lineage-restore record))
+            (remove-text-properties beg end '(face nil))
+          (unless failed
+            (setq failed t))
+          (put-text-property beg end 'face 'scalpel-review-rejected))))
+    failed))
+
 (defun scalpel-review-reject-hunk ()
   "Reject the diff hunk under point in the review buffer.
 Reverse-apply one @@ hunk of the record's diff instead of
@@ -252,9 +289,11 @@ reported and nothing is changed."
                   (write-region (point-min) (point-max)
                                 file nil 'silent))
                 (scalpel-lineage--revert-clean-buffer file)
-                (plist-put record :new-text
-                           (string-replace after before
-                                           (plist-get record :new-text)))
+                (let ((updated (string-replace after before
+                                               (plist-get record :new-text))))
+                  (if (string-equal updated (plist-get record :new-text))
+                      (message "Hunk rejected; :new-text left unchanged")
+                    (plist-put record :new-text updated)))
                 (with-current-buffer (current-buffer)
                   (let ((inhibit-read-only t))
                     (put-text-property (car region) (cdr region)
@@ -336,10 +375,8 @@ The whole block (including the separator line) is tagged with the
             (progn
               (insert (format "File: %s%s\n" file session-suffix))
               (when (scalpel-lineage-conflict-p record)
-                (save-excursion
-                  (forward-line -1)
-                  (end-of-line)
-                  (insert "  [CONFLICT: file changed after the session]")))
+                (forward-char -1)
+                (insert "  [CONFLICT: file changed after the session]"))
               ;; Highlight the file header line in bold.
               (put-text-property beg (point) 'face
                                  '(bold diff-header))
