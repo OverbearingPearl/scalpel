@@ -486,7 +486,8 @@ parsed JSON response as a plist, or nil on any failure."
              (url (and backend (condition-case nil (gptel-backend-url backend) (error nil))))
              (key (and backend (scalpel-llm--probe-key backend)))
              (model (and (boundp 'gptel-model) gptel-model
-                         (condition-case nil (gptel--model-name gptel-model) (error nil)))))
+                         (condition-case nil (gptel--model-name gptel-model) (error nil))))
+             (bname (and backend (condition-case nil (gptel-backend-name backend) (error nil)))))
         (if (not (and url key model))
             (progn
               (message "Scalpel: reasoning probe: backend, url, key or model missing")
@@ -506,20 +507,21 @@ parsed JSON response as a plist, or nil on any failure."
                                              (content . "Solve step by step and show all work: what is 37*43 plus 91*17? Verify each partial product."))]
                                  :stream :json-false)
                            params))))
-            (message "Scalpel: reasoning probe: POST %s" endpoint)
+            (message "Scalpel: reasoning probe: POST %s (%s / %s)" endpoint bname model)
             (let ((buf (url-retrieve-synchronously endpoint t nil 45)))
               (if (not buf)
                   (progn
-                    (message "Scalpel: reasoning probe: no response buffer from %s" endpoint)
+                    (message "Scalpel: reasoning probe: no response buffer from %s (%s / %s)" endpoint bname model)
                     nil)
                 (with-current-buffer buf
                   (goto-char (point-min))
-                  (message "Scalpel: reasoning probe: HTTP status: %s"
+                  (message "Scalpel: reasoning probe: HTTP status: %s (%s / %s)"
                            (buffer-substring-no-properties
-                            (line-beginning-position) (line-end-position)))
+                            (line-beginning-position) (line-end-position))
+                           bname model)
                   (if (not (re-search-forward "\r?\n\r?\n" nil t))
                       (progn
-                        (message "Scalpel: reasoning probe: no HTTP body from %s" endpoint)
+                        (message "Scalpel: reasoning probe: no HTTP body from %s (%s / %s)" endpoint bname model)
                         nil)
                     (condition-case perr
                         (let* ((raw (buffer-substring-no-properties
@@ -548,11 +550,31 @@ parsed JSON response as a plist, or nil on any failure."
      nil)))
 
 (defun scalpel-llm-probe-reasoning ()
-  "Probe which parameters best suppress the model thinking, install it.
+  "Probe which parameter groups best suppress the model thinking, install it.
 Each candidate is a plist of extra body parameters, matching the plist
 shape gptel documents for :request-params, and the winner is installed
-with that same shape.  Synchronous and uncached; verdicts for all
-candidates are collected and printed as one summary block."
+with that same shape.  Installation takes over :request-params
+entirely: any existing value, including request parameters configured
+by the user outside Scalpel, is replaced.  When no candidate wins, or
+the model does not think by default, :request-params is set to an
+empty plist instead of removed, so the request body uses exactly the
+endpoint defaults and nothing else.  Synchronous and uncached;
+verdicts for all candidates are collected and printed as one summary
+block.
+
+Each candidate combines a reasoning parameter with a full set of
+sampling parameters (:temperature 0.0, :presence_penalty 0,
+:frequency_penalty 0), so one candidate request validates the whole
+group at once; the total request count stays at 1 baseline + N
+candidates.  The candidate list starts with reasoning_effort \"none\"
+— aiming to switch thinking off entirely — and is ordered toward the
+goal of thinking as little as possible.  When a combined candidate is
+REJECTED-400, one fallback probe with only the reasoning parameters
+of that candidate is sent (at most one fallback per candidate, only
+on the failure path).  If the fallback is accepted while the combined
+candidate was rejected, the backend does not support the sampling
+parameters; both verdicts are recorded separately, and only in that
+case may the pure reasoning plist become the installed best."
   (interactive)
   (let ((model gptel-model)
         (baseline (scalpel-llm--probe-send nil)))
@@ -565,8 +587,8 @@ candidates are collected and printed as one summary block."
          ((null baseline-len)
           (message "Scalpel: reasoning probe: baseline response unreadable; aborting"))
          ((zerop baseline-len)
-          (cl-remprop model :request-params)
-          (message "Scalpel: reasoning probe: model does not think by default; cleared :request-params on %S" model))
+          (put model :request-params nil)
+          (message "Scalpel: reasoning probe: model does not think by default; set :request-params to empty plist on %S" model))
          (t
           (message "Scalpel: reasoning probe: baseline reasoning length %d" baseline-len)
           (let ((best nil) (best-len baseline-len) verdicts)
@@ -574,22 +596,89 @@ candidates are collected and printed as one summary block."
             ;; parameters, appended as a unit by
             ;; `scalpel-llm--probe-send'; a flat plist here would be
             ;; iterated atom by atom and corrupt the request body.
-            (dolist (c '((:reasoning_effort "low")
-                         (:enable_thinking :json-false)
-                         (:thinking (:type "disabled"))))
-              (let ((resp (scalpel-llm--probe-send c)))
+            ;; Each candidate appends the full sampling set on top of
+            ;; one reasoning parameter, so a single request validates
+            ;; the whole group.
+            (dolist (c '((:reasoning_effort "none"
+                           :temperature 0.0 :presence_penalty 0 :frequency_penalty 0)
+                         (:reasoning_effort "low"
+                           :temperature 0.0 :presence_penalty 0 :frequency_penalty 0)
+                         (:enable_thinking :json-false
+                          :temperature 0.0 :presence_penalty 0 :frequency_penalty 0)
+                         (:thinking (:type "disabled")
+                          :temperature 0.0 :presence_penalty 0 :frequency_penalty 0)))
+              (let* ((reasoning-only
+                      (let ((k (car c)) (v (cadr c)))
+                        (if (and (eq v :json-false))
+                            (list k v)
+                          (list k v))))
+                     (resp (scalpel-llm--probe-send c)))
                 (cond
                  ((null resp)
                   (push (format "%S FAILED" c) verdicts))
                  ((plist-get resp :error)
                   (let ((err (plist-get resp :error)))
-                    (push (format "%S REJECTED-400 %s"
-                                  c
-                                  (decode-coding-string
-                                   (or (plist-get err :message)
-                                       (prin1-to-string err))
-                                   'utf-8))
-                          verdicts)))
+                    ;; Combined candidate rejected: attribute the
+                    ;; failure with one fallback probe of the pure
+                    ;; reasoning parameters only.
+                    (let ((fb (scalpel-llm--probe-send reasoning-only)))
+                      (cond
+                       ((null fb)
+                        (push (format "%S REJECTED-400 %s; fallback %S FAILED"
+                                      c
+                                      (decode-coding-string
+                                       (or (plist-get err :message)
+                                           (prin1-to-string err))
+                                       'utf-8)
+                                      reasoning-only)
+                              verdicts))
+                       ((plist-get fb :error)
+                        (let ((ferr (plist-get fb :error)))
+                          (push (format "%S REJECTED-400 %s; fallback %S REJECTED-400 %s"
+                                        c
+                                        (decode-coding-string
+                                         (or (plist-get err :message)
+                                             (prin1-to-string err))
+                                         'utf-8)
+                                        reasoning-only
+                                        (decode-coding-string
+                                         (or (plist-get ferr :message)
+                                             (prin1-to-string ferr))
+                                         'utf-8))
+                                verdicts)))
+                       (t
+                        (let ((flen (scalpel-llm--reasoning-content-length fb)))
+                          (cond
+                           ((null flen)
+                            (push (format "%S REJECTED-400 %s; fallback %S UNREADABLE"
+                                          c
+                                          (decode-coding-string
+                                           (or (plist-get err :message)
+                                               (prin1-to-string err))
+                                           'utf-8)
+                                          reasoning-only)
+                                  verdicts))
+                           ((< flen best-len)
+                            (push (format "%S REJECTED-400 %s; fallback %S ACCEPTED %d -> %d (sampling params unsupported)"
+                                          c
+                                          (decode-coding-string
+                                           (or (plist-get err :message)
+                                               (prin1-to-string err))
+                                           'utf-8)
+                                          reasoning-only
+                                          baseline-len flen)
+                                  verdicts)
+                            (setq best reasoning-only best-len flen))
+                           (t
+                            (push (format "%S REJECTED-400 %s; fallback %S NO-BETTER (%d >= %d)"
+                                          c
+                                          (decode-coding-string
+                                           (or (plist-get err :message)
+                                               (prin1-to-string err))
+                                           'utf-8)
+                                          reasoning-only
+                                          flen baseline-len)
+                                  verdicts)))))))))
                  (t
                   (let ((len (scalpel-llm--reasoning-content-length resp)))
                     (cond
@@ -609,8 +698,8 @@ candidates are collected and printed as one summary block."
                   (put model :request-params best)
                   (message "Scalpel: reasoning probe: installed %S on %S (reasoning %d -> %d)" best model baseline-len best-len))
               (progn
-                (cl-remprop model :request-params)
-                (message "Scalpel: reasoning probe: no effective candidate; cleared :request-params on %S" model)))))))))))
+                (put model :request-params nil)
+                (message "Scalpel: reasoning probe: no effective candidate; set :request-params to empty plist on %S" model)))))))))))
 
 (defvar scalpel-llm-probe-inhibit nil
   "Non-nil means skip automatic reasoning probes.
@@ -677,14 +766,16 @@ so the next request re-probes the current backend+model pair."
 
 (defun scalpel-llm-probe-minimize-reasoning-toggle ()
   "Toggle `scalpel-llm-probe-minimize-reasoning' and clear the probe cache.
-When disabling, first strip `:request-params' from every probed model
-symbol so no stale parameters survive, then clear the cache.  When
-enabling, just clear the cache so the next request re-probes the
+Cache keys are (backend . model-symbol) cons cells.  When disabling,
+first overwrite `:request-params' with an empty plist on every cached
+model symbol -- including ones carrying user-owned parameters -- so
+each model falls back to its own defaults, then clear the cache.
+When enabling, just clear the cache so the next request re-probes the
 current backend+model pair."
   (interactive)
   (when scalpel-llm-probe-minimize-reasoning
-    (maphash (lambda (_key model-symbol)
-               (cl-remprop model-symbol :request-params))
+    (maphash (lambda (key _value)
+               (put (cdr key) :request-params nil))
              scalpel-llm-probe-reasoning-cache))
   (clrhash scalpel-llm-probe-reasoning-cache)
   (setq scalpel-llm-probe-minimize-reasoning

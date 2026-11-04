@@ -1809,7 +1809,11 @@ leaves the machine -- and inbound text is restored through
 `scalpel-redact-restore' as it arrives: report text in the success
 callback and rendered error headers in the error handler.  The
 conversation buffer therefore never shows placeholders; it always
-holds the real paths the user typed."
+holds the real paths the user typed.  The model tag shown on the
+reply line is snapshotted before the request is sent and reused
+when the report is inserted, so the tag names the model that was
+actually selected at send time rather than whatever a live read
+would return later."
   (setq scalpel-console--round-error nil)
   (let* ((target (scalpel-console--target-buffer))
          ;; The acknowledgement `send-line' appended exists only for the
@@ -1846,6 +1850,11 @@ holds the real paths the user typed."
          ;; is in flight and no terminal callback ever runs.
          (_ (with-current-buffer target
               (setq-local scalpel-console--status-stop stop)))
+         ;; Snapshot the model tag before the request goes out, so the
+         ;; reply line names the model selected at send time even when
+         ;; the answer callback runs after the selection changed.
+         (model-tag (with-current-buffer target
+                      (scalpel-console--model-tag)))
          ;; The counts mirror the exact strings `scalpel-agent--prompt'
          ;; assembles -- the cod system suffix and the user prompt rules
          ;; folded into :instruction -- so the breakdown always matches
@@ -1952,7 +1961,7 @@ holds the real paths the user typed."
                        ;; so the next round never round-trips a placeholder.
                        (scalpel-console--append
                         (format "Scalpel%s: %s"
-                                (scalpel-console--model-tag)
+                                model-tag
                                 (scalpel-redact-restore
                                  (plist-get round-result :report)))
                         'assistant))
