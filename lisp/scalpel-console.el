@@ -611,7 +611,7 @@ later ones are removed.  Must be called inside the console buffer."
     (define-key map (kbd "RET") #'scalpel-console-send-line)
     (define-key map (kbd "S-<return>") #'newline)
     (define-key map (kbd "C-c C-k") #'scalpel-console-abort)
-    (define-key map (kbd "C-c C-b") #'gptel-menu)
+    (define-key map (kbd "C-c C-b") #'scalpel-llm-select-backend)
     (define-key map (kbd "C-c C-a") #'scalpel-console-add-file)
     (define-key map (kbd "C-c C-v") #'scalpel-console-add-file-readonly)
     (define-key map (kbd "C-c C-d") #'scalpel-console-remove-file)
@@ -1776,14 +1776,7 @@ other gptel buffer."
           (scalpel-lineage-session-clear)
           (scalpel-lineage-start))
       (error nil))
-    (goto-char (point-max))
-    ;; Automatic reasoning probe: every freshly opened console probes
-    ;; the reasoning capability of the model currently in effect.
-    ;; Errors are ignored so consoles opened outside a gptel context
-    ;; still open cleanly.
-    (condition-case nil
-        (scalpel-llm-probe-reasoning-maybe)
-      (error nil))))
+    (goto-char (point-max))))
 
 (defun scalpel-console--run-round (instruction history on-complete)
   "Run one agent round for INSTRUCTION without blocking.

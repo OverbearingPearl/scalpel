@@ -429,15 +429,20 @@ off quickly and diagnosably while normal replies are unaffected."
                         :message (error-message-string err)))))
            (notify-error payload)))))))
 
+(defun scalpel-llm-probe-reasoning-lazy-advice (&rest _args)
+  "Named :before advice wiring the lazy pre-request probe into the request path."
+  (scalpel-llm-probe-reasoning-lazy))
+
+(advice-add 'scalpel-llm-request-async :before #'scalpel-llm-probe-reasoning-lazy-advice)
+
 ;;;###autoload
 (defun scalpel-llm-select-backend ()
   "Interactively switch the gptel backend used for Scalpel requests.
 Delegates to `gptel-menu'.
-After switching, automatically probes reasoning support and installs
-the minimal reasoning parameters."
+Reasoning support probing is lazy: the minimal reasoning parameters
+are applied just before the next Scalpel request."
   (interactive)
-  (call-interactively #'gptel-menu)
-  (scalpel-llm-probe-reasoning-maybe))
+  (call-interactively #'gptel-menu))
 
 (defun scalpel-llm--reasoning-content-length (resp)
   "Three-state measure of reasoning in parsed chat-completions RESP.
@@ -629,6 +634,64 @@ itself always returns nil."
        (message "scalpel-llm-probe-reasoning failed: %s"
                 (error-message-string err))
        nil))))
+
+(defun scalpel-llm-probe-reasoning-lazy ()
+  "Lazy pre-request probe entry point.
+Runs a one-shot reasoning probe for the current gptel backend/model
+pair unless it has already been probed.  Does nothing when the user
+opted out via `scalpel-llm-probe-minimize-reasoning' being nil, when
+`scalpel-llm-probe-inhibit' is non-nil, or when the gptel backend or
+model is unset.  A probe failure is logged and swallowed so the
+request path is never broken; the failed pair is not cached, so the
+probe retries on the next request."
+  (when (and scalpel-llm-probe-minimize-reasoning
+             (not scalpel-llm-probe-inhibit)
+             gptel-backend
+             gptel-model)
+    (let ((key (cons (gptel-backend-name gptel-backend)
+                     (gptel--model-name gptel-model))))
+      (unless (gethash key scalpel-llm-probe-reasoning-cache)
+        ;; Degradation point: probe errors must not break the request path,
+        ;; so they are logged loudly and swallowed; failed pairs stay
+        ;; uncached and are retried on the next request.
+        (condition-case err
+            (progn
+              (scalpel-llm-probe-reasoning)
+              (puthash key t scalpel-llm-probe-reasoning-cache))
+          (error
+           (message "scalpel-llm-probe: reasoning probe failed for %S: %s"
+                    key (error-message-string err))))))))
+
+(defconst scalpel-llm-probe-reasoning-cache (make-hash-table :test #'equal)
+  "Per-session cache of reasoning probes.
+Keys are (backend-name . model-name) conses; values are the model
+symbols that were probed.  The toggle consults this table to strip
+:request-params from every probed model.")
+
+(defcustom scalpel-llm-probe-minimize-reasoning t
+  "Non-nil when reasoning minimization is enabled for LLM probes.
+Toggling this switch invalidates `scalpel-llm-probe-reasoning-cache'
+so the next request re-probes the current backend+model pair."
+  :type 'boolean
+  :group 'scalpel)
+
+(defun scalpel-llm-probe-minimize-reasoning-toggle ()
+  "Toggle `scalpel-llm-probe-minimize-reasoning' and clear the probe cache.
+When disabling, first strip `:request-params' from every probed model
+symbol so no stale parameters survive, then clear the cache.  When
+enabling, just clear the cache so the next request re-probes the
+current backend+model pair."
+  (interactive)
+  (when scalpel-llm-probe-minimize-reasoning
+    (maphash (lambda (_key model-symbol)
+               (cl-remprop model-symbol :request-params))
+             scalpel-llm-probe-reasoning-cache))
+  (clrhash scalpel-llm-probe-reasoning-cache)
+  (setq scalpel-llm-probe-minimize-reasoning
+        (not scalpel-llm-probe-minimize-reasoning))
+  (message "scalpel-llm-probe-minimize-reasoning is now %s"
+           (if scalpel-llm-probe-minimize-reasoning
+               "enabled" "disabled")))
 
 (provide 'scalpel-llm)
 
