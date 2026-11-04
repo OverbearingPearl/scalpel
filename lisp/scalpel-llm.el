@@ -433,6 +433,16 @@ off quickly and diagnosably while normal replies are unaffected."
   "Named :before advice wiring the lazy pre-request probe into the request path."
   (scalpel-llm-probe-reasoning-lazy))
 
+(defun scalpel-llm-unload-function ()
+  "Remove top-level advice registered by scalpel-llm on unloading.
+Returning nil lets `unload-feature' continue with its default
+cleanup; without this hook, `scalpel-llm-probe-reasoning-lazy-advice'
+would stay attached to `scalpel-llm-request-async' after the feature
+is unloaded.  Exists to satisfy unload hooks checked by melpazoid."
+  (advice-remove 'scalpel-llm-request-async
+                 #'scalpel-llm-probe-reasoning-lazy-advice)
+  nil)
+
 (advice-add 'scalpel-llm-request-async :before #'scalpel-llm-probe-reasoning-lazy-advice)
 
 ;;;###autoload
