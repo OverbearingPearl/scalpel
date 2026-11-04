@@ -232,6 +232,7 @@ accumulated reply exceeds `scalpel-llm-max-reply-bytes', the
 request is finished with an `oversized' error naming the
 accumulated byte count and the limit, so a runaway stream is cut
 off quickly and diagnosably while normal replies are unaffected."
+  (scalpel-llm-probe-reasoning-lazy)
   (let* ((cancelled nil)
          (accumulated "")
          (timer nil)
@@ -428,22 +429,6 @@ off quickly and diagnosably while normal replies are unaffected."
                   (list :type 'setup
                         :message (error-message-string err)))))
            (notify-error payload)))))))
-
-(defun scalpel-llm-probe-reasoning-lazy-advice (&rest _args)
-  "Named :before advice wiring the lazy pre-request probe into the request path."
-  (scalpel-llm-probe-reasoning-lazy))
-
-(defun scalpel-llm-unload-function ()
-  "Remove top-level advice registered by scalpel-llm on unloading.
-Returning nil lets `unload-feature' continue with its default
-cleanup; without this hook, `scalpel-llm-probe-reasoning-lazy-advice'
-would stay attached to `scalpel-llm-request-async' after the feature
-is unloaded.  Exists to satisfy unload hooks checked by melpazoid."
-  (advice-remove 'scalpel-llm-request-async
-                 #'scalpel-llm-probe-reasoning-lazy-advice)
-  nil)
-
-(advice-add 'scalpel-llm-request-async :before #'scalpel-llm-probe-reasoning-lazy-advice)
 
 ;;;###autoload
 (defun scalpel-llm-select-backend ()
@@ -716,23 +701,6 @@ case may the pure reasoning plist become the installed best."
 Probes are normally triggered by backend switches or console
 opening; inhibiting them keeps test runs and batch reloads
 side-effect free.")
-
-(defun scalpel-llm-probe-reasoning-maybe ()
-  "Hook entry point for automatic probes.
-Runs `scalpel-llm-probe-reasoning' unless inhibited by
-`scalpel-llm-probe-inhibit'.  A failing probe is logged via
-`message' and collapsed to nil instead of propagating, so a
-broken probe never breaks the surrounding hook run; the wrapper
-itself always returns nil."
-  (unless scalpel-llm-probe-inhibit
-    (condition-case err
-        (progn
-          (scalpel-llm-probe-reasoning)
-          nil)
-      (error
-       (message "scalpel-llm-probe-reasoning failed: %s"
-                (error-message-string err))
-       nil))))
 
 (defun scalpel-llm-probe-reasoning-lazy ()
   "Lazy pre-request probe entry point.
