@@ -1776,7 +1776,14 @@ other gptel buffer."
           (scalpel-lineage-session-clear)
           (scalpel-lineage-start))
       (error nil))
-    (goto-char (point-max))))
+    (goto-char (point-max))
+    ;; Automatic reasoning probe: every freshly opened console probes
+    ;; the reasoning capability of the model currently in effect.
+    ;; Errors are ignored so consoles opened outside a gptel context
+    ;; still open cleanly.
+    (condition-case nil
+        (scalpel-llm-probe-reasoning-maybe)
+      (error nil))))
 
 (defun scalpel-console--run-round (instruction history on-complete)
   "Run one agent round for INSTRUCTION without blocking.

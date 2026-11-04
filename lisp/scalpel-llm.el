@@ -432,9 +432,203 @@ off quickly and diagnosably while normal replies are unaffected."
 ;;;###autoload
 (defun scalpel-llm-select-backend ()
   "Interactively switch the gptel backend used for Scalpel requests.
-Delegates to `gptel-menu'."
+Delegates to `gptel-menu'.
+After switching, automatically probes reasoning support and installs
+the minimal reasoning parameters."
   (interactive)
-  (call-interactively #'gptel-menu))
+  (call-interactively #'gptel-menu)
+  (scalpel-llm-probe-reasoning-maybe))
+
+(defun scalpel-llm--reasoning-content-length (resp)
+  "Three-state measure of reasoning in parsed chat-completions RESP.
+nil when the structure is broken; 0 when the message exists but
+carries no reasoning field, meaning thinking was fully suppressed;
+the reasoning length otherwise."
+  (let ((choices (plist-get resp :choices)))
+    (cond
+     ((not choices)
+      (let ((text (format "%S" resp)))
+        (message "Scalpel: reasoning probe: response has no choices: %s"
+                 (substring text 0 (min 500 (length text))))
+        nil))
+     ((not (plist-get (car choices) :message))
+      (let ((text (format "%S" (car choices))))
+        (message "Scalpel: reasoning probe: choice has no message: %s"
+                 (substring text 0 (min 500 (length text))))
+        nil))
+     (t
+      (let* ((msg (plist-get (car choices) :message))
+             (r (or (plist-get msg :reasoning_content)
+                    (plist-get msg :reasoning))))
+        (if (stringp r) (length r) 0))))))
+
+(defun scalpel-llm--probe-key (backend)
+  "Return the API key for gptel BACKEND as a string, or nil when absent."
+  (let ((key (condition-case nil (gptel-backend-key backend) (error nil))))
+    (when (functionp key)
+      (setq key (condition-case nil (funcall key) (error nil))))
+    (and (stringp key) (> (length key) 0) key)))
+
+(defun scalpel-llm--probe-send (params)
+  "Send one synchronous chat-completions probe adding PARAMS to the body.
+PARAMS is a plist of extra body parameters; nil sends the baseline
+body.  The request body is built as one plist -- the shape gptel
+documents for :request-params -- so the candidate probed here is
+exactly the value later installed on the model symbol.  Return the
+parsed JSON response as a plist, or nil on any failure."
+  (condition-case err
+      (let* ((backend gptel-backend)
+             (url (and backend (condition-case nil (gptel-backend-url backend) (error nil))))
+             (key (and backend (scalpel-llm--probe-key backend)))
+             (model (and (boundp 'gptel-model) gptel-model
+                         (condition-case nil (gptel--model-name gptel-model) (error nil)))))
+        (if (not (and url key model))
+            (progn
+              (message "Scalpel: reasoning probe: backend, url, key or model missing")
+              nil)
+          (let* ((endpoint
+                  (if (string-suffix-p "/chat/completions" url)
+                      url
+                    (concat (string-trim-right url "/") "/chat/completions")))
+                 (url-request-method "POST")
+                 (url-request-extra-headers
+                  `(("Content-Type" . "application/json")
+                    ("Authorization" . ,(concat "Bearer " key))))
+                 (url-request-data
+                  (json-encode
+                   (append (list :model model
+                                 :messages [((role . "user")
+                                             (content . "Solve step by step and show all work: what is 37*43 plus 91*17? Verify each partial product."))]
+                                 :stream :json-false)
+                           params))))
+            (message "Scalpel: reasoning probe: POST %s" endpoint)
+            (let ((buf (url-retrieve-synchronously endpoint t nil 45)))
+              (if (not buf)
+                  (progn
+                    (message "Scalpel: reasoning probe: no response buffer from %s" endpoint)
+                    nil)
+                (with-current-buffer buf
+                  (goto-char (point-min))
+                  (message "Scalpel: reasoning probe: HTTP status: %s"
+                           (buffer-substring-no-properties
+                            (line-beginning-position) (line-end-position)))
+                  (if (not (re-search-forward "\r?\n\r?\n" nil t))
+                      (progn
+                        (message "Scalpel: reasoning probe: no HTTP body from %s" endpoint)
+                        nil)
+                    (condition-case perr
+                        (let* ((raw (buffer-substring-no-properties
+                                     (point) (point-max)))
+                               ;; The url library may already have decoded
+                               ;; the response body as multibyte text; encode
+                               ;; multibyte strings back to bytes with
+                               ;; utf-8-unix (characters not representable
+                               ;; in latin-1 still round-trip correctly),
+                               ;; use raw single-byte strings as-is, then
+                               ;; decode everything as UTF-8.
+                               (bytes (if (multibyte-string-p raw)
+                                          (encode-coding-string raw 'utf-8-unix)
+                                        raw))
+                               (text (decode-coding-string bytes 'utf-8))
+                               (json-object-type 'plist)
+                               (json-array-type 'list))
+                          (json-read-from-string text))
+                      (error
+                       (message "Scalpel: reasoning probe: JSON parse failed: %s"
+                                (error-message-string perr))
+                       nil)))))))))
+    (error
+     (message "Scalpel: reasoning probe: request failed: %s"
+              (error-message-string err))
+     nil)))
+
+(defun scalpel-llm-probe-reasoning ()
+  "Probe which parameters best suppress the model thinking, install it.
+Each candidate is a plist of extra body parameters, matching the plist
+shape gptel documents for :request-params, and the winner is installed
+with that same shape.  Synchronous and uncached; verdicts for all
+candidates are collected and printed as one summary block."
+  (interactive)
+  (let ((model gptel-model)
+        (baseline (scalpel-llm--probe-send nil)))
+    (cond
+     ((null baseline)
+      (message "Scalpel: reasoning probe: baseline request failed; aborting"))
+     (t
+      (let ((baseline-len (scalpel-llm--reasoning-content-length baseline)))
+        (cond
+         ((null baseline-len)
+          (message "Scalpel: reasoning probe: baseline response unreadable; aborting"))
+         ((zerop baseline-len)
+          (cl-remprop model :request-params)
+          (message "Scalpel: reasoning probe: model does not think by default; cleared :request-params on %S" model))
+         (t
+          (message "Scalpel: reasoning probe: baseline reasoning length %d" baseline-len)
+          (let ((best nil) (best-len baseline-len) verdicts)
+            ;; Each candidate is one whole plist of extra body
+            ;; parameters, appended as a unit by
+            ;; `scalpel-llm--probe-send'; a flat plist here would be
+            ;; iterated atom by atom and corrupt the request body.
+            (dolist (c '((:reasoning_effort "low")
+                         (:enable_thinking :json-false)
+                         (:thinking (:type "disabled"))))
+              (let ((resp (scalpel-llm--probe-send c)))
+                (cond
+                 ((null resp)
+                  (push (format "%S FAILED" c) verdicts))
+                 ((plist-get resp :error)
+                  (let ((err (plist-get resp :error)))
+                    (push (format "%S REJECTED-400 %s"
+                                  c
+                                  (decode-coding-string
+                                   (or (plist-get err :message)
+                                       (prin1-to-string err))
+                                   'utf-8))
+                          verdicts)))
+                 (t
+                  (let ((len (scalpel-llm--reasoning-content-length resp)))
+                    (cond
+                     ((null len)
+                      (push (format "%S UNREADABLE" c) verdicts))
+                     ((< len best-len)
+                      (push (format "%S ACCEPTED %d -> %d" c baseline-len len) verdicts)
+                      (setq best c best-len len))
+                     (t
+                      (push (format "%S NO-BETTER (%d >= %d)" c len baseline-len)
+                            verdicts))))))))
+            (setq verdicts (nreverse verdicts))
+            (message "Scalpel: reasoning probe verdicts:\n%s"
+                     (mapconcat #'identity verdicts "\n"))
+            (if best
+                (progn
+                  (put model :request-params best)
+                  (message "Scalpel: reasoning probe: installed %S on %S (reasoning %d -> %d)" best model baseline-len best-len))
+              (progn
+                (cl-remprop model :request-params)
+                (message "Scalpel: reasoning probe: no effective candidate; cleared :request-params on %S" model)))))))))))
+
+(defvar scalpel-llm-probe-inhibit nil
+  "Non-nil means skip automatic reasoning probes.
+Probes are normally triggered by backend switches or console
+opening; inhibiting them keeps test runs and batch reloads
+side-effect free.")
+
+(defun scalpel-llm-probe-reasoning-maybe ()
+  "Hook entry point for automatic probes.
+Runs `scalpel-llm-probe-reasoning' unless inhibited by
+`scalpel-llm-probe-inhibit'.  A failing probe is logged via
+`message' and collapsed to nil instead of propagating, so a
+broken probe never breaks the surrounding hook run; the wrapper
+itself always returns nil."
+  (unless scalpel-llm-probe-inhibit
+    (condition-case err
+        (progn
+          (scalpel-llm-probe-reasoning)
+          nil)
+      (error
+       (message "scalpel-llm-probe-reasoning failed: %s"
+                (error-message-string err))
+       nil))))
 
 (provide 'scalpel-llm)
 

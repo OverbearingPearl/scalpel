@@ -305,14 +305,19 @@ results buffer is recreated with the invoking directory as its
     (scalpel-test--load-entry-tests)
     (scalpel-test--kill-temp-file-buffers)
     (let ((default-directory dir))
-      (if noninteractive
-          (progn
-            (message "Scalpel: running tests in batch mode...")
-            (ert-run-tests-batch-and-exit "scalpel-"))
-        ;; ERT's results buffer name is hard-coded as "*ert*".
-        (when (get-buffer "*ert*")
-          (kill-buffer "*ert*"))
-        (ert "scalpel-")))))
+      ;; reload-modules unloads scalpel-llm, and unload-feature/defvar
+      ;; destroys the dynamic let binding established by the caller in
+      ;; scalpel-test-run, so the gate must be bound again after the
+      ;; reload finishes, around the ert run itself.
+      (let ((scalpel-llm-probe-inhibit t))
+        (if noninteractive
+            (progn
+              (message "Scalpel: running tests in batch mode...")
+              (ert-run-tests-batch-and-exit "scalpel-"))
+          ;; ERT's results buffer name is hard-coded as "*ert*".
+          (when (get-buffer "*ert*")
+            (kill-buffer "*ert*"))
+          (ert "scalpel-"))))))
 
 (defun scalpel-test-run ()
   "Run every Scalpel ERT test.
@@ -322,7 +327,8 @@ so results appear in the *ert* buffer.  A console with a round in
 flight makes the reload signal a `user-error'."
   (interactive)
   (message "Scalpel: running the test suite...")
-  (scalpel-test-run-internal))
+  (let ((scalpel-llm-probe-inhibit t))
+    (scalpel-test-run-internal)))
 
 (ert-deftest scalpel-test-run-runs-in-this-emacs ()
   "Interactive `scalpel-test-run' runs the suite here, not in a child.
