@@ -720,11 +720,13 @@ probe retries on the next request."
       (unless (gethash key scalpel-llm-probe-reasoning-cache)
         ;; Degradation point: probe errors must not break the request path,
         ;; so they are logged loudly and swallowed; failed pairs stay
-        ;; uncached and are retried on the next request.
+        ;; uncached and are retried on the next request.  The probed
+        ;; model object itself is cached so the strip loop can find the
+        ;; real model symbol to remove :request-params from.
         (condition-case err
             (progn
               (scalpel-llm-probe-reasoning)
-              (puthash key t scalpel-llm-probe-reasoning-cache))
+              (puthash key gptel-model scalpel-llm-probe-reasoning-cache))
           (error
            (message "scalpel-llm-probe: reasoning probe failed for %S: %s"
                     key (error-message-string err))))))))
