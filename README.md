@@ -56,30 +56,18 @@ Shell commands always ask for confirmation before running, since their effects
 are not constrained by the boundary lock. The user agrees to those effects
 before they occur.
 
-**Key differences from Aider and newer coding agents (Claude Code, OpenCode, etc.)**
+For how this differs from Aider and newer coding agents, see Core Advantages.
 
-- **Interaction and ecosystem**: Scalpel is not a standalone CLI; it lives inside
-  Emacs as a buffer. It reuses gptel and LSP, so there is no need to switch
-  to another window outside Emacs.
-- **Location without text guessing**: Aider asks the LLM to produce SEARCH/REPLACE
-  blocks for matching; Scalpel instead resolves symbols directly to exact byte
-  ranges using LSP/tree-sitter/structural scanning, and asks the LLM only for
-  *what* to change.
-- **No scope creep**: Newer agents often change files you did not ask to touch.
-  Scalpel's boundary lock makes that impossible -- replacements land only on the
-  byte range the locator resolved.
-- **Visible, then reversible**: Every modification is reported as it lands, and
-  the whole session can be diffed afterwards and reverted in one shot -- no
-  hunting through scattered diffs. These are the visibility and recovery halves
-  of the design trade above, and they land with `scalpel-lineage`; see Status &
-  Roadmap.
-- **Surgical precision, not bulk replace**: Multi-file refactoring is supported,
-  but every replacement lands on its own resolved range, so a wide change is
-  still a sum of exact ones.
+## Core Advantages
 
-The user story is simple: **you talk to a coding assistant from inside Emacs,
-every actual edit lands on an exact, verified range, and whatever a session
-touched can be read back and unwound.**
+Scalpel gives users an AI editing workflow that is precise, safe, and native to Emacs.
+
+- Deterministic targeting: edits lock to explicit locations and boundaries, reducing unintended changes.
+- Visible, recoverable sessions: every modification is visible as it happens and can be undone or restored.
+- Emacs-native workflow: console interaction, context selection, and history remain inside the editor.
+- Zero-config request optimization: Scalpel automatically detects the active backend and model, suppresses redundant reasoning where possible to reduce latency and token cost, and provides one toggle to restore default request behavior.
+- Privacy and safety: redaction, bounded context, and sandboxed shell execution limit data exposure and side effects.
+- Extensible locator provider: locator and backend support can be extended without changing the core editing model.
 
 ## Design Principles
 
@@ -131,24 +119,31 @@ touched can be read back and unwound.**
                          ╰──────────────┬───────────────────────╯
                                         │ 2. request
                                         ▼
-   ╭───────────────╮    ╭──────────────────────────────────────╮
-   │     gptel     │◀───│           scalpel-agent              │
-   │  (LLM calls)  │    │   LLM: plan → structured actions     │
-   ╰───────────────╯    ╰───────────────┬──────────────────────╯
-                                        │ 3. action list, e.g.
-                                        │  {block-edit, file, symbol}
-                                        ▼
-   ╭───────────────╮    ╭──────────────────────────────────────╮
-   │     LSP /     │◀───│          scalpel-locate              │
-   │ tree-sitter / │    │  resolve action to exact byte range  │
-   │ syntax-ppss   │    ╰───────────────┬──────────────────────╯
-   ╰───────────────╯                    │ 4. (beg . end)
-                                        ▼
                          ╭──────────────────────────────────────╮
-                         │          scalpel-execute             │
+                         │           scalpel-agent              │
+                         │  plans → structured action list      │
+                         ╰──────────────┬───────────────────────╯
+                                        │ 3. LLM requests
+                                        ▼
+   ╭───────────────╮     ╭──────────────────────────────────────╮
+   │     gptel     │◀────│           scalpel-llm                │
+   │  (LLM calls)  │     │  minimal-request probe, reasoning    │
+   ╰───────────────╯     │  suppressed; one toggle to restore   │
+                         ╰──────────────┬───────────────────────╯
+                                        │ 4. actions, e.g.
+                                        │  [[action]] TOML tables
+                                        ▼
+   ╭───────────────╮     ╭──────────────────────────────────────╮
+   │  structural   │◀────│          scalpel-locate              │
+   │  providers    │     │  resolve action to exact byte range  │
+   │  (elisp, md,  │     ╰──────────────┬───────────────────────╯
+   │  yaml, git-   │                    │ 5. (beg . end)
+   │  ignore, org, │                    ▼
+   │  and more)    │     ╭──────────────────────────────────────╮
+   ╰───────────────╯     │          scalpel-execute             │
                          │     boundary-locked replacement      │
                          ╰───────┬──────────────────┬───────────╯
-                                 │ 5. replace       │ 6. record
+                                 │ 6. replace       │ 7. record
                                  ▼                  ▼
           ╭──────────────────────────────╮  ╭──────────────────────────────╮
           │    edited Emacs buffer       │  │       scalpel-lineage        │
@@ -160,29 +155,6 @@ touched can be read back and unwound.**
                                             │      scalpel/autosave        │
                                             ╰──────────────────────────────╯
 </pre>
-
-Components live in focused modules:
-
-- `scalpel-console` – persistent agent UI loop
-- `scalpel-agent` – LLM planning integration and structured action parser
-- `scalpel-locate` – locator dispatch; resolves actions to byte ranges via per-language providers
-- `scalpel-locate-elisp` – built-in structural locator provider for Emacs Lisp
-- `scalpel-locate-markdown` – built-in structural locator provider for Markdown (heading sections)
-- `scalpel-locate-yaml` – built-in structural locator provider for YAML (top-level key blocks)
-- `scalpel-locate-gitignore` – built-in structural locator provider for .gitignore (pattern lines)
-- `scalpel-locate-org` – built-in structural locator provider for Org (headline subtrees)
-- `scalpel-execute` – boundary-locked edit application and deletion,
-  written to disk as applied
-- `scalpel-sandbox` – command sandbox for shell actions (`bubblewrap` on Linux, `sandbox-exec` on macOS)
-- `scalpel-token` – per-round token accounting buffer (`M-x scalpel-token-open`, estimates, not API usage)
-- `scalpel-lineage` – session diff, tracking, and Git-backed rollback
-
-Every additional language arrives as a `scalpel-locate-<lang>.el` provider
-module, registered through `scalpel-locate-register-provider`. Planned
-providers cover the languages in the table below: Rust, TypeScript /
-JavaScript, Go, Python, C / C++, and data formats (JSON / YAML / TOML).
-
----
 
 ## Interaction Model
 
@@ -323,31 +295,30 @@ If you prefer not to use `use-package`, you can manually add both packages to
 ;; Open a project and an Emacs Lisp / Rust / TS file.
 M-x scalpel-open
 ;; In the console:
-;;   "in parser.el, make parse-config return nil on missing file"
+;;   "in parser.el, make parse-config return nil when the file is missing"
 ;;   "add a with-timeout helper next to the current function"
 ;;   "rename load-config to load-settings and update its callers"
 ```
 
 Inside the console:
 
-- `RET` – send everything typed since the last reply
-- `S-RET` – insert a newline, so an instruction may span several lines
-- `C-c C-c` – also send the pending instruction
-- `C-c C-k` – cancel the in-flight request
-- `C-c C-b` – switch the active gptel backend (model) for future requests
-- `C-c C-a` – add a file or directory to the context (writable)
-- `C-c C-A` – add a file or directory to the context read-only: the agent
-  can read it, but no mutation tool may write it; adding the same path
-  again with `C-c C-a` lifts the restriction
-- `C-c C-d` – remove a file or directory from the context
-- `C-c C-r` – clear the context
-- `C-c C-f` – forget the conversation; keeps the context files
-- `C-c C-e` – repeat the previous instruction verbatim (after a planner-output failure)
-- `C-c C-o` – toggle verbatim output of consumed bodies
-- `M-x scalpel-token-open` – show per-round token accounting (round, per-console and grand totals)
-- `M-x scalpel-token-reset` – clear the token accounting
-- `M-x scalpel-history` – show previous Scalpel sessions
-- `M-x scalpel-revert-session` – revert one session completely
+- `RET` – sends everything typed since the last reply
+- `S-RET` – inserts a newline, so an instruction may span several lines
+- `C-c C-c` – also sends the pending instruction
+- `C-c C-k` – cancels the in-flight request
+- `C-c C-b` – switches the active gptel backend (model) for future requests
+- `C-c C-a` – adds a file or directory to the context (writable)
+- `C-c C-A` – adds a file or directory to the context as read-only: the agent can read it, but no mutation tool may write to it; re-adding the same path with `C-c C-a` lifts the restriction
+- `C-c C-d` – removes a file or directory from the context
+- `C-c C-r` – clears the context
+- `C-c C-f` – forgets the conversation; keeps the context files
+- `C-c C-e` – repeats the previous instruction verbatim (after a planner-output failure)
+- `C-c C-o` – toggles verbatim output of consumed bodies
+- `M-x scalpel-token-open` – shows per-round token accounting (round, per-console and grand totals)
+- `M-x scalpel-token-reset` – clears the token accounting
+- `M-x scalpel-llm-probe-minimize-reasoning-toggle` – minimizes reasoning in the LLM probe with one toggle
+- `M-x scalpel-history` – shows previous Scalpel sessions
+- `M-x scalpel-revert-session` – reverts one session completely
 
 ## Privacy & Safety
 
