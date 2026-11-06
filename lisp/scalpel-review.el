@@ -133,8 +133,9 @@ and return the buffer."
 
 (defun scalpel-review-jump ()
   "Jump to the review target described by the record at point.
-On a file-rename record or a `File:' line, open the file at its
-beginning; otherwise delegate to `scalpel-review--jump-hunk'.
+On a record whose `:tool' is `file-rename', or on a `File:' line,
+open the record's `:file' at its beginning; otherwise delegate to
+`scalpel-review--jump-hunk'.
 Read-only: never modifies any file on disk."
   (interactive)
   (let ((record (scalpel-review--record-at-point)))
@@ -146,7 +147,7 @@ Read-only: never modifies any file on disk."
         (save-excursion
           (beginning-of-line)
           (cond
-           ((eq (plist-get record :kind) 'file-rename)
+           ((eq (plist-get record :tool) 'file-rename)
             (let ((file (plist-get record :file)))
               (if file
                   (progn (find-file-other-window file)
@@ -154,13 +155,11 @@ Read-only: never modifies any file on disk."
                 (message "Rename record lacks file name")
                 nil)))
            ((looking-at-p "File:")
-            (let ((file (buffer-substring-no-properties
-                         (match-end 0) (line-end-position))))
-              (setq file (string-trim file))
+            (let ((file (plist-get record :file)))
               (if (and file (not (string-empty-p file)))
                   (progn (find-file-other-window file)
                          (goto-char (point-min)))
-                (message "No file name after File:")
+                (message "Record lacks file name")
                 nil)))
            (t
             (scalpel-review--jump-hunk record))))))))
@@ -614,7 +613,7 @@ records the pre-rename path)."
         (setq records
               (cl-remove-if-not
                (lambda (record)
-                 (or (equal (plist-get record :tool) "file-rename")
+                 (or (eq (plist-get record :tool) 'file-rename)
                      (member (file-truename (plist-get record :file))
                              context-truenames)))
                records))))

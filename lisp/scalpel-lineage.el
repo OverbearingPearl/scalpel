@@ -18,7 +18,7 @@
 
 (defvar-local scalpel-lineage--records nil
   "Change records of the current buffer's session, oldest last.
-Each entry is a plist: :tool :file :old-text :new-text :round
+Each entry is a plist: :tool :file :old-text :new-text
 :old-hash :new-hash.  For file-create, :old-text is nil; for
 file-delete, :new-text is nil; for file-rename, :file names the new
 path and :old-text the original one.  Text tools record the replaced
@@ -38,10 +38,6 @@ Produced by `git stash create', which touches neither the worktree
 nor any ref; the session-level diff anchors on it.
 Buffer-local: each console captures its own git baseline, so one
 console's anchor never leaks to another.")
-
-(defvar-local scalpel-lineage-round 0
-  "Round counter the recorder stamps into every record.
-The console increments it per round; lineage itself never does.")
 
 (defun scalpel-lineage--git-ok (args)
   "Run git with ARGS in the session directory; return output on exit 0."
@@ -128,14 +124,12 @@ its sole argument."
                         :file file
                         :old-text before
                         :new-text after
-                        :round scalpel-lineage-round
                         :old-hash (secure-hash 'sha1 before)
                         :new-hash (secure-hash 'sha1 after)))
               (list :tool tool
                     :file file
                     :old-text old-text
                     :new-text new-text
-                    :round scalpel-lineage-round
                     :old-hash (when old-text (secure-hash 'sha1 old-text))
                     :new-hash (when new-text (secure-hash 'sha1 new-text))))))
       (setq record
@@ -251,18 +245,16 @@ back to the local variable."
   "Hold no lineage state of this session."
   (setq scalpel-lineage--records nil
         scalpel-lineage--baseline nil
-        scalpel-lineage--dialogues nil
-        scalpel-lineage-round 0))
+        scalpel-lineage--dialogues nil))
 
 (defun scalpel-lineage-session-clear ()
-  "Clear this session's records, baseline and round counter.
+  "Clear this session's records and baseline.
 Unlike `scalpel-lineage-reset' the global dialogue chain
 `scalpel-lineage--dialogues' is left intact: it is a single history
 shared by every console session, so a console starting or ending
 must not wipe the boundaries other live sessions rely on."
   (setq scalpel-lineage--records nil
-        scalpel-lineage--baseline nil
-        scalpel-lineage-round 0))
+        scalpel-lineage--baseline nil))
 
 (defun scalpel-lineage--file-hash (file)
   "Return the SHA-1 of the content of FILE, or nil when unreadable."

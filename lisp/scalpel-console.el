@@ -1765,11 +1765,11 @@ other gptel buffer."
     (scalpel-agent-context-reset)
     (scalpel-console--show-context)
     ;; Session-start lineage anchoring: each new console session clears
-    ;; only its session-level lineage state (records, baseline, and the
-    ;; round counter) and pins a fresh git baseline; the global dialogues
-    ;; chain is left untouched, since session-begin appends a new entry
-    ;; to it by itself.  Errors are ignored so consoles in non-git
-    ;; directories still open.
+    ;; only its session-level lineage state (records and baseline) and
+    ;; pins a fresh git baseline; the global dialogues chain is left
+    ;; untouched, since session-begin appends a new entry to it by
+    ;; itself.  Errors are ignored so consoles in non-git directories
+    ;; still open.
     (require 'scalpel-lineage)
     (condition-case nil
         (progn
@@ -2668,9 +2668,11 @@ no current LLM request can still be aborted.  The operation's
 generation is advanced, so any callback from the aborted operation
 is dropped instead of writing a report or continuing a round.
 An unattended run is also disarmed here, with its own timestamped
-mark, so the transcript records why the run ended.  The cancel
-closure is per-console (buffer-local), read from this console's
-target buffer.
+mark, so the transcript records why the run ended.  Aborting a busy
+operation also closes its lineage conversation, because the aborted
+operation will never reach the run-rounds endpoint responsible for
+closing the conversation.  The cancel closure is per-console
+\(buffer-local), read from this console's target buffer.
 
 When aborting a busy console, any pending input is inspected before
 the abort notices are appended.  If it contains non-whitespace text,
@@ -2728,6 +2730,15 @@ remains intact, and point is left at the end of the buffer."
               (when (bound-and-true-p scalpel-console--status-stop)
                 (funcall scalpel-console--status-stop)
                 (setq scalpel-console--status-stop nil))
+              ;; End the conversation's lineage session here, the same
+              ;; way the run-rounds endpoint does: the aborted operation
+              ;; never reaches that endpoint.  Lineage failures must
+              ;; never block the abort itself.
+              (condition-case nil
+                  (progn
+                    (require 'scalpel-lineage nil t)
+                    (scalpel-lineage-session-end (buffer-name)))
+                (error nil))
               (when scalpel-console--unattended-p
                 (setq scalpel-console--unattended-p nil
                       scalpel-agent-unattended-confirm nil)
