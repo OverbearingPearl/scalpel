@@ -25,9 +25,145 @@
     (define-key map (kbd "k") #'scalpel-review-reject-block)
     (define-key map (kbd "K") #'scalpel-review-reject-hunk)
     (define-key map (kbd "q") #'scalpel-review-accept-all)
+    (define-key map (kbd "RET") #'scalpel-review-jump)
+    (define-key map (kbd "<return>") #'scalpel-review-jump)
     map)
   "Keymap for session review buffers.
-K rejects a single hunk; k rejects a whole block.")
+K rejects a single hunk; k rejects a whole block.
+RET jumps to the source location of the diff block under point.")
+
+(defun scalpel-review--jump-line (record beg end)
+  "Resolve the on-disk line number where RECORD's hunk lands in the current file.
+The review buffer was rendered from a diff produced earlier, so line
+numbers may have drifted if the file changed after the review opened.
+Resolution proceeds through a three-level fallback, each level more
+tolerant of drift than the previous one:
+
+1. A unique string search for RECORD's :new-text over the whole
+   on-disk content.  A unique hit absorbs any drift elsewhere in the
+   file, because the exact new text can only match the post-edit
+   location.
+2. A unique search for the hunk's after-side text, rebuilt from the
+   context and added lines exactly as `scalpel-review-reject-hunk'
+   does (skipping removed lines and backslash continuation lines).
+   This covers records whose :new-text is not verbatim (e.g. trimmed
+   or reformatted) but whose surrounding diff hunk is intact.
+3. The @@ header's after-side start line, which is exact only when the
+   file has not changed since the diff was produced.
+
+Levels 1 and 2 require a unique hit: an ambiguous match would silently
+jump to the wrong place, so ambiguity is treated as failure and falls
+through to the next level.
+
+BEG and END delimit the hunk body in the review buffer.  Returns the
+resolved line number, or nil when no level yields a confident answer."
+  (let* ((content (with-temp-buffer
+                   (insert-file-contents (plist-get record :file))
+                   (buffer-string)))
+         (lines (split-string content "\n" t))
+         (hunk-lines (split-string
+                      (buffer-substring-no-properties beg end) "\n" t))
+         ;; Parse "@@ -a,b +c,d @@ ..." accepting both the single-line
+         ;; form and the explicit-count form; only the after-side start
+         ;; matters here.
+         (header (car (cl-remove-if-not
+                       (lambda (s) (string-match
+                                    "^@@[ \t]-[0-9]+\\(?:,[0-9]+\\)?[ \t]+\\+[0-9]+\\(?:,[0-9]+\\)?[ \t]*@@"
+                                    s))
+                       hunk-lines)))
+         (after-start (and header
+                           (string-match
+                            "^@@[ \t]-[0-9]+\\(?:,[0-9]+\\)?[ \t]+\\+\\([0-9]+\\)"
+                            header)
+                           (string-to-number
+                            (match-string 1 header)))))
+    ;; Level 1: unique whole-file hit of :new-text.
+    (or (let ((text (plist-get record :new-text)))
+          (when (and text (not (string-empty-p text)))
+            (let ((pos 0) (hits 0) (first-hit nil) found)
+              (while (setq found (string-search text content pos))
+                (cl-incf hits)
+                (unless first-hit (setq first-hit found))
+                (setq pos (1+ found)))
+              (when (= hits 1)
+                ;; Convert buffer offset to line number by counting newlines.
+                (1+ (cl-count ?\n (substring content 0 first-hit)))))))
+        ;; Level 2: unique whole-file hit of the hunk's after-side text.
+        (let ((after-text
+               (mapconcat
+                #'identity
+                (cl-remove-if
+                 (lambda (s)
+                   ;; Removed lines, "\ No newline" backslash lines,
+                   ;; and the header itself carry no after-side text.
+                   (or (string-prefix-p "-" s)
+                       (string-prefix-p "\\" s)
+                       (string-prefix-p "@@" s)))
+                 hunk-lines)
+                "\n")))
+          (when (not (string-empty-p after-text))
+            (let ((pos 0) (hits 0) (first-hit nil) found)
+              (while (setq found (string-search after-text content pos))
+                (cl-incf hits)
+                (unless first-hit (setq first-hit found))
+                (setq pos (1+ found)))
+              (when (= hits 1)
+                (1+ (cl-count ?\n (substring content 0 first-hit)))))))
+        ;; Level 3: fall back to the header's after-side start line.
+        (and after-start (<= after-start (length lines)) after-start))))
+
+(defun scalpel-review--jump-hunk (record)
+  "Jump to the hunk of RECORD in its source file.
+Message and return nil when point is not on a hunk or the target
+line cannot be located; otherwise open the file in another window
+and return the buffer."
+  (let ((region (scalpel-review--hunk-region-at-point)))
+    (if (not region)
+        (progn
+          (message "No hunk at point")
+          nil)
+      (let ((line (scalpel-review--jump-line record (car region) (cdr region))))
+        (when line
+          (let ((buffer (find-file-other-window (plist-get record :file))))
+            (with-current-buffer buffer
+              (goto-char (point-min))
+              (forward-line (1- line))
+              (recenter-top-bottom))
+            buffer))))))
+
+(defun scalpel-review-jump ()
+  "Jump to the review target described by the record at point.
+On a file-rename record or a `File:' line, open the file at its
+beginning; otherwise delegate to `scalpel-review--jump-hunk'.
+Read-only: never modifies any file on disk."
+  (interactive)
+  (let ((record (scalpel-review--record-at-point)))
+    (if (not record)
+        (progn
+          (message "No review record at point")
+          nil)
+      (let ((inhibit-read-only t))
+        (save-excursion
+          (beginning-of-line)
+          (cond
+           ((eq (plist-get record :kind) 'file-rename)
+            (let ((file (plist-get record :file)))
+              (if file
+                  (progn (find-file-other-window file)
+                         (goto-char (point-min)))
+                (message "Rename record lacks file name")
+                nil)))
+           ((looking-at-p "File:")
+            (let ((file (buffer-substring-no-properties
+                         (match-end 0) (line-end-position))))
+              (setq file (string-trim file))
+              (if (and file (not (string-empty-p file)))
+                  (progn (find-file-other-window file)
+                         (goto-char (point-min)))
+                (message "No file name after File:")
+                nil)))
+           (t
+            (scalpel-review--jump-hunk record))))))))
 
 (defface scalpel-review-rejected
   '((t (:strike-through t)))
@@ -482,7 +618,7 @@ records the pre-rename path)."
                      (member (file-truename (plist-get record :file))
                              context-truenames)))
                records))))
-    (setq header-line-format " TAB next | Shift+TAB prev | k reject | K reject hunk | q accept all & quit ")
+    (setq header-line-format " TAB next | Shift+TAB prev | RET jump | k reject | K reject hunk | q accept all & quit ")
     (erase-buffer)
     (insert "Session review: changes made this session.\n\n")
     (if (null records)
