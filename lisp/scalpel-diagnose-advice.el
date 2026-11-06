@@ -399,6 +399,65 @@ Applies `scalpel-redact-apply' before returning."
       (scalpel-redact-apply
        (concat "@scalpel@ suggestion (mechanical repair; copy back verbatim if it is a complete TOML document)\n" content "\n@scalpel@ end of suggestion")))))
 
+(defun scalpel-diagnose-advice--toml-parse (text)
+  "Parse TEXT as TOML and return the parsed table, or nil."
+  (condition-case nil
+      (let ((file (make-temp-file "scalpel-diagnose-toml")))
+        (unwind-protect
+            (progn
+              (write-region text nil file nil 'silent)
+              (toml:read-from-file file))
+          (delete-file file)))
+    (error nil)))
+
+(defun scalpel-diagnose-advice--curly-quote-candidate (input)
+  "Return INPUT with curly quotes normalized to ASCII quotes.
+Return nil when the original text already parses, when the normalized
+text does not parse, or when the normalized text is not a Scalpel
+action document."
+  (when (stringp input)
+    (let ((candidate
+           (replace-regexp-in-string
+            "[‘’“”]"
+            (lambda (match)
+              (let ((ch (aref match 0)))
+                (char-to-string
+                 (if (or (= ch #x201c) (= ch #x201d)) 34 39))))
+            input t t)))
+      (when (and (not (string-equal candidate input))
+                 (null (scalpel-diagnose-advice--toml-parse input))
+                 (let ((parsed
+                        (scalpel-diagnose-advice--toml-parse candidate)))
+                   (and parsed
+                        (or (assoc "tool" parsed)
+                            (assoc "action" parsed)))))
+        candidate))))
+
+(defun scalpel-diagnose-advice--mechanical-repair-curly (ORIG error-plist)
+  "Add a curly-quote mechanical repair around ORIG.
+Parse errors described by ERROR-PLIST are eligible.  Keep the
+original repair when it already produces a suggestion.  A
+suggestion is produced only when the normalized text parses as a
+Scalpel action document."
+  (let ((result (funcall ORIG error-plist)))
+    (or result
+        (when (eq (plist-get error-plist :type) 'parse)
+          (let ((candidate
+                 (scalpel-diagnose-advice--curly-quote-candidate
+                  (plist-get error-plist :input))))
+            (when candidate
+              (scalpel-redact-apply
+               (concat
+                "@scalpel@ suggestion (mechanical repair; copy back verbatim if it is a complete TOML document)\n"
+                candidate
+                "\n@scalpel@ end of suggestion"))))))))
+
+(unless (advice-member-p #'scalpel-diagnose-advice--mechanical-repair-curly
+                        'scalpel-diagnose-advice-mechanical-repair)
+  (advice-add 'scalpel-diagnose-advice-mechanical-repair
+              :around
+              #'scalpel-diagnose-advice--mechanical-repair-curly))
+
 (provide 'scalpel-diagnose-advice)
 
 ;;; scalpel-diagnose-advice.el ends here
