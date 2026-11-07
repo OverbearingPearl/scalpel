@@ -129,18 +129,22 @@ closes."
 
 (defun scalpel-locate-html--balanced-p (text)
   "Return non-nil when the replaced TEXT is balanced HTML.
-Applies the same rules as the element-end locator: comments are
-skipped whole; void and self-closing tags do not change depth;
-script/style bodies are raw text, so no tag opens inside them
-and their closing tag is consumed without affecting depth.
-Depth must never go negative, and the scan must end at zero
-depth with no unclosed comment.  Assumes the groups of
-`scalpel-locate-html--tag-regexp': 1 tag name, 2 leading slash
-for closing tags, 3 trailing slash for self-closing tags."
+Rules match the element-end locator: comments are skipped whole;
+void and self-closing tags do not change depth; script/style
+bodies are raw text, so no tag opens inside them and their
+closing tag is consumed without affecting depth.  Depth must
+never go negative, and the scan must end at zero depth with no
+unclosed comment.  Closing tags are recognized by a single local
+tag regexp that matches an optional slash before the tag name;
+each match is anchored by requiring its start to equal the scan
+position, so closing tags are never skipped as ordinary
+characters.  Capture group 1 holds the optional slash (a closing
+tag), group 2 the tag name."
   (catch 'unbalanced
     (let ((pos 0)
           (depth 0)
-          (raw-end nil))
+          (raw-end nil)
+          (tag-regexp "<\\(/\\)?\\([a-zA-Z][a-zA-Z0-9-]*\\)"))
       (while (< pos (length text))
         (cond
          ;; Inside a raw-text element: skip to its closing tag only.
@@ -150,32 +154,49 @@ for closing tags, 3 trailing slash for self-closing tags."
                 (setq pos (match-end 0)
                       raw-end nil)
               (throw 'unbalanced nil))))
-         ;; Comment: skip the whole block, fail on unclosed comment.
-         ((string-match "<!--" text pos)
-          (let ((close (string-match "-->" text (match-end 0))))
-            (unless close
-              (throw 'unbalanced nil))
-            (setq pos (match-end 0))))
-         ;; Tag: classify and update depth.
-         ((string-match scalpel-locate-html--tag-regexp text pos)
-          (let* ((name (downcase (match-string 1 text)))
-                 (closing (match-string 2 text))
-                 (self-closing (match-string 3 text))
-                 (void (member name scalpel-locate-html--void-elements)))
+         ;; Comment starting exactly at POS: skip the whole block,
+         ;; fail on unclosed comment.
+         ((and (eq (aref text pos) ?<)
+               (equal (string-match "<!--" text pos) pos))
+          (let ((end (string-match "-->" text (match-end 0))))
+            (if end
+                (setq pos (match-end 0))
+              (throw 'unbalanced nil))))
+         ;; Tag (open or closing) starting exactly at POS: anchored
+         ;; by requiring the match start to equal POS; classify and
+         ;; update depth.
+         ((equal (string-match tag-regexp text pos) pos)
+          (let* ((name (downcase (match-string 2 text)))
+                 (closing (and (match-string 1 text) t))
+                 (self-closing
+                  (eq (aref text (match-end 0)) ?/))
+                 (void (member name
+                               scalpel-locate-html--void-elements))
+                 (self-closing
+                  (or self-closing
+                      (progn
+                        (string-match
+                         "[ \t\n\r]*/>" text (match-end 0))
+                        (eq (match-end 0) (1+ (match-end 0)))))))
             (cond
-             ((and closing void))            ; void closing tag: no depth change
              (closing
               (setq depth (1- depth))
               (when (< depth 0)
                 (throw 'unbalanced nil)))
-             ((or void self-closing))        ; no depth change
+             ((or void self-closing))     ; no depth change
              (t
               (setq depth (1+ depth))
               (when (member name '("script" "style"))
                 (setq raw-end
-                      (concat "</" (regexp-quote name) "\\s-*>")))))
-            (setq pos (match-end 0))))
-         ;; Stray "<" outside any recognized construct: skip it.
+                      (concat "</" (regexp-quote name)
+                              "[ \t\n\r]*>")))))
+            ;; Advance past "<name" plus any attributes; find the
+            ;; tag end to skip attributes safely.
+            (let ((end (string-match ">" text (match-end 0))))
+              (unless end
+                (throw 'unbalanced nil))
+              (setq pos (1+ end)))))
+         ;; Ordinary character: advance one position.
          (t
           (setq pos (1+ pos)))))
       (zerop depth))))

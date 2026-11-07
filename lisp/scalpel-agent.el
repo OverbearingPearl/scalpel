@@ -113,11 +113,11 @@ Omitting the `web-search' :engine field falls back to
         :build-request
         (lambda (query)
           (list "https://www.bing.com/search/"
+                "-L"
                 "-G"
                 "--data-urlencode" (concat "q=" query)))
         :parse
-        (lambda (body)
-          body)))
+        scalpel-agent-web-search--parse-html))
     ("duckduckgo"
      . (:endpoint "https://html.duckduckgo.com/html/"
         :method GET
@@ -127,8 +127,7 @@ Omitting the `web-search' :engine field falls back to
                 "-G"
                 "--data-urlencode" (concat "q=" query)))
         :parse
-        (lambda (body)
-          body)))
+        scalpel-agent-web-search--parse-html))
     ("zhipu"
      . (:endpoint "https://open.bigmodel.cn/api/paas/v4/web_search"
         :method POST
@@ -166,6 +165,113 @@ without touching any engine-agnostic driving code."
                   (:build-request function)
                   (:parse function))))
   :group 'scalpel-agent)
+
+(defun scalpel-agent-web-search--parse-html (body)
+  "Parse search-result HTML BODY into plain-text entries.
+Detects anti-crawl verification pages first and signals an error.
+Recognizes DuckDuckGo (result__a / result__snippet) and Bing
+\(b_algo) structures; signals an error when neither is present.
+Signals an error when libxml2 is unavailable."
+  (unless (libxml-available-p)
+    (error "Libxml2 HTML parser unavailable; cannot parse search response"))
+  (let* ((dom (with-temp-buffer
+                (insert body)
+                (libxml-parse-html-region (point-min) (point-max))))
+         (ddg-links
+          (scalpel-agent-web-search--collect-nodes
+           dom
+           (lambda (n)
+             (and (eq (car n) 'a)
+                  (let ((attrs (cadr n)))
+                    (and (consp attrs)
+                         (let ((val (plist-get attrs 'class)))
+                           (and (stringp val)
+                                (string-match-p (regexp-quote "result__a") val)))))))))
+         (bing-blocks
+          (scalpel-agent-web-search--collect-nodes
+           dom
+           (lambda (n)
+             (let ((attrs (cadr n)))
+               (and (consp attrs)
+                    (let ((val (plist-get attrs 'class)))
+                      (and (stringp val)
+                           (string-match-p (regexp-quote "b_algo") val)))))))))
+    (when (scalpel-agent-web-search--collect-nodes
+           dom
+           (lambda (n)
+             (let ((attrs (cadr n)))
+               (and (consp attrs)
+                    (let ((val (plist-get attrs 'class)))
+                      (and (stringp val)
+                           (string-match-p (regexp-quote "anomaly-modal") val)))))))
+      (error "Anti-crawl verification page detected (anomaly-modal); aborting search"))
+    (let ((entries))
+      (cond
+       (ddg-links
+        (let* ((snippets
+                (scalpel-agent-web-search--collect-nodes
+                 dom
+                 (lambda (n)
+                   (let ((attrs (cadr n)))
+                     (and (consp attrs)
+                          (let ((val (plist-get attrs 'class)))
+                            (and (stringp val)
+                                 (string-match-p (regexp-quote "result__snippet") val))))))))
+               (snippets (mapcar #'scalpel-agent-web-search--node-text snippets)))
+          (dolist (link ddg-links)
+            (let* ((attrs (cadr link))
+                   (href (plist-get attrs 'href)))
+              (when (and (stringp href) (> (length href) 0))
+                (push (string-trim
+                       (format "Title: %s\nURL: %s\nSnippet: %s"
+                               (scalpel-agent-web-search--node-text link)
+                               href
+                               (or (car snippets) "")))
+                      entries))
+              (when snippets
+                (setq snippets (cdr snippets)))))
+          (setq entries (nreverse entries))))
+       (bing-blocks
+        (dolist (block bing-blocks)
+          (let ((link (car (scalpel-agent-web-search--collect-nodes
+                            block (lambda (n) (eq (car n) 'a))))))
+            (when link
+              (let* ((attrs (cadr link))
+                     (href (plist-get attrs 'href))
+                     (text (scalpel-agent-web-search--node-text link)))
+                (when (and (stringp href) (> (length href) 0))
+                  (push (format "Title: %s\nURL: %s" text href) entries))))))
+        (setq entries (nreverse entries)))
+       (t
+        (error "No known search result structure found (DuckDuckGo or Bing)")))
+      (if entries
+          (mapconcat #'identity entries "\n---\n")
+        (error "No search result entries extracted from known structure")))))
+
+(defun scalpel-agent-web-search--collect-nodes (node pred)
+  "Return every descendant of NODE, including NODE itself, satisfying PRED.
+Traversal is depth-first over child nodes; NODE may be nil, in which case
+the result is nil."
+  (when node
+    (let ((result nil))
+      (when (funcall pred node)
+        (push node result))
+      (let ((child (cddr node)))
+        (while child
+          (setq result (nconc (nreverse (scalpel-agent-web-search--collect-nodes (car child) pred))
+                              result))
+          (setq child (cdr child))))
+      (nreverse result))))
+
+(defun scalpel-agent-web-search--node-text (node)
+  "Return the concatenated, trimmed text of NODE's direct text children.
+NODE is a DOM node as produced by `libxml-parse-html-region'; only string
+children are considered, element children are ignored."
+  (let ((parts nil))
+    (dolist (child (cddr node))
+      (when (stringp child)
+        (push child parts)))
+    (string-trim (mapconcat #'identity (nreverse parts) ""))))
 
 (defcustom scalpel-agent-web-search-proxy-table nil
   "Map engine names (strings) to proxy addresses (strings).
@@ -2208,9 +2314,6 @@ The report always states the true output size, so a command that
 dumped far more than it should is visible to the user and to the
 planner.  Output holding a NUL byte is reported as binary and its
 contents are dropped.
-When the command exits with a non-zero or unknown status, the
-clipboard hint produced by `scalpel-agent-shell--clipboard-hint' is
-appended to the report; a zero exit keeps the report unchanged.
 Signal `user-error' when the sandbox is unavailable or fails its
 probe, so a command is never run outside the sandbox."
   (unless (and command reason)
@@ -2252,13 +2355,9 @@ probe, so a command is never run outside the sandbox."
           (list :bytes raw-bytes :truncated truncated :binary binary))
     (format (concat "Shell: %s\nReason: %s\nExit: %s\nOutput: %d bytes\n"
                     "--- output ---\n%s\n--- end output ---%s")
-            command reason (or exit "unknown") raw-bytes body
-            ;; Failure path only: a zero exit keeps the report bare.
-            (if (and (numberp exit) (zerop exit))
-                ""
-              (concat "\n" (scalpel-agent-shell--clipboard-hint command))))))
+            command reason (or exit "unknown") raw-bytes body "")))
 
-(defun scalpel-agent-web-search (query engine)
+(defun scalpel-agent-web-search (query engine on-success on-error)
   "Execute the web-search tool: fetch search results for QUERY via ENGINE.
 
 Raison d'être: when the information needed to answer is not present in the
@@ -2283,26 +2382,42 @@ concern only and does not affect parsing, auth, or the report format.
 
 This does not go through scalpel-sandbox: the sandbox's file-boundary
 model cannot express authorizations like \"which network endpoint is
-allowed\". Retrieval is a read-only external interaction with a risk
-profile different from shell's writable filesystem. Results only enter the
+allowed\".  Retrieval is a read-only external interaction with a risk
+profile different from shell's writable filesystem.  Results only enter the
 report given to the model and are never written to disk, so there is no
-write side effect requiring sandbox isolation. The synchronous call is
-deliberate: the agent's tool execution body is serially advancing anyway;
-asynchrony would only push the waiting complexity onto the caller with no
-measurable benefit.
+write side effect requiring sandbox isolation.
 
-Return format matches scalpel-agent-shell:
+Delivery is asynchronous: the function spawns curl via `make-process' and
+returns immediately.   Exactly one report is delivered through one of the
+two callbacks:
 
-  Search: <query>
-  Engine: <engine>
-  Exit: <code>
-  Output: N bytes
-  --- output ---
-  ...
-  --- end output ---
+- ON-SUCCESS receives the report string in the format below.   This
+  includes the failure cases \"curl exited non-zero\" and \"empty
+  response\"; those are reported as error report strings rather than
+  routed to ON-ERROR, keeping the semantics identical to the previous
+  synchronous version (the tool completed, the report itself says the
+  results are unreliable).
 
-On curl non-zero exit or empty output, returns an error report string
-carrying the Exit status instead of signaling.
+    Search: <query>
+    Engine: <engine>
+    Exit: <code>
+    Output: N bytes
+    --- output ---
+    ...
+    --- end output ---
+
+- ON-ERROR receives a report string only for abnormal completion:
+  curl killed by a signal (non-list `process-status'), and the 25-second
+  watchdog firing while the process is still running.   In both cases the
+  process is killed and cleaned up before delivery.
+
+A 25-second watchdog timer is the bottom-line guard: if the sentinel has
+not fired by then (e.g. curl hangs despite --max-time), the timer kills
+the process and delivers an error report via ON-ERROR.   Process and
+temporary buffer are cleaned up before either callback is invoked; each
+delivery happens exactly once, guarded by a local delivered flag so
+sentinel, watchdog, and signal path cannot double-fire.
+
 Note: results are not redacted by the redact rules; any citation of
 retrieved content must carry its source."
   (let* ((engine (or engine scalpel-agent-web-search-default-engine))
@@ -2310,6 +2425,10 @@ retrieved content must carry its source."
                            nil nil #'string=)))
     (unless entry
       (user-error "Unsupported search engine: %s" engine))
+    (unless (functionp on-success)
+      (user-error "On-success must be a function"))
+    (unless (functionp on-error)
+      (user-error "On-error must be a function"))
     (require 'url)
     (let* ((endpoint (plist-get entry :endpoint))
            (build-request (plist-get entry :build-request))
@@ -2318,7 +2437,10 @@ retrieved content must carry its source."
            (proxy (alist-get engine scalpel-agent-web-search-proxy-table
                              nil nil #'string=))
            (curl-args
-            (append (funcall build-request query)
+            (append (list "--silent" "--show-error"
+                          "--max-time" "20"
+                          "--user-agent" "scalpel-agent-web-search/1.0")
+                    (funcall build-request query)
                     (when auth-host
                       (list "--header"
                             (concat "Authorization: Bearer "
@@ -2328,60 +2450,117 @@ retrieved content must carry its source."
                       (list "-x" proxy))
                     (list endpoint))))
       (let* ((buf (generate-new-buffer " *scalpel-web-search*"))
-             exit-code)
-        (unwind-protect
-            (progn
-              (setq exit-code
-                    (apply #'call-process "curl" nil buf nil
-                           "--silent" "--show-error"
-                           "--max-time" "20"
-                           "--user-agent" "scalpel-agent-web-search/1.0"
-                           curl-args))
-              (let* ((raw (with-current-buffer buf (buffer-string)))
-                     (output (if (/= exit-code 0) raw (funcall parse raw)))
-                     (bytes (string-bytes output))
-                     (header (format "Search: %s\nEngine: %s\nExit: %d\nOutput: %d bytes\n"
-                                     query engine exit-code bytes)))
-                (cond
-                 ((/= exit-code 0)
-                  (concat header "--- output ---\n" output "\n--- end output ---\n"
-                          "Error: curl exited non-zero; results are unreliable.\n"))
-                 ((= bytes 0)
-                  (concat header "--- output ---\n\n--- end output ---\n"
-                          "Error: empty response from search endpoint.\n"))
-                 (t
-                  (concat header "--- output ---\n" output "\n--- end output ---\n")))))
-          (when (buffer-live-p buf)
-            (kill-buffer buf)))))))
+             proc timer delivered)
+        (cl-labels ((finish (report callback)
+                      ;; Deliver exactly once; clean up all resources first.
+                      (when (timerp timer)
+                        (cancel-timer timer)
+                        (setq timer nil))
+                      (when (and (process-live-p proc)
+                                 (eq (process-status proc) 'run))
+                        (delete-process proc))
+                      (when (buffer-live-p buf)
+                        (kill-buffer buf))
+                      (unless delivered
+                        (setq delivered t)
+                        (funcall callback report))))
+          (setq proc
+                (make-process
+                 :name (format "scalpel-web-search-%s" engine)
+                 :buffer buf
+                 :command (apply #'list "curl" curl-args)
+                 :connection-type 'pipe
+                 :noquery t
+                 :sentinel
+                 (lambda (proc _event)
+                   ;; Ignore events for a replaced or foreign process.
+                   (when (eq (process-buffer proc) buf)
+                     ;; Deliver on terminal state only.
+                     (let ((status (process-status proc)))
+                       (cond
+                        ;; Killed by the watchdog or a signal: abnormal path.
+                        ((and (not (eq status 'exit))
+                              (process-live-p proc))
+                         nil)                   ;still running, keep waiting
+                        ((eq status 'exit)
+                         (let* ((exit-code (process-exit-status proc))
+                                (raw (with-current-buffer buf
+                                       (buffer-string)))
+                                (output (if (/= exit-code 0)
+                                            raw
+                                          (condition-case err
+                                              (funcall parse raw)
+                                            (error
+                                             (format "parse error: %s"
+                                                     (error-message-string
+                                                      err))))))
+                                (bytes (string-bytes output))
+                                (header (format "Search: %s\nEngine: %s\nExit: %d\nOutput: %d bytes\n"
+                                                query engine exit-code bytes)))
+                           (cond
+                            ((/= exit-code 0)
+                             (finish
+                              (concat header "--- output ---\n" output
+                                      "\n--- end output ---\n"
+                                      "Error: curl exited non-zero; results are unreliable.\n")
+                              on-success))
+                            ((= bytes 0)
+                             (finish
+                              (concat header "--- output ---\n\n--- end output ---\n"
+                                      "Error: empty response from search endpoint.\n")
+                              on-success))
+                            (t
+                             (finish
+                              (concat header "--- output ---\n" output
+                                      "\n--- end output ---\n")
+                              on-success)))))
+                        (t
+                         ;; signal/failed/stop: abnormal termination.
+                         (finish
+                          (format "Search: %s\nEngine: %s\nExit: %s\nOutput: 0 bytes\nError: curl terminated abnormally (%s).\n"
+                                  query engine (or status "unknown") status)
+                          on-error)))))))
+               timer
+               (run-with-timer
+                25 nil
+                (lambda ()
+                  (finish
+                   (format "Search: %s\nEngine: %s\nExit: none\nOutput: 0 bytes\nError: web search timed out after 25 seconds; process killed.\n"
+                           query engine)
+                   on-error))))
+          proc)))))
 
-(defun scalpel-agent-shell--clipboard-hint (command)
-  "Copy COMMAND to the system clipboard when manual copy is impractical.
-
-Multi-line commands in a graphical frame are placed on the `kill-ring' and
-pushed through `interprogram-cut-function', so the failure report can ask
-the user to paste instead of re-type.  Returns a paste instruction string,
-or nil when the command is single-line or the frame is a terminal — cases
-where displaying the text suffices.  Clipboard failure is degraded to nil
-with a logged warning; a reporting helper must never signal."
-  (when (and (string-match-p "\n" command)
-             (display-graphic-p))
-    (condition-case err
-        (progn
-          (kill-new command)
-          (funcall interprogram-cut-function
-                   (car kill-ring))
-          "Paste the command from the clipboard.")
-      (error
-       (warn "Scalpel-agent-shell: clipboard copy failed: %S" err)
-       nil))))
+(defun scalpel-agent--web-search-dispatch (query engine on-success on-error)
+  "Dispatch QUERY to ENGINE asynchronously.
+Delegates to `scalpel-agent-web-search', passing it both callbacks.
+ON-SUCCESS receives the raw result; ON-ERROR receives a plist
+\(:type SYMBOL :message STRING) as required by
+`scalpel-agent-execute-action': synchronous `user-error' signals
+\(invalid engine etc.) are normalized to :type `action', while runtime
+failures carry :type `web-search'."
+  (condition-case err
+      (scalpel-agent-web-search query engine
+                                on-success
+                                (lambda (message)
+                                  (funcall on-error
+                                           (list :type 'web-search
+                                                 :message message))))
+    (user-error
+     (funcall on-error (list :type 'action
+                             :message (error-message-string err))))
+    (error
+     (funcall on-error (list :type 'web-search
+                             :message (error-message-string err))))))
 
 (defun scalpel-agent--context-file-p (file)
-  "Return non-nil when FILE is a member of the session context.
-Names are compared as truenames, which is how
-`scalpel-agent--expanded-files' stores them."
-  (and (member (file-truename (expand-file-name file))
-               scalpel-agent--context-files)
-       t))
+  "Return non-nil when FILE's truename is a context file.
+Membership is decided by comparing truenames, so symlinked or
+non-canonical paths to the same file are recognized as context files."
+  (let ((true (file-truename file)))
+    (and true
+         (cl-some (lambda (f) (equal true (file-truename f)))
+                  scalpel-agent--context-files)
+         t)))
 
 (defconst scalpel-agent--context-near-miss-min-prefix 1
   "Minimum number of path components that must agree for a near miss.
@@ -3948,16 +4127,10 @@ internal error guards."
                                  :preview preview
                                  :review review))))))))
         ("web-search"
-         (let ((report (condition-case err
-                           (scalpel-agent-web-search
-                            (plist-get action :query)
-                            (plist-get action :engine))
-                         (error
-                          (funcall on-error
-                                   (list :type 'action
-                                         :message (error-message-string err)))
-                          nil))))
-           (when report (funcall on-success report))))
+         (scalpel-agent--web-search-dispatch
+          (plist-get action :query)
+          (plist-get action :engine)
+          on-success on-error))
         ("shell"
          (let ((report (condition-case err
                            (scalpel-agent-shell
