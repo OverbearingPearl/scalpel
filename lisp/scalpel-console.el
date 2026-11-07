@@ -543,31 +543,36 @@ caller can delete them without invalidating earlier ones."
 Empty input shows a plain waiting message whose ellipsis only
 marks waiting, followed by a parenthetical description of the
 accepted prefixes
-\( \"!␣\" shell, \"?␣\" consult, and the combinable \"?!␣\"/\"!?␣\"
-read-only shell); prefixed input gets a one-line explanation of
-the mode `scalpel-console-parse-prefix' detects.  A trimmed input
-whose first two characters are two distinct prefix symbols and
-whose third character is whitespace is reported by concatenating
-the phase-two hint of its first symbol with the phase-two hint of
-its second symbol, each taken from the same per-symbol hint text
-used for a lone symbol, so the order the symbols were typed is
-preserved; the input may continue past that whitespace and the
-combination hint stays.  This combination is detected from the
-untrimmed text itself rather than from
-`scalpel-console-parse-prefix', which requires more than two
-characters before it reports `readonly-shell'; `string-trim' is
-used only to test for emptiness, since it would strip the
-trailing whitespace the combination check depends on.  A lone
-\"!\" or \"?\" is not treated as a combination; it falls through to
-its own mode hint, since the empty-input hint already advertises
-the combinable prefixes.
-The blank after \"!\", \"?\", \"?!\" and \"!?\" is mandatory in the
-prefix grammar, so it is drawn as U+2423 to make the otherwise
-invisible space visible; \" ◂ \" opens every phase-two hint
-because its leftward point reads as a comment on the typed text
-beside it.  Both single and combined prefixes require that
+\( \"!␣\" shell, \"?␣\" consult, \"~␣\" no-reasoning, and one
+fixed-order combination example, \"?!␣\" read-only shell); the
+empty-input hint advertises each single prefix plus that one
+example rather than every ordering, while
+`scalpel-console-parse-prefix' accepts any order.  Prefixed input
+gets a one-line explanation of the mode
+`scalpel-console-parse-prefix' detects.  A trimmed input whose
+first two characters are two distinct prefix symbols among \"!\",
+\"?\" and \"~\" and whose third character is whitespace is
+reported by concatenating the phase-two hint of its first symbol
+with the phase-two hint of its second symbol, each taken from the
+same per-symbol hint text used for a lone symbol, so the order
+the symbols were typed is preserved; the input may continue past
+that whitespace and the combination hint stays.  The \"~\"
+symbol's phase-two hint is \"deep reasoning, model default params\".  This
+combination is detected from the untrimmed text itself rather
+than from `scalpel-console-parse-prefix', which requires more
+than two characters before it reports `readonly-shell';
+`string-trim' is used only to test for emptiness, since it would
+strip the trailing whitespace the combination check depends on.
+A lone \"!\", \"?\" or \"~\" is not treated as a combination; it
+falls through to its own mode hint, since the empty-input hint
+already advertises the combinable prefixes.
+The blank after \"!\", \"?\", \"~\", \"?!\" and \"!?\" is mandatory
+in the prefix grammar, so it is drawn as U+2423 to make the
+otherwise invisible space visible; \" ◂ \" opens every phase-two
+hint because its leftward point reads as a comment on the typed
+text beside it.  Both single and combined prefixes require that
 trailing space before any phase-two hint appears: a bare \"!\",
-\"?\", \"?!\" or \"!?\" without trailing whitespace shows no
+\"?\", \"~\", \"?!\" or \"!?\" without trailing whitespace shows no
 phase-two hint at all.  The combination hint is emitted only when
 the untrimmed input starts with two distinct prefix symbols
 followed by whitespace, so a two-symbol input lacking the
@@ -598,25 +603,38 @@ text."
               (?!
                " ◂ input is translated into shell commands")
               (??
-               " ◂ read-only consultation, nothing is ever modified"))))
+               " ◂ read-only consultation, nothing is ever modified")
+              (?~
+               " ◂ deep reasoning, model default params"))))
          (combination
           (and text
                (>= (length text) 3)
-               (memq (aref text 0) '(?! ??))
-               (memq (aref text 1) '(?! ??))
+               (memq (aref text 0) '(?! ?? ?~))
+               (memq (aref text 1) '(?! ?? ?~))
                (not (eq (aref text 0) (aref text 1)))
                (memq (aref text 2) '(?\s ?\t ?\n))))
          (hint (cond
                 ((or (null region)
                      (string-empty-p trimmed))
-                 "Input what you want to do … (Special prefixes: \"!␣\" shell, \"?␣\" consult, \"?!␣\"/\"!?␣\" read-only shell)")
+                 "Input what you want to do … (Special prefixes: \"!␣\" shell, \"?␣\" consult, \"~␣\" no-reasoning, \"?!␣\" read-only shell)")
                 (combination
                  (concat (funcall symbol-hint (aref text 0))
                          (funcall symbol-hint (aref text 1))))
                 ((eq kind 'shell-mode)
                  " ◂ input is translated into shell commands")
                 ((eq kind 'consult)
-                 " ◂ read-only consultation, nothing is ever modified"))))
+                 " ◂ read-only consultation, nothing is ever modified")
+                ((eq kind 'no-reasoning)
+                 " ◂ deep reasoning, model default params")
+                ((eq kind 'readonly-shell)
+                 (concat (funcall symbol-hint ??)
+                         (funcall symbol-hint ?!)))
+                ((eq kind 'consult-no-reasoning)
+                 (concat (funcall symbol-hint ??)
+                         (funcall symbol-hint ?~)))
+                ((eq kind 'shell-mode-no-reasoning)
+                 (concat (funcall symbol-hint ?!)
+                         (funcall symbol-hint ?~))))))
     (when hint
       (let ((ov (make-overlay (or (cdr region) (point-max))
                               (or (cdr region) (point-max))
@@ -1819,7 +1837,7 @@ other gptel buffer."
       (error nil))
     (goto-char (point-max))))
 
-(defun scalpel-console--run-round (instruction history on-complete)
+(defun scalpel-console--run-round (instruction history deep-reasoning on-complete)
   "Run one agent round for INSTRUCTION without blocking.
 HISTORY is the conversation text to send along.  ON-COMPLETE
 receives the plist `scalpel-agent-run' delivers, or nil when the
@@ -1854,7 +1872,17 @@ holds the real paths the user typed.  The model tag shown on the
 reply line is snapshotted before the request is sent and reused
 when the report is inserted, so the tag names the model that was
 actually selected at send time rather than whatever a live read
-would return later."
+would return later.  When DEEP-REASONING is non-nil, the model
+symbol's `:request-params' property is saved with `get' before the
+round and set to nil for the whole round -- every LLM request the
+round issues, not just the first -- so the model falls back to its
+own defaults and may think deeply; the saved value is restored
+afterwards via `unwind-protect', so the exact prior value comes
+back rather than being clobbered with nil.  Probe is
+suppressed for the whole round (`scalpel-llm-probe-inhibit' is set
+and restored), so a first uncached DEEP-REASONING round never
+triggers the reasoning probe and a mid-round probe cannot
+reinstall `:request-params'."
   (setq scalpel-console--round-error nil)
   (let* ((target (scalpel-console--target-buffer))
          ;; The acknowledgement `send-line' appended exists only for the
@@ -1932,6 +1960,12 @@ would return later."
          ;; the round's cost is the diff of the never-reset totals.
          (up0 scalpel-llm--total-uploaded)
          (down0 scalpel-llm--total-received)
+         ;; Save the model's original `:request-params' before the round
+         ;; overwrites it, so the cleanup can restore the exact prior
+         ;; value rather than clobbering it with nil.
+         (saved-request-params (and deep-reasoning
+                                    (get gptel-model :request-params)))
+         (saved-probe-inhibit scalpel-llm-probe-inhibit)
          (settled nil)
          (settle (lambda (round-result)
                    (unless settled
@@ -1982,124 +2016,132 @@ would return later."
             'scalpel-console--operation-generation target)))
       (setq scalpel-llm--progress-callback refresh)
       (with-current-buffer target
-        (condition-case err
-            (scalpel-agent-run
-             ;; Outbound text is redacted here, at the console's single
-             ;; send point: the model sees placeholders, never the real
-             ;; user name, for both the instruction and the history.
-             (scalpel-redact-apply instruction)
-             (scalpel-redact-apply history)
-             (lambda (round-result)
-               (when (and (buffer-live-p target)
-                          (= operation
-                             (buffer-local-value
-                              'scalpel-console--operation-generation target)))
-                 (condition-case err
-                     (with-current-buffer target
-                       ;; Placeholders in the report are restored before
-                       ;; formatting: the console -- and the conversation
-                       ;; history it records -- always holds real paths,
-                       ;; so the next round never round-trips a placeholder.
-                       (scalpel-console--append
-                        (format "Scalpel%s: %s"
-                                model-tag
-                                (scalpel-redact-restore
-                                 (plist-get round-result :report)))
-                        'assistant))
-                   ((error quit)
-                    (funcall settle nil)
-                    (signal (car err) (cdr err)))))
-               ;; Settle unconditionally: an abort that advanced the
-               ;; generation while a synchronous action chain was in
-               ;; flight leaves no one else to stop the status timer or
-               ;; clear the progress callback, so the round must settle
-               ;; here even though its report is suppressed.
-               (funcall settle round-result))
-             (lambda (err)
-               ;; Record the failing round's error plist before rendering
-               ;; the header: the round loop in `scalpel-console--run-rounds'
-               ;; reads `scalpel-console--round-error' to decide on a
-               ;; self-heal retry.
-               (setq scalpel-console--round-error err)
-               (condition-case handler-err
-                   (when (and (buffer-live-p target)
-                              (= operation
-                                 (buffer-local-value
-                                  'scalpel-console--operation-generation target)))
-                     (with-current-buffer target
-                       (goto-char (point-max))
-                       (if (eq (plist-get err :type) 'sandbox)
-                           ;; A sandbox failure is infrastructure, not
-                           ;; conversation.  Its message names the backend, so it
-                           ;; is shown to the user but never recorded as an
-                           ;; assistant turn: sending it back would hand the
-                           ;; planner the very boundary the prompt omits.  Only a
-                           ;; round failure that says something about the planner
-                           ;; -- malformed TOML, for one -- stays in the history.
-                           (scalpel-console--append
-                            (concat "Scalpel error: "
-                                    (scalpel-redact-restore (or (plist-get err :message) ""))))
-                         (let* ((inhibit-read-only t)
-                                (err-beg (point))
-                                ;; Planner errors may quote the raw reply,
-                                ;; which was sent redacted: restore before
-                                ;; rendering, so the header shows real paths.
-                                (err-message
-                                 (scalpel-redact-restore (or (plist-get err :message) "")))
-                                (category (scalpel-diagnose-category
-                                           (plist-get err :type)))
-                                (header
-                                 (cond
-                                  ((eq category 'planner)
-                                   (concat "Scalpel [planner error]: "
-                                           err-message
-                                           "\n"
-                                           (scalpel-diagnose-advice-plist err)
-                                           "\n\n"))
-                                  ((eq category 'context)
-                                   ;; Retry advice is useless here: the
-                                   ;; instruction will fail again until the
-                                   ;; missing context exists, but the
-                                   ;; remedy must still be stated, so the
-                                   ;; category-advice table is no longer dead
-                                   ;; code on the render path.
-                                   (concat "Scalpel [context error]: "
-                                           err-message
-                                           "\n"
-                                           (scalpel-diagnose-advice-plist err)
-                                           "\n\n"))
-                                  (t
-                                   (concat "Scalpel [bug]: "
-                                           err-message
-                                           "\n\n")))))
-                           (scalpel-console--insert-tagged
-                            header
-                            'assistant)
-                           ;; The failure is dimmed for reading only: the
-                           ;; turn still joins the conversation, so this
-                           ;; must not read as a trimmed body.  The explicit
-                           ;; `scalpel-console-planner-error' property is the
-                           ;; durable marker; the face remains only as the
-                           ;; legacy signal.  Both are declared
-                           ;; `rear-nonsticky' so keyboard input typed after
-                           ;; the turn inherits neither.
-                           (put-text-property err-beg (point) 'face
-                                              'scalpel-console-planner-error-face)
-                           (put-text-property err-beg (point)
-                                              'scalpel-console-planner-error t)
-                           (scalpel-console--make-nonsticky
-                            err-beg (point) '(face)))
-                       ;; An error turn is a conversation turn too: it becomes the
-                       ;; newest assistant turn, so the report before it has to be
-                       ;; marked.  The insertion stays direct rather than going
-                       ;; through `--append', to leave point placement as it was.
-                       (scalpel-console--refresh-consumed-body-markers))))
-                 (error
-                  (message "Scalpel: error handler failed: %S" handler-err)))
-               (funcall settle nil)))
-          ((error quit)
-           (funcall settle nil)
-           (signal (car err) (cdr err))))))))
+        (unwind-protect
+            (progn
+              (when deep-reasoning
+                (put gptel-model :request-params nil)
+                (setq scalpel-llm-probe-inhibit t))
+              (condition-case err
+                  (scalpel-agent-run
+                   ;; Outbound text is redacted here, at the console's single
+                   ;; send point: the model sees placeholders, never the real
+                   ;; user name, for both the instruction and the history.
+                   (scalpel-redact-apply instruction)
+                   (scalpel-redact-apply history)
+                   (lambda (round-result)
+                     (when (and (buffer-live-p target)
+                                (= operation
+                                   (buffer-local-value
+                                    'scalpel-console--operation-generation target)))
+                       (condition-case err
+                           (with-current-buffer target
+                             ;; Placeholders in the report are restored before
+                             ;; formatting: the console -- and the conversation
+                             ;; history it records -- always holds real paths,
+                             ;; so the next round never round-trips a placeholder.
+                             (scalpel-console--append
+                              (format "Scalpel%s: %s"
+                                      model-tag
+                                      (scalpel-redact-restore
+                                       (plist-get round-result :report)))
+                              'assistant))
+                         ((error quit)
+                          (funcall settle nil)
+                          (signal (car err) (cdr err)))))
+                     ;; Settle unconditionally: an abort that advanced the
+                     ;; generation while a synchronous action chain was in
+                     ;; flight leaves no one else to stop the status timer or
+                     ;; clear the progress callback, so the round must settle
+                     ;; here even though its report is suppressed.
+                     (funcall settle round-result))
+                   (lambda (err)
+                     ;; Record the failing round's error plist before rendering
+                     ;; the header: the round loop in `scalpel-console--run-rounds'
+                     ;; reads `scalpel-console--round-error' to decide on a
+                     ;; self-heal retry.
+                     (setq scalpel-console--round-error err)
+                     (condition-case handler-err
+                         (when (and (buffer-live-p target)
+                                    (= operation
+                                       (buffer-local-value
+                                        'scalpel-console--operation-generation target)))
+                           (with-current-buffer target
+                             (goto-char (point-max))
+                             (if (eq (plist-get err :type) 'sandbox)
+                                 ;; A sandbox failure is infrastructure, not
+                                 ;; conversation.  Its message names the backend, so it
+                                 ;; is shown to the user but never recorded as an
+                                 ;; assistant turn: sending it back would hand the
+                                 ;; planner the very boundary the prompt omits.  Only a
+                                 ;; round failure that says something about the planner
+                                 ;; -- malformed TOML, for one -- stays in the history.
+                                 (scalpel-console--append
+                                  (concat "Scalpel error: "
+                                          (scalpel-redact-restore (or (plist-get err :message) ""))))
+                               (let* ((inhibit-read-only t)
+                                      (err-beg (point))
+                                      ;; Planner errors may quote the raw reply,
+                                      ;; which was sent redacted: restore before
+                                      ;; rendering, so the header shows real paths.
+                                      (err-message
+                                       (scalpel-redact-restore (or (plist-get err :message) "")))
+                                      (category (scalpel-diagnose-category
+                                                 (plist-get err :type)))
+                                      (header
+                                       (cond
+                                        ((eq category 'planner)
+                                         (concat "Scalpel [planner error]: "
+                                                 err-message
+                                                 "\n"
+                                                 (scalpel-diagnose-advice-plist err)
+                                                 "\n\n"))
+                                        ((eq category 'context)
+                                         ;; Retry advice is useless here: the
+                                         ;; instruction will fail again until the
+                                         ;; missing context exists, but the
+                                         ;; remedy must still be stated, so the
+                                         ;; category-advice table is no longer dead
+                                         ;; code on the render path.
+                                         (concat "Scalpel [context error]: "
+                                                 err-message
+                                                 "\n"
+                                                 (scalpel-diagnose-advice-plist err)
+                                                 "\n\n"))
+                                        (t
+                                         (concat "Scalpel [bug]: "
+                                                 err-message
+                                                 "\n\n")))))
+                                 (scalpel-console--insert-tagged
+                                  header
+                                  'assistant)
+                                 ;; The failure is dimmed for reading only: the
+                                 ;; turn still joins the conversation, so this
+                                 ;; must not read as a trimmed body.  The explicit
+                                 ;; `scalpel-console-planner-error' property is the
+                                 ;; durable marker; the face remains only as the
+                                 ;; legacy signal.  Both are declared
+                                 ;; `rear-nonsticky' so keyboard input typed after
+                                 ;; the turn inherits neither.
+                                 (put-text-property err-beg (point) 'face
+                                                    'scalpel-console-planner-error-face)
+                                 (put-text-property err-beg (point)
+                                                    'scalpel-console-planner-error t)
+                                 (scalpel-console--make-nonsticky
+                                  err-beg (point) '(face)))
+                             ;; An error turn is a conversation turn too: it becomes the
+                             ;; newest assistant turn, so the report before it has to be
+                             ;; marked.  The insertion stays direct rather than going
+                             ;; through `--append', to leave point placement as it was.
+                             (scalpel-console--refresh-consumed-body-markers))))
+                       (error
+                        (message "Scalpel: error handler failed: %S" handler-err)))
+                     (funcall settle nil)))
+                ((error quit)
+                 (funcall settle nil)
+                 (signal (car err) (cdr err)))))
+          (when deep-reasoning
+            (put gptel-model :request-params saved-request-params)
+            (setq scalpel-llm-probe-inhibit saved-probe-inhibit)))))))
 
 (defun scalpel-console--shell-description (shell)
   "Describe one entry of the :shells list for a confirmation prompt.
@@ -2177,7 +2219,7 @@ conversation).  Return nil to stop."
                      'declined))))
     (_ nil)))
 
-(defun scalpel-console--run-rounds (instruction history)
+(defun scalpel-console--run-rounds (instruction history &optional deep-reasoning)
   "Run agent rounds for INSTRUCTION until the loop ends.
 HISTORY is the conversation recorded before INSTRUCTION.  Return
 after dispatching the first round; each round's outcome is handled
@@ -2186,6 +2228,9 @@ buffer, so shell output reaches the next round without anything
 being carried in a variable.  A round that ran shell commands, or
 read a file, may be followed by another, up to
 `scalpel-console-max-rounds'.
+
+When DEEP-REASONING is non-nil, every round dispatched by this
+operation, including continued rounds, runs in deep-reasoning mode.
 
 Whether a round actually continues is decided by
 `scalpel-console--continue-p', which questions the user only when
@@ -2386,7 +2431,7 @@ after %s: %s."
                      (format-time-string "%H:%M"))))))
              (setq round (1+ round))
              (scalpel-console--run-round
-              next-instruction conversation
+              next-instruction conversation deep-reasoning
               (lambda (round-result)
                 (when (and (buffer-live-p target)
                            (= operation
@@ -2675,8 +2720,9 @@ retry instead of a send refusal."
             (redisplay)
             (let ((parsed (scalpel-console-parse-prefix instr)))
               (unwind-protect
-                  (let ((scalpel-agent--instruction-mode (or (car parsed) :normal)))
-                    (scalpel-console--run-rounds (cdr parsed) history))
+                  (let ((scalpel-agent--instruction-mode (or (car parsed) :normal))
+                        (deep-reasoning (eq (car parsed) 'no-reasoning)))
+                    (scalpel-console--run-rounds (cdr parsed) history deep-reasoning))
                 (setq scalpel-agent--instruction-mode :normal)))
             (goto-char (point-max))
             (message "Scalpel: instruction sent.")))))))
@@ -2684,21 +2730,25 @@ retry instead of a send refusal."
 (cl-defun scalpel-console-parse-prefix (text)
   "Split TEXT into a (MODE . REST) cons by its leading prefix.
 
-A leading \"?!\" or \"!?\" followed by whitespace selects MODE
-`readonly-shell'; this two-character prefix is checked before the
-single-character prefixes so it takes precedence.  A leading \"?\"
-followed by whitespace selects MODE `consult'; a leading \"!\"
-followed by whitespace selects MODE `shell-mode'; anything else
+A leading two-character combination of distinct symbols among \"!\",
+\"?\", and \"~\" followed by whitespace selects a combined mode: \"?!\"
+or \"!?\" selects `readonly-shell'; \"?~\" or \"~?\" selects
+`consult-no-reasoning'; \"!~\" or \"~!\" selects
+`shell-mode-no-reasoning'.  These two-character prefixes are checked
+before the single-character prefixes so they take precedence.  A
+leading \"?\" followed by whitespace selects MODE `consult'; a leading
+\"!\" followed by whitespace selects MODE `shell-mode'; a leading
+\"~\" followed by whitespace selects MODE `no-reasoning'; anything else
 yields MODE nil and REST equal to the original TEXT.  REST has the
 prefix and its trailing whitespace removed.  The prefix is only
-recognized at the very beginning of TEXT; a bare \"?\" or \"!\"
+recognized at the very beginning of TEXT; a bare \"?\", \"!\", or \"~\"
 without following whitespace stays ordinary text.
 
-A lone \"?\" or \"!\" is treated as an unfinished combined prefix
-rather than committing to `consult' or `shell-mode': when TEXT is
-exactly one prefix character, or when its first character is \"?\"
-or \"!\" and the second is the other prefix character with no
-whitespace following yet, MODE is nil and REST equals the original
+A lone \"?\", \"!\", or \"~\" is treated as an unfinished combined
+prefix rather than committing to a single-character mode: when TEXT is
+exactly one prefix character, or when its first character is one of
+\"?\", \"!\", \"~\" and the second is a different prefix character with
+no whitespace following yet, MODE is nil and REST equals the original
 TEXT.  Commitment to a single-character mode happens only once the
 prefix character is followed by whitespace."
   (let ((char (when (> (length text) 0) (aref text 0)))
@@ -2707,13 +2757,23 @@ prefix character is followed by whitespace."
                    (memq (aref text i) '(?\s ?\n ?\t ?\r))))))
     (cond
      ((and (> (length text) 2)
-           (memq (substring text 0 2) '("?!" "!?"))
-           (funcall ws 2))
-      (cons 'readonly-shell (string-trim-left (substring text 2) "[ \t\n\r]+")))
+           (let ((pair (substring text 0 2)))
+             (and (memq (aref pair 0) '(?! ?? ?~))
+                  (memq (aref pair 1) '(?! ?? ?~))
+                  (not (eq (aref pair 0) (aref pair 1)))
+                  (funcall ws 2))))
+      (let ((pair (substring text 0 2)))
+        (cons (cond
+               ((member pair '("?!" "!?")) 'readonly-shell)
+               ((member pair '("?~" "~?")) 'consult-no-reasoning)
+               ((member pair '("!~" "~!")) 'shell-mode-no-reasoning))
+              (string-trim-left (substring text 2) "[ \t\n\r]+"))))
      ((and (eq char ??) (funcall ws 1))
       (cons 'consult (string-trim-left (substring text 1) "[ \t\n\r]+")))
      ((and (eq char ?!) (funcall ws 1))
       (cons 'shell-mode (string-trim-left (substring text 1) "[ \t\n\r]+")))
+     ((and (eq char ?~) (funcall ws 1))
+      (cons 'no-reasoning (string-trim-left (substring text 1) "[ \t\n\r]+")))
      (t (cons nil text)))))
 
 (defun scalpel-console-abort ()

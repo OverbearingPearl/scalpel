@@ -61,7 +61,7 @@
             (insert "fix the bug in the parser\n")))
   (:when (with-current-buffer buf
            (cl-letf (((symbol-function 'scalpel-console--run-rounds)
-                      (lambda (_instr _history)
+                      (lambda (_instr _history _deep-reasoning)
                         (scalpel-console--append
                          "Here is the answer." 'assistant))))
              (scalpel-console-send-line))))

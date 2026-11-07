@@ -705,14 +705,12 @@ side-effect free.")
 (defun scalpel-llm-probe-reasoning-lazy ()
   "Lazy pre-request probe entry point.
 Runs a one-shot reasoning probe for the current gptel backend/model
-pair unless it has already been probed.  Does nothing when the user
-opted out via `scalpel-llm-probe-minimize-reasoning' being nil, when
+pair unless it has already been probed.  Does nothing when
 `scalpel-llm-probe-inhibit' is non-nil, or when the gptel backend or
 model is unset.  A probe failure is logged and swallowed so the
 request path is never broken; the failed pair is not cached, so the
 probe retries on the next request."
-  (when (and scalpel-llm-probe-minimize-reasoning
-             (not scalpel-llm-probe-inhibit)
+  (when (and (not scalpel-llm-probe-inhibit)
              gptel-backend
              gptel-model)
     (let ((key (cons (gptel-backend-name gptel-backend)
@@ -736,33 +734,6 @@ probe retries on the next request."
 Keys are (backend-name . model-name) conses; values are the model
 symbols that were probed.  The toggle consults this table to strip
 :request-params from every probed model.")
-
-(defcustom scalpel-llm-probe-minimize-reasoning t
-  "Non-nil when reasoning minimization is enabled for LLM probes.
-Toggling this switch invalidates `scalpel-llm-probe-reasoning-cache'
-so the next request re-probes the current backend+model pair."
-  :type 'boolean
-  :group 'scalpel)
-
-(defun scalpel-llm-probe-minimize-reasoning-toggle ()
-  "Toggle `scalpel-llm-probe-minimize-reasoning' and clear the probe cache.
-Cache keys are (backend . model-symbol) cons cells.  When disabling,
-first overwrite `:request-params' with an empty plist on every cached
-model symbol -- including ones carrying user-owned parameters -- so
-each model falls back to its own defaults, then clear the cache.
-When enabling, just clear the cache so the next request re-probes the
-current backend+model pair."
-  (interactive)
-  (when scalpel-llm-probe-minimize-reasoning
-    (maphash (lambda (_key value)
-               (put value :request-params nil))
-             scalpel-llm-probe-reasoning-cache))
-  (clrhash scalpel-llm-probe-reasoning-cache)
-  (setq scalpel-llm-probe-minimize-reasoning
-        (not scalpel-llm-probe-minimize-reasoning))
-  (message "scalpel-llm-probe-minimize-reasoning is now %s"
-           (if scalpel-llm-probe-minimize-reasoning
-               "enabled" "disabled")))
 
 (provide 'scalpel-llm)
 

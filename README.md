@@ -398,72 +398,7 @@ Inside the console:
 
 ## Status & Roadmap
 
-Scalpel is in active, deliberately small MVP stages.
-
-**Currently implemented**
-- Emacs Lisp, Markdown, YAML, Org, and .gitignore structural location, plus the
-  provider dispatch API (`scalpel-locate`, `scalpel-locate-elisp`,
-  `scalpel-locate-markdown`, `scalpel-locate-yaml`, `scalpel-locate-org`, and
-  `scalpel-locate-gitignore`)
-- The console and the multi-round agent loop: context management, shell-output
-  continuation, and conversation replay
-- Structured action planning and parsing (`block-edit`, `block-insert`,
-  `block-delete`, `file-create`, `file-rename`, `file-delete`, `file-peek`,
-  `file-substitute`, `shell`, `reply`, `confirm`), each action returning a
-  human-readable report
-  that stays in the console buffer, so a session's changes are readable after
-  the fact
-- Diagnosis and self-healing: when planner output fails to parse, the failure
-  is classified and diagnosed, bracket defects are located, Perl regexes are
-  pre-checked with mechanical repair suggestions, and the round retries with
-  the diagnosis fed back to the planner
-- Execution boundary lock: a replacement lands only on the range the locator
-  resolved, and an unbalanced replacement is refused; an applied change reaches
-  its file as it lands, so the shell commands the next round runs already see
-  it, and a deletion collapses the blank lines it brings together
-- Shell execution through `bubblewrap` on Linux, plus an experimental macOS
-  backend through `sandbox-exec`; shell actions are refused when the sandbox is
-  unavailable or fails its probe
-- New-file creation through the `file-create` action: the planner delivers a
-  finished whole-file draft, missing parent directories are created, and the
-  action runs without a confirmation prompt (the report names the created
-  path in full), unlike the file-level actions (`file-rename`,
-  `file-delete`), which are always confirmed because they decide which
-  files exist; when the user declines the confirmation, the action does not
-  run and the decline is reported back to the planner as a normal result, so
-  the round continues and the planner finds another way instead of the session
-  stopping
-- Mechanical batch rewriting through the `file-substitute` action: the planner names
-  context files, a pattern and a replacement, Scalpel applies the change itself
-  and reports every file and occurrence count; the whole rewrite is computed
-  and validated before anything reaches disk, a rewrite that matches nothing
-  or would unbalance an Emacs Lisp file refuses entire, it is always confirmed
-  by the user first because its reach spans every file it names, and its
-  report joins the conversation so the planner can iterate on the result
-- Session-level review and recovery, piece by piece: `M-x scalpel-history`
-  opens a roadmap of what the session did, each recorded change can be opened
-  in a review buffer and rejected per block, and remaining records can be
-  restored one at a time rather than as one lump
-- An optional unattended mode, in which the loop runs without per-action
-  confirmation
-- The `scalpel/autosave` orphan branch and `scalpel-lineage`, which record
-  each landed change so per-session diffing and recovery have something to
-  read from
-
-**Near-term**
-- One-shot session diff and rollback: reviewing everything a session changed
-  as a single diff and reverting it as one unit (`M-x scalpel-revert-session`)
-  on top of the existing lineage records, complementing the already
-  implemented per-block reject and per-record restore
-- LSP-backed locator providers, registered through the existing dispatch API
-
-**Later**
-- Rust / TS / Go LSP-first workflows
-- Multi-file refactor plans with per-session rollback
-- `tree-sitter` fallbacks for dynamic languages
-
-Contributions are welcome, especially around locator providers and the agent
-loop.
+Current block:
 
 ## Contributing
 
