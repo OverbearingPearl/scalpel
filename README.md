@@ -210,6 +210,7 @@ session.
 | YAML | built-in structural scan (top-level keys) | none | top-level key blocks |
 | .gitignore | built-in structural scan (pattern lines) | none | pattern lines |
 | Org | built-in structural scan (Org headlines) | none | headline subtrees |
+| HTML | built-in structural scan (HTML tag id) | none | element blocks keyed by id attribute |
 | Rust | rust-analyzer (LSP) | tree-sitter | functions, methods, impl items |
 | TypeScript / JS | tsserver (LSP) | tree-sitter | function/class/module blocks |
 | Go | gopls (LSP) | tree-sitter | funcs, types |

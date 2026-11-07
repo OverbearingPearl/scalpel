@@ -59,6 +59,8 @@ Registering the same REGEXP replaces the previous provider."
                               (string= (car entry) regexp))
                             scalpel-locate-providers))))
 
+(require 'scalpel-locate-html)
+
 (scalpel-locate-register-provider
  "\\.org\\'"
  (list :locate #'scalpel-locate-org-range
