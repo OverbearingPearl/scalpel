@@ -52,8 +52,8 @@ itself after the user approves the dry-run preview.")
 
 (defun scalpel-agent--tools-for-mode (mode)
   "Return the planner-allowed tool names for run MODE.
-MODE is `consult', `shell-mode', or nil; nil yields the full
-vocabulary.  The result is always a subset of
+MODE is `consult', `shell-mode', `readonly-shell', or nil; nil
+yields the full vocabulary.  The result is always a subset of
 `scalpel-agent--tool-vocabulary', so it stays in sync with that
 constant."
   (let ((excluded
@@ -64,6 +64,9 @@ constant."
            ('shell-mode '("block-edit" "block-insert" "block-delete"
                           "file-create" "file-rename" "file-delete"
                           "file-substitute-dry-run"))
+           ('readonly-shell '("block-edit" "block-insert" "block-delete"
+                              "file-create" "file-rename" "file-delete"
+                              "file-substitute-dry-run" "confirm"))
            (_ nil))))
     (seq-remove (lambda (tool) (member tool excluded))
                 scalpel-agent--tool-vocabulary)))
@@ -1242,7 +1245,7 @@ rejected otherwise with an explanation of the allowed tools."
       (let ((tool (plist-get action :tool))
             (allowed (scalpel-agent--tools-for-mode mode)))
         (unless (memq tool allowed)
-          (user-error "Scalpel: action tool %s rejected in %s mode; the tool is forbidden by the current instruction mode (ask/shell), remove the prefix and resend; allowed tools: %s"
+          (user-error "Scalpel: action tool %s rejected in %s mode; the tool is forbidden by the current instruction mode, remove the prefix and resend; allowed tools: %s"
                       tool mode allowed)))))
   (let* ((tool (plist-get action :tool))
          (fields (cdr (assoc tool scalpel-agent--tool-fields))))
@@ -1290,7 +1293,7 @@ own: everything the LLM may rely on arrives here."
            (format scalpel-prompt--instruction-header
                    instruction)
            (pcase scalpel-agent--instruction-mode
-             ((or 'consult 'shell-mode)
+             ((or 'consult 'shell-mode 'readonly-shell)
               (string-trim-right
                (scalpel-prompt-rule--action-mode-rule
                 scalpel-agent--instruction-mode)))
@@ -4385,10 +4388,10 @@ reload and must not survive reloads.")
   "Per-buffer restriction on which tools the planner may use for the current run.
 
 :normal is the default and grants the unrestricted vocabulary.
-:ask is set by the console when an instruction carries the \"? \"
-prefix; it restricts the planner to read-only tools (file-peek,
-shell, reply).  :shell is set for the \"! \" prefix and restricts the
-planner to shell-flavoured tools (file-peek, shell, reply, confirm).
+:consult restricts the planner to read-only tools (file-peek, shell,
+reply).  :shell-mode restricts the planner to shell-flavoured tools
+\(file-peek, shell, reply, confirm).  :readonly-shell restricts the
+planner to read-only shell tools (file-peek, shell, reply).
 
 The console resets this variable to :normal around each run so the
 restriction never leaks across rounds.  It is deliberately transient

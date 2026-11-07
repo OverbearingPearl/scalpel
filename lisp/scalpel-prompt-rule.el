@@ -514,13 +514,15 @@ The format string is filled with the required language name.")
 
 (defun scalpel-prompt-rule--action-mode-rule (mode)
   "Return the English rule text injected for the current action MODE.
-MODE is one of `normal', `consult' or `shell-mode'.  Return nil for
-`normal' so that no extra text is injected."
+MODE is one of `normal', `consult', `shell-mode' or `readonly-shell'.
+Return nil for `normal' so that no extra text is injected."
   (pcase mode
     (`consult
      (format "The action vocabulary this turn has been pruned to read-only operations by the consult mode. You may only inspect, search, or read files and buffers. Any action that modifies files, buffers, or repository state is forbidden. Treat every requested task as a read-only inspection: gather the information the planner needs and report it.\n"))
     (`shell-mode
      (format "The action vocabulary this turn has been pruned by the shell mode. Prefer completing the user's request through shell commands and file-peek; both are restricted to read-only inspection. Any action that modifies files, buffers, or repository state is forbidden.\n"))
+    (`readonly-shell
+     (format "The action vocabulary this turn has been pruned by the readonly-shell mode. Shell commands and file-peek are allowed, but both are restricted to read-only inspection. Any action that modifies files, buffers, or repository state is forbidden. The confirm action is unavailable in this mode, so instead of asking for confirmation, report your findings and let the planner decide.\n"))
     (_ nil)))
 
 (defun scalpel-prompt-rule--shell-action-reason-language-rule (language)
