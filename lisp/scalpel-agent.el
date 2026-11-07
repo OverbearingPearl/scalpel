@@ -37,10 +37,14 @@
 (require 'scalpel-sandbox)
 (require 'scalpel-tool)
 
-(defconst scalpel-agent--tool-vocabulary '("file-peek" "block-edit" "block-insert" "block-delete" "file-create" "file-rename" "file-delete" "file-substitute-dry-run" "shell" "reply" "confirm")
+(defconst scalpel-agent--tool-vocabulary '("file-peek" "block-edit" "block-insert" "block-delete" "file-create" "file-rename" "file-delete" "file-substitute-dry-run" "web-search" "shell" "reply" "confirm")
   "Tool names the planner may emit.
 Structural contract, not user configuration: dispatch in
 `scalpel-agent-execute-action' must stay in sync with it.
+
+`web-search' is the only tool through which the planner may issue
+network requests; its execution depends on the sandbox allowing
+outbound access.
 
 `file-substitute' is deliberately absent: the planner only sees
 `file-substitute-dry-run', and the client issues `file-substitute'
@@ -81,6 +85,7 @@ constant."
     ("file-substitute" . (:tool :files :pattern :replacement))
     ("file-substitute-dry-run" . (:tool :files :pattern :replacement))
     ("shell" . (:tool :command :reason))
+    ("web-search" . (:tool :query :engine))
     ("reply" . (:tool :text))
     ("confirm" . (:tool :text)))
   "Per-tool field contracts.
@@ -90,13 +95,108 @@ extra field fails loudly instead of silently degrading.")
 
 (defconst scalpel-agent--tool-optional-fields
   '(("file-peek" . (:symbol))
-    ("file-substitute" . (:reason)))
+    ("file-substitute" . (:reason))
+    ("web-search" . (:engine)))
   "Fields a tool accepts but does not require.
 Each entry is (TOOL . FIELDS), matching the shape of
 `scalpel-agent--tool-fields'.  `scalpel-agent--validate-action'
 checks the required list only, while `scalpel-agent--project-actions'
 keeps required and optional fields alike; a field listed here may
-therefore be omitted by the planner and still survive projection.")
+therefore be omitted by the planner and still survive projection.
+Omitting the `web-search' :engine field falls back to
+`scalpel-agent-web-search-default-engine'.")
+
+(defcustom scalpel-agent-web-search-engine-registry
+  '(("bing"
+     . (:endpoint "https://www.bing.com/search"
+        :method GET
+        :build-request
+        (lambda (query)
+          (list "https://www.bing.com/search/"
+                "-G"
+                "--data-urlencode" (concat "q=" query)))
+        :parse
+        (lambda (body)
+          body)))
+    ("duckduckgo"
+     . (:endpoint "https://html.duckduckgo.com/html/"
+        :method GET
+        :build-request
+        (lambda (query)
+          (list "https://html.duckduckgo.com/html/"
+                "-G"
+                "--data-urlencode" (concat "q=" query)))
+        :parse
+        (lambda (body)
+          body)))
+    ("zhipu"
+     . (:endpoint "https://open.bigmodel.cn/api/paas/v4/web_search"
+        :method POST
+        :auth-host "open.bigmodel.cn"
+        :build-request
+        (lambda (query)
+          (list "https://open.bigmodel.cn/api/paas/v4/web_search"
+                "-X" "POST"
+                "-H" "Content-Type: application/json"
+                "-d" (json-encode
+                      `((search_engine . "search_std")
+                        (search_query . ,query)))))
+        :parse
+        (lambda (body)
+          (mapconcat
+           (lambda (item)
+             (format "%s\n%s\n%s"
+                     (cdr (assq 'title item))
+                     (cdr (assq 'url item))
+                     (cdr (assq 'content item))))
+           (cdr (assq 'search_result (json-read-from-string body)))
+           "\n\n")))))
+  "Declarative registry of web search engines.
+Each entry is (NAME . PLIST) where PLIST describes the endpoint,
+HTTP method, request construction and response parsing.  Adding a
+new engine is a pure configuration change: append an entry here
+without touching any engine-agnostic driving code."
+  :type '(alist
+          :key-type string
+          :value-type
+          (plist :options
+                 ((:endpoint string)
+                  (:method symbol)
+                  (:auth-host string)
+                  (:build-request function)
+                  (:parse function))))
+  :group 'scalpel-agent)
+
+(defcustom scalpel-agent-web-search-proxy-table nil
+  "Map engine names (strings) to proxy addresses (strings).
+
+Whether a proxy is needed is a property of the user's network
+environment, not of the engine itself, hence it is kept in this
+independent table instead of the engine definition.  When an
+engine's entry matches, its curl invocation passes -x to use the
+proxy; engines with no matching entry connect directly.
+Consumed by `scalpel-agent-web-search'."
+  :type '(alist :key-type string :value-type string)
+  :group 'scalpel-agent)
+
+(defun scalpel-agent-web-search--bearer-token (host)
+  "Return the Bearer token stored for HOST via auth-source.
+The password secret of the first matching auth-source entry is
+used as the API key.  Signal an error when no secret is found so
+that a missing key fails loudly instead of producing a silent
+unauthenticated request."
+  (or (auth-source-pick-first-password :host host)
+      (user-error "No API key found for web search engine host %S; \
+add it to auth-source (e.g. ~/.authinfo.gpg)" host)))
+
+(defcustom scalpel-agent-web-search-default-engine "zhipu"
+  "Engine tried first when performing a web search.
+When an engine fails, the search falls back to the next engine in
+registry order (`scalpel-agent-web-search-engine-registry');
+DuckDuckGo, being unauthenticated, is kept as the last resort so
+the feature still works when no API keys are configured."
+  :type '(string :tag "Engine name")
+  :group 'scalpel-agent)
 
 (defconst scalpel-agent--change-tools
   '("block-edit" "block-insert" "block-delete" "file-create" "file-rename"
@@ -2158,6 +2258,102 @@ probe, so a command is never run outside the sandbox."
                 ""
               (concat "\n" (scalpel-agent-shell--clipboard-hint command))))))
 
+(defun scalpel-agent-web-search (query engine)
+  "Execute the web-search tool: fetch search results for QUERY via ENGINE.
+
+Raison d'être: when the information needed to answer is not present in the
+current context files, use retrieval to supplement external facts and
+prevent the agent from fabricating unknown content by guessing.   Applicable
+only when the context files do not cover the topic and public web
+information is needed; content already covered by context files must not
+be re-fetched.
+
+ENGINE may be nil, since :engine is an optional field the planner may
+omit; in that case it falls back to `scalpel-agent-web-search-default-engine'
+before the registry lookup.   Otherwise ENGINE is looked up in
+`scalpel-agent-web-search-engine-registry'; each entry supplies :endpoint,
+:build-request (curl args builder), :auth-host (optional, adds a Bearer
+auth header) and :parse (body parser).   Unregistered engines are rejected.
+
+Proxying: before the curl invocation, ENGINE is looked up in
+`scalpel-agent-web-search-proxy-table'.   On a hit, curl is invoked with
+\"-x PROXY\" so the request goes through the configured proxy; engines
+absent from the table connect directly.   This is a per-engine transport
+concern only and does not affect parsing, auth, or the report format.
+
+This does not go through scalpel-sandbox: the sandbox's file-boundary
+model cannot express authorizations like \"which network endpoint is
+allowed\". Retrieval is a read-only external interaction with a risk
+profile different from shell's writable filesystem. Results only enter the
+report given to the model and are never written to disk, so there is no
+write side effect requiring sandbox isolation. The synchronous call is
+deliberate: the agent's tool execution body is serially advancing anyway;
+asynchrony would only push the waiting complexity onto the caller with no
+measurable benefit.
+
+Return format matches scalpel-agent-shell:
+
+  Search: <query>
+  Engine: <engine>
+  Exit: <code>
+  Output: N bytes
+  --- output ---
+  ...
+  --- end output ---
+
+On curl non-zero exit or empty output, returns an error report string
+carrying the Exit status instead of signaling.
+Note: results are not redacted by the redact rules; any citation of
+retrieved content must carry its source."
+  (let* ((engine (or engine scalpel-agent-web-search-default-engine))
+         (entry (alist-get engine scalpel-agent-web-search-engine-registry
+                           nil nil #'string=)))
+    (unless entry
+      (user-error "Unsupported search engine: %s" engine))
+    (require 'url)
+    (let* ((endpoint (plist-get entry :endpoint))
+           (build-request (plist-get entry :build-request))
+           (auth-host (plist-get entry :auth-host))
+           (parse (plist-get entry :parse))
+           (proxy (alist-get engine scalpel-agent-web-search-proxy-table
+                             nil nil #'string=))
+           (curl-args
+            (append (funcall build-request query)
+                    (when auth-host
+                      (list "--header"
+                            (concat "Authorization: Bearer "
+                                    (scalpel-agent-web-search--bearer-token
+                                     auth-host))))
+                    (when proxy
+                      (list "-x" proxy))
+                    (list endpoint))))
+      (let* ((buf (generate-new-buffer " *scalpel-web-search*"))
+             exit-code)
+        (unwind-protect
+            (progn
+              (setq exit-code
+                    (apply #'call-process "curl" nil buf nil
+                           "--silent" "--show-error"
+                           "--max-time" "20"
+                           "--user-agent" "scalpel-agent-web-search/1.0"
+                           curl-args))
+              (let* ((raw (with-current-buffer buf (buffer-string)))
+                     (output (if (/= exit-code 0) raw (funcall parse raw)))
+                     (bytes (string-bytes output))
+                     (header (format "Search: %s\nEngine: %s\nExit: %d\nOutput: %d bytes\n"
+                                     query engine exit-code bytes)))
+                (cond
+                 ((/= exit-code 0)
+                  (concat header "--- output ---\n" output "\n--- end output ---\n"
+                          "Error: curl exited non-zero; results are unreliable.\n"))
+                 ((= bytes 0)
+                  (concat header "--- output ---\n\n--- end output ---\n"
+                          "Error: empty response from search endpoint.\n"))
+                 (t
+                  (concat header "--- output ---\n" output "\n--- end output ---\n")))))
+          (when (buffer-live-p buf)
+            (kill-buffer buf)))))))
+
 (defun scalpel-agent-shell--clipboard-hint (command)
   "Copy COMMAND to the system clipboard when manual copy is impractical.
 
@@ -3751,6 +3947,17 @@ internal error guards."
                                   (or review "No clear approval was given."))
                                  :preview preview
                                  :review review))))))))
+        ("web-search"
+         (let ((report (condition-case err
+                           (scalpel-agent-web-search
+                            (plist-get action :query)
+                            (plist-get action :engine))
+                         (error
+                          (funcall on-error
+                                   (list :type 'action
+                                         :message (error-message-string err)))
+                          nil))))
+           (when report (funcall on-success report))))
         ("shell"
          (let ((report (condition-case err
                            (scalpel-agent-shell

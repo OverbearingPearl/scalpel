@@ -105,6 +105,11 @@ pattern = '''...'''
 replacement = '''...'''
 
 [[action]]
+tool = '''web-search'''
+query = '''...'''
+engine = '''duckduckgo'''
+
+[[action]]
 tool = '''shell'''
 command = '''...'''
 reason = '''...'''
@@ -196,6 +201,24 @@ absent from the context is off-limits: when a request needs one, ask
 the user to add it with a confirm action instead of reaching for it
 with a different command."
   "Reading contract: file-peek for code, shell for finding.")
+
+(defconst scalpel-prompt-rule--web-search
+"Backends with server-side retrieval capability MUST perform their
+searches directly inside the chat; the planner MUST NOT issue
+web-search tool calls against such backends. Call the web-search tool
+only when external structured retrieval results are required. The
+`engine` field may be omitted to use the default engine; requests
+naming an unregistered engine are rejected.  Web search is a read-only
+external interaction; every result presented to the user MUST cite
+its source."
+"Prompt rule governing web-search tool usage.
+Backends that can retrieve on the server side search directly inside
+the chat; the planner must not call the web-search tool against them.
+Invoke web-search only when external structured retrieval results are
+needed.  The `engine` field may be omitted to use the default engine;
+requests naming an unregistered engine are rejected.  Web search is a
+read-only external interaction, and every result shown to the user
+must cite its source.")
 
 (defconst scalpel-prompt-rule--feedback-fence
   "Runtime feedback fence rules: a scalpel error fence in the conversation

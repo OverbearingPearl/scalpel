@@ -127,6 +127,59 @@ closes."
                 (setq end (point-max))))))
           (or end (point-max))))))))
 
+(defun scalpel-locate-html--balanced-p (text)
+  "Return non-nil when the replaced TEXT is balanced HTML.
+Applies the same rules as the element-end locator: comments are
+skipped whole; void and self-closing tags do not change depth;
+script/style bodies are raw text, so no tag opens inside them
+and their closing tag is consumed without affecting depth.
+Depth must never go negative, and the scan must end at zero
+depth with no unclosed comment.  Assumes the groups of
+`scalpel-locate-html--tag-regexp': 1 tag name, 2 leading slash
+for closing tags, 3 trailing slash for self-closing tags."
+  (catch 'unbalanced
+    (let ((pos 0)
+          (depth 0)
+          (raw-end nil))
+      (while (< pos (length text))
+        (cond
+         ;; Inside a raw-text element: skip to its closing tag only.
+         (raw-end
+          (let ((case-fold-search t))
+            (if (string-match raw-end text pos)
+                (setq pos (match-end 0)
+                      raw-end nil)
+              (throw 'unbalanced nil))))
+         ;; Comment: skip the whole block, fail on unclosed comment.
+         ((string-match "<!--" text pos)
+          (let ((close (string-match "-->" text (match-end 0))))
+            (unless close
+              (throw 'unbalanced nil))
+            (setq pos (match-end 0))))
+         ;; Tag: classify and update depth.
+         ((string-match scalpel-locate-html--tag-regexp text pos)
+          (let* ((name (downcase (match-string 1 text)))
+                 (closing (match-string 2 text))
+                 (self-closing (match-string 3 text))
+                 (void (member name scalpel-locate-html--void-elements)))
+            (cond
+             ((and closing void))            ; void closing tag: no depth change
+             (closing
+              (setq depth (1- depth))
+              (when (< depth 0)
+                (throw 'unbalanced nil)))
+             ((or void self-closing))        ; no depth change
+             (t
+              (setq depth (1+ depth))
+              (when (member name '("script" "style"))
+                (setq raw-end
+                      (concat "</" (regexp-quote name) "\\s-*>")))))
+            (setq pos (match-end 0))))
+         ;; Stray "<" outside any recognized construct: skip it.
+         (t
+          (setq pos (1+ pos)))))
+      (zerop depth))))
+
 (defun scalpel-locate-html--top-definition-range (symbol)
   "Return (BEG . END) of the element whose id is SYMBOL.
 BEG is the start tag's `<'; END is just past the matching end
@@ -161,9 +214,9 @@ Current buffer is the HTML file referenced by FILE."
 
 (defun scalpel-locate-html-list-symbols (_file)
   "Return the id attribute values of all elements in the buffer.
-Elements named script or style are skipped together with their
-raw-text bodies, so JavaScript or CSS text is never reported and
-the ids of the script or style tags themselves are not collected."
+Script and style bodies are skipped so their raw text is never
+scanned for ids, but the ids of the script or style tags
+themselves are collected, making them locatable definitions."
   (save-excursion
     (goto-char (point-min))
     (let (ids)
@@ -173,7 +226,9 @@ the ids of the script or style tags themselves are not collected."
                (tag-name (match-string 1))
                (id (scalpel-locate-html--tag-id tag-beg)))
           (if (member (downcase tag-name) '("script" "style"))
-              (scalpel-locate-html--skip-raw-text tag-name)
+              (progn
+                (when id (push id ids))
+                (scalpel-locate-html--skip-raw-text tag-name))
             (when id (push id ids)))))
       (nreverse ids))))
 
@@ -206,7 +261,8 @@ ever land on one element."
  "\\.x?html?\\'"
  (list :locate #'scalpel-locate-html-range
        :list-symbols #'scalpel-locate-html-list-symbols
-       :single-definition-p #'scalpel-locate-html--single-definition-p))
+       :single-definition-p #'scalpel-locate-html--single-definition-p
+        :balanced-p #'scalpel-locate-html--balanced-p))
 
 (provide 'scalpel-locate-html)
 

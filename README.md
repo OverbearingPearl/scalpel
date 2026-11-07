@@ -290,6 +290,40 @@ If you prefer not to use `use-package`, you can manually add both packages to
 
 ---
 
+## Web search configuration
+
+The web-search tool is controlled by three defcustom options: the
+default engine, a per-engine proxy table, and the engine registry.
+
+`scalpel-agent-web-search-default-engine` names the engine used when an
+action omits the engine field. The built-in engines are `bing`,
+`duckduckgo` and `zhipu`; `duckduckgo` needs no API key, which is why it
+works well as the default.
+
+`scalpel-agent-web-search-proxy-table` is an alist mapping an engine
+name to a proxy address of the form `host:port`. Engines without an
+entry connect directly. Whether a proxy is needed is a property of the
+user's network environment rather than of the engine, which is why
+proxies live in a separate table instead of the engine definitions.
+
+`scalpel-agent-web-search-engine-registry` is the declarative registry
+where each engine is a single entry describing its endpoint, HTTP
+method, request construction and response parsing. Adding or replacing
+an engine is a pure configuration change that appends one entry, so
+extend the table after load rather than shadowing it wholesale. Engines
+whose registry entry carries an `auth-host` field read a Bearer token
+from `auth-source` and fail loudly when the key is missing.
+
+```elisp
+(use-package scalpel-agent
+  :custom
+  (scalpel-agent-web-search-default-engine "duckduckgo")
+  (scalpel-agent-web-search-proxy-table
+   '(("duckduckgo" . "127.0.0.1:7897"))))
+```
+
+---
+
 ## Quickstart
 
 ```elisp

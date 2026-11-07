@@ -62,11 +62,17 @@
 
 (ert-gwt-deftest
   (:given ((content "<script id=\"s\">var x = \"<div id=\\\"nope\\\">\";</script>\n<p id=\"ok\"></p>\n")
-           (result nil)))
+           (result nil)
+           (range nil)
+           (text nil)))
   (:when (with-temp-buffer
            (insert content)
-           (setq result (scalpel-locate-html-list-symbols nil))))
-  (:then (should (equal result '("ok")))))
+           (setq result (scalpel-locate-html-list-symbols nil))
+           (setq range (scalpel-locate-html-range nil "s"))
+           (setq text (buffer-substring-no-properties
+                       (car range) (cdr range)))))
+  (:then (should (equal result '("s" "ok")))
+         (should (equal text "<script id=\"s\">var x = \"<div id=\\\"nope\\\">\";</script>"))))
 
 (provide 'scalpel-story-locate-html-test)
 
