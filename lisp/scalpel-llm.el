@@ -735,6 +735,110 @@ Keys are (backend-name . model-name) conses; values are the model
 symbols that were probed.  The toggle consults this table to strip
 :request-params from every probed model.")
 
+(defconst scalpel-llm-probe-retrieval-cache (make-hash-table :test #'equal)
+  "Cache of probed server-side retrieval parameters per backend/model.
+Key is a cons cell (BACKEND-NAME . MODEL-NAME); value is the plist of
+pure server-side retrieval parameters probed for that combination.
+Probing is not yet implemented, so this cache starts out empty.")
+
+(defun scalpel-llm-probe-retrieval-params ()
+  "Return the cached retrieval plist for the current gptel backend/model.
+Serves as the source of retrieval parameters when restoring deep-reasoning
+turns.  Builds the cache key from `gptel-backend' and `gptel-model' and looks
+it up in `scalpel-llm-probe-retrieval-cache'.  Returns nil when the backend
+or model is unset, or on cache miss; since probing is not yet implemented
+the cache is empty, so nil is the safe degraded outcome."
+  (when (and gptel-backend gptel-model)
+    (gethash (cons (gptel-backend-name gptel-backend) gptel-model)
+             scalpel-llm-probe-retrieval-cache)))
+
+(defvar scalpel-llm-probe-retrieval-cache nil
+  "Alist of (backend-name . model) to winning retrieval probe plist.")
+
+(defun scalpel-llm--retrieval-markers-p (resp)
+  "Return non-nil when RESP carries retrieval annotations of any kind."
+  (let ((text (prin1-to-string resp))
+        (hit nil))
+    (dolist (marker '("groundingMetadata"
+                      "url_citation"
+                      "annotations"
+                      "citations")
+                   hit)
+      (when (string-match-p (regexp-quote marker) text)
+        (setq hit t)))))
+
+(defun scalpel-llm-probe-retrieval ()
+  "Synchronously probe retrieval params for the current backend/model.
+
+Sends a baseline request, then one request per candidate plist,
+reporting which candidate (if any) elicits retrieval annotations in
+the response.  Winning candidates are recorded in
+`scalpel-llm-probe-retrieval-cache'; the cache is never read here, and
+the regular request path is untouched."
+  (interactive)
+  (let ((backend gptel-backend)
+        (model gptel-model))
+    (when (or (null backend) (null model))
+      (message "Scalpel: retrieval probe: backend or model not available; aborting.")
+      (cl-return-from scalpel-llm-probe-retrieval))
+    (let* ((backend-name (gptel-backend-name backend))
+           (model-name (gptel--model-name model))
+           (candidates
+            (if (string-match-p "openai" backend-name)
+                (list '(:web_search_options (:search_context_size "low")))
+              nil)))
+      (when (null candidates)
+        (message
+         "Scalpel: retrieval probe: only OpenAI-compatible chat-completions endpoints are supported by probe-send; Anthropic /messages and native Gemini endpoints cannot be probed; aborting.")
+        (cl-return-from scalpel-llm-probe-retrieval))
+      ;; Baseline request.
+      (let ((baseline
+             (condition-case err
+                 (scalpel-llm--probe-send nil)
+               (error
+                (message "Scalpel: retrieval probe: baseline request failed: %s"
+                         (decode-coding-string
+                          (prin1-to-string (cdr err)) 'utf-8))
+                nil))))
+        (when baseline
+          (if (scalpel-llm--retrieval-markers-p baseline)
+              (message
+               "Scalpel: retrieval probe: baseline response already contains retrieval annotations; no extra params needed.")
+            (let ((winner nil))
+              (dolist (candidate candidates)
+                (if winner
+                    nil
+                  (let ((resp
+                         (condition-case err
+                             (scalpel-llm--probe-send candidate)
+                           (error
+                            (message "Scalpel: retrieval probe: candidate %S failed: %s"
+                                     candidate
+                                     (decode-coding-string
+                                      (prin1-to-string (cdr err)) 'utf-8))
+                            nil))))
+                    (cond
+                     ((null resp)
+                      (message "Scalpel: retrieval probe: candidate %S FAILED." candidate))
+                     ((plist-get resp :error)
+                      (message "Scalpel: retrieval probe: candidate %S REJECTED (%s)."
+                               candidate (plist-get resp :error)))
+                     ((scalpel-llm--retrieval-markers-p resp)
+                      (setq winner candidate)
+                      (message "Scalpel: retrieval probe: candidate %S HIT retrieval annotations." candidate))
+                     (t
+                      (message "Scalpel: retrieval probe: candidate %S accepted but produced no annotations." candidate))))))
+              (if winner
+                  (progn
+                    (puthash (cons backend-name model-name)
+                             winner
+                             scalpel-llm-probe-retrieval-cache)
+                    (message
+                     "Scalpel: retrieval probe: cached winner %S for backend %S model %S."
+                     winner backend-name model-name))
+                (message
+                 "Scalpel: retrieval probe: no candidate produced retrieval annotations; nothing cached, request path unaffected.")))))))))
+
 (provide 'scalpel-llm)
 
 ;;; scalpel-llm.el ends here

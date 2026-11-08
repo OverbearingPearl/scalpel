@@ -543,15 +543,15 @@ caller can delete them without invalidating earlier ones."
 Empty input shows a plain waiting message whose ellipsis only
 marks waiting, followed by a parenthetical description of the
 accepted prefixes
-\( \"!␣\" shell, \"?␣\" consult, \"~␣\" no-reasoning, and one
-fixed-order combination example, \"?!␣\" read-only shell); the
-empty-input hint advertises each single prefix plus that one
-example rather than every ordering, while
+\( \"!␣\" shell, \"?␣\" consult, \"~␣\" default reasoning, \"@␣\" web
+search, and one fixed-order combination example, \"?!␣\" read-only
+shell); the empty-input hint advertises each single prefix plus
+that one example rather than every ordering, while
 `scalpel-console-parse-prefix' accepts any order.  Prefixed input
 gets a one-line explanation of the mode
 `scalpel-console-parse-prefix' detects.  A trimmed input whose
 first two characters are two distinct prefix symbols among \"!\",
-\"?\" and \"~\" and whose third character is whitespace is
+\"?\", \"~\" and \"@\" and whose third character is whitespace is
 reported by concatenating the phase-two hint of its first symbol
 with the phase-two hint of its second symbol, each taken from the
 same per-symbol hint text used for a lone symbol, so the order
@@ -563,16 +563,16 @@ than from `scalpel-console-parse-prefix', which requires more
 than two characters before it reports `readonly-shell';
 `string-trim' is used only to test for emptiness, since it would
 strip the trailing whitespace the combination check depends on.
-A lone \"!\", \"?\" or \"~\" is not treated as a combination; it
-falls through to its own mode hint, since the empty-input hint
+A lone \"!\", \"?\", \"~\" or \"@\" is not treated as a combination;
+it falls through to its own mode hint, since the empty-input hint
 already advertises the combinable prefixes.
-The blank after \"!\", \"?\", \"~\", \"?!\" and \"!?\" is mandatory
+The blank after \"!\", \"?\", \"~\", \"@\", \"?!\" and \"!?\" is mandatory
 in the prefix grammar, so it is drawn as U+2423 to make the
 otherwise invisible space visible; \" ◂ \" opens every phase-two
 hint because its leftward point reads as a comment on the typed
 text beside it.  Both single and combined prefixes require that
 trailing space before any phase-two hint appears: a bare \"!\",
-\"?\", \"~\", \"?!\" or \"!?\" without trailing whitespace shows no
+\"?\", \"~\", \"@\", \"?!\" or \"!?\" without trailing whitespace shows no
 phase-two hint at all.  The combination hint is emitted only when
 the untrimmed input starts with two distinct prefix symbols
 followed by whitespace, so a two-symbol input lacking the
@@ -605,18 +605,20 @@ text."
               (??
                " ◂ read-only consultation, nothing is ever modified")
               (?~
-               " ◂ deep reasoning, model default params"))))
+               " ◂ deep reasoning, model default params")
+              (?@
+               " ◂ web search for up-to-date information"))))
          (combination
           (and text
                (>= (length text) 3)
-               (memq (aref text 0) '(?! ?? ?~))
-               (memq (aref text 1) '(?! ?? ?~))
+               (memq (aref text 0) '(?! ?? ?~ ?@))
+               (memq (aref text 1) '(?! ?? ?~ ?@))
                (not (eq (aref text 0) (aref text 1)))
                (memq (aref text 2) '(?\s ?\t ?\n))))
          (hint (cond
                 ((or (null region)
                      (string-empty-p trimmed))
-                 "Input what you want to do … (Special prefixes: \"!␣\" shell, \"?␣\" consult, \"~␣\" no-reasoning, \"?!␣\" read-only shell)")
+                 "Input what you want to do … (Special prefixes: \"!␣\" shell, \"?␣\" consult, \"~␣\" default reasoning, \"@␣\" web search, \"?!␣\" read-only shell)")
                 (combination
                  (concat (funcall symbol-hint (aref text 0))
                          (funcall symbol-hint (aref text 1))))
@@ -626,6 +628,8 @@ text."
                  " ◂ read-only consultation, nothing is ever modified")
                 ((eq kind 'no-reasoning)
                  " ◂ deep reasoning, model default params")
+                ((eq kind 'web-search)
+                 " ◂ web search for up-to-date information")
                 ((eq kind 'readonly-shell)
                  (concat (funcall symbol-hint ??)
                          (funcall symbol-hint ?!)))
@@ -1874,9 +1878,11 @@ when the report is inserted, so the tag names the model that was
 actually selected at send time rather than whatever a live read
 would return later.  When DEEP-REASONING is non-nil, the model
 symbol's `:request-params' property is saved with `get' before the
-round and set to nil for the whole round -- every LLM request the
-round issues, not just the first -- so the model falls back to its
-own defaults and may think deeply; the saved value is restored
+round and set to the server-side retrieval params returned by
+`scalpel-llm-probe-retrieval-params' for the whole round -- every LLM
+request the round issues, not just the first -- so the model falls
+back to its own defaults and may think deeply, while probed
+retrieval parameters survive the `~@' combination; the saved value is restored
 afterwards via `unwind-protect', so the exact prior value comes
 back rather than being clobbered with nil.  Probe is
 suppressed for the whole round (`scalpel-llm-probe-inhibit' is set
@@ -2019,7 +2025,7 @@ reinstall `:request-params'."
         (unwind-protect
             (progn
               (when deep-reasoning
-                (put gptel-model :request-params nil)
+                (put gptel-model :request-params (scalpel-llm-probe-retrieval-params))
                 (setq scalpel-llm-probe-inhibit t))
               (condition-case err
                   (scalpel-agent-run
@@ -2721,60 +2727,98 @@ retry instead of a send refusal."
             (let ((parsed (scalpel-console-parse-prefix instr)))
               (unwind-protect
                   (let ((scalpel-agent--instruction-mode (or (car parsed) :normal))
-                        (deep-reasoning (eq (car parsed) 'no-reasoning)))
+                        (deep-reasoning (eq (car parsed) 'no-reasoning))
+                        (scalpel-agent--web-search-allowed
+                         (and (car parsed)
+                              (string-match-p "web-search"
+                                              (symbol-name (car parsed))))))
                     (scalpel-console--run-rounds (cdr parsed) history deep-reasoning))
                 (setq scalpel-agent--instruction-mode :normal)))
             (goto-char (point-max))
             (message "Scalpel: instruction sent.")))))))
 
 (cl-defun scalpel-console-parse-prefix (text)
-  "Split TEXT into a (MODE . REST) cons by its leading prefix.
+"Split TEXT into a (MODE . REST) cons by its leading prefix.
 
-A leading two-character combination of distinct symbols among \"!\",
-\"?\", and \"~\" followed by whitespace selects a combined mode: \"?!\"
-or \"!?\" selects `readonly-shell'; \"?~\" or \"~?\" selects
-`consult-no-reasoning'; \"!~\" or \"~!\" selects
-`shell-mode-no-reasoning'.  These two-character prefixes are checked
-before the single-character prefixes so they take precedence.  A
-leading \"?\" followed by whitespace selects MODE `consult'; a leading
-\"!\" followed by whitespace selects MODE `shell-mode'; a leading
-\"~\" followed by whitespace selects MODE `no-reasoning'; anything else
+A leading run of one or more distinct symbols among \"!\", \"?\",
+\"~\", and \"@\", followed by whitespace, selects a combined mode.
+The mode is determined by the set of characters in the run, not by
+their order, so \"?!\", \"!?\", and any longer permutation containing
+the same characters select the same mode.  The set-to-mode mapping
+composes the following pieces, with \"web-search\" first and
+\"no-reasoning\" last: \"@\" contributes `web-search'; \"!\" and
+\"?\" together contribute `readonly-shell', \"!\" alone contributes
+`shell' (or `shell-mode' when combined with \"~\"), \"?\" alone
+contributes `consult'; \"~\" contributes `no-reasoning'.  Thus \"?!\"
+selects `readonly-shell'; \"?~\" selects `consult-no-reasoning';
+\"!~\" selects `shell-mode-no-reasoning'; \"@!\" selects
+`web-search-shell'; \"@?\" selects `web-search-consult'; \"@~\"
+selects `web-search-no-reasoning'; \"@?!\" selects
+`web-search-readonly-shell'; and \"?!~@\" in any character order
+selects `web-search-readonly-shell-no-reasoning'.  Runs longer than
+two characters extend the pairwise combinations by set union rather
+than by separate enumeration.
+
+A leading \"?\" followed by whitespace alone selects MODE `consult';
+\"!\" alone selects MODE `shell-mode'; \"~\" alone selects MODE
+`no-reasoning'; \"@\" alone selects MODE `web-search'.  Anything else
 yields MODE nil and REST equal to the original TEXT.  REST has the
 prefix and its trailing whitespace removed.  The prefix is only
-recognized at the very beginning of TEXT; a bare \"?\", \"!\", or \"~\"
-without following whitespace stays ordinary text.
+recognized at the very beginning of TEXT; a bare prefix character
+without following whitespace stays ordinary text, and a repeated
+prefix character (such as \"??\") terminates the run.
 
-A lone \"?\", \"!\", or \"~\" is treated as an unfinished combined
-prefix rather than committing to a single-character mode: when TEXT is
-exactly one prefix character, or when its first character is one of
-\"?\", \"!\", \"~\" and the second is a different prefix character with
-no whitespace following yet, MODE is nil and REST equals the original
-TEXT.  Commitment to a single-character mode happens only once the
-prefix character is followed by whitespace."
-  (let ((char (when (> (length text) 0) (aref text 0)))
-        (ws (lambda (i)
-              (and (< i (length text))
-                   (memq (aref text i) '(?\s ?\n ?\t ?\r))))))
-    (cond
-     ((and (> (length text) 2)
-           (let ((pair (substring text 0 2)))
-             (and (memq (aref pair 0) '(?! ?? ?~))
-                  (memq (aref pair 1) '(?! ?? ?~))
-                  (not (eq (aref pair 0) (aref pair 1)))
-                  (funcall ws 2))))
-      (let ((pair (substring text 0 2)))
-        (cons (cond
-               ((member pair '("?!" "!?")) 'readonly-shell)
-               ((member pair '("?~" "~?")) 'consult-no-reasoning)
-               ((member pair '("!~" "~!")) 'shell-mode-no-reasoning))
-              (string-trim-left (substring text 2) "[ \t\n\r]+"))))
-     ((and (eq char ??) (funcall ws 1))
-      (cons 'consult (string-trim-left (substring text 1) "[ \t\n\r]+")))
-     ((and (eq char ?!) (funcall ws 1))
-      (cons 'shell-mode (string-trim-left (substring text 1) "[ \t\n\r]+")))
-     ((and (eq char ?~) (funcall ws 1))
-      (cons 'no-reasoning (string-trim-left (substring text 1) "[ \t\n\r]+")))
-     (t (cons nil text)))))
+A leading run of prefix characters not yet followed by whitespace is
+treated as an unfinished combined prefix rather than committing to a
+single-character mode: when TEXT consists entirely of distinct prefix
+characters (one or more of \"?\", \"!\", \"~\", \"@\"), MODE is nil
+and REST equals the original TEXT.  Commitment to a mode happens only
+once the run is followed by whitespace."
+(let ((prefixp (lambda (c) (memq c '(?! ?? ?~ ?@))))
+(ws (lambda (i)
+(and (< i (length text))
+(memq (aref text i) '(?\s ?\n ?\t ?\r))))))
+(cl-labels
+((run (text)
+;; End index and set of the maximal leading run of
+;; distinct prefix characters.
+(let ((seen nil) (i 0) (stop nil))
+(while (and (not stop) (< i (length text)))
+(let ((c (aref text i)))
+(if (and (funcall prefixp c) (not (memq c seen)))
+(progn (push c seen) (setq i (1+ i)))
+(setq stop t))))
+(cons i seen)))
+(mode-for (set)
+(let* ((bang (memq ?! set))
+(q (memq ?? set))
+(tilde (memq ?~ set))
+(at (memq ?@ set))
+(base (cond ((and bang q) "readonly-shell")
+((and bang tilde) "shell-mode")
+(bang "shell")
+(q "consult")))
+(parts (append (when at '("web-search"))
+(when base (list base))
+(when tilde '("no-reasoning")))))
+(and parts (intern (string-join parts "-"))))))
+(pcase-let* ((`(,end . ,set) (run text))
+(at-ws (funcall ws end)))
+(cond
+((and (>= end 2) at-ws)
+(cons (mode-for set)
+(string-trim-left (substring text end) "[ \t\n\r]+")))
+((and (eq (aref text 0) ??) (funcall ws 1))
+(cons 'consult (string-trim-left (substring text 1) "[ \t\n\r]+")))
+((and (eq (aref text 0) ?!) (funcall ws 1))
+(cons 'shell-mode (string-trim-left (substring text 1) "[ \t\n\r]+")))
+((and (eq (aref text 0) ?~) (funcall ws 1))
+(cons 'no-reasoning (string-trim-left (substring text 1) "[ \t\n\r]+")))
+((and (eq (aref text 0) ?@) (funcall ws 1))
+(cons 'web-search (string-trim-left (substring text 1) "[ \t\n\r]+")))
+((and (>= end 1) (= end (length text)))
+(cons nil text))
+(t (cons nil text)))))))
 
 (defun scalpel-console-abort ()
   "Cancel the operation currently in flight for this console, if any.

@@ -55,7 +55,12 @@ itself after the user approves the dry-run preview.")
 MODE is `consult', `shell-mode', `readonly-shell', or nil; nil
 yields the full vocabulary.  The result is always a subset of
 `scalpel-agent--tool-vocabulary', so it stays in sync with that
-constant."
+constant.
+
+ Independently of MODE, \"web-search\" is excluded unless the
+dynamic variable `scalpel-agent--web-search-allowed' is non-nil;
+the console binds it via a let around --run-rounds/--run-round
+execution."
   (let ((excluded
          (pcase mode
            ('consult '("block-edit" "block-insert" "block-delete"
@@ -68,6 +73,8 @@ constant."
                               "file-create" "file-rename" "file-delete"
                               "file-substitute-dry-run" "confirm"))
            (_ nil))))
+    (unless scalpel-agent--web-search-allowed
+      (push "web-search" excluded))
     (seq-remove (lambda (tool) (member tool excluded))
                 scalpel-agent--tool-vocabulary)))
 
@@ -246,7 +253,9 @@ Signals an error when libxml2 is unavailable."
                   (push (format "Title: %s\nURL: %s" text href) entries))))))
         (setq entries (nreverse entries)))
        (t
-        (error "No known search result structure found (DuckDuckGo or Bing)")))
+        (if (string-match-p "si_ST" body)
+    (error "Anti-crawl challenge page detected (si_ST); aborting search")
+  (error "No known search result structure found (DuckDuckGo or Bing)"))))
       (if entries
           (mapconcat #'identity entries "\n---\n")
         (error "No search result entries extracted from known structure")))))
@@ -4396,6 +4405,14 @@ planner to read-only shell tools (file-peek, shell, reply).
 The console resets this variable to :normal around each run so the
 restriction never leaks across rounds.  It is deliberately transient
 state and is therefore not added to `scalpel-console--session-variables'.")
+
+(defvar scalpel-agent--web-search-allowed nil
+  "Gate for the web-search tool in `scalpel-agent--tools-for-mode'.
+When nil, web-search is excluded from every mode's allowed tool set.
+The console binds it non-nil with a `let' around a round only when
+the @ prefix was used.  Deliberately a plain `defvar' (dynamic
+scope for let-binding), not buffer-local, because a round spans
+many buffers.")
 
 (provide 'scalpel-agent)
 
