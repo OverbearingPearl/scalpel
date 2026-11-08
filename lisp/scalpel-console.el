@@ -762,7 +762,14 @@ called with no argument -- as the streaming progress callback and
 the per-second timer do -- it re-renders the counts it was last
 given.  STOP cancels the timer and removes the line together with
 its trailing newline, so the cursor returns to the line the status
-occupied."
+occupied.
+Both REFRESH and STOP clamp the end of the deleted region to
+point-max: a user typing after the line can delete the trailing
+newline (e.g. via the following keystrokes landing on the status
+line itself), and the deletion then has no newline to consume.  The
+clamp is applied by the same rule in both places so the two paths
+cannot diverge -- one self-healing while the other signals -- and
+STOP never leaves a frozen line behind because its delete signalled."
   (let* ((inhibit-read-only t)
          (start (float-time))
          (sys (plist-get breakdown :system))
@@ -785,6 +792,17 @@ occupied."
                   (put-text-property beg end 'scalpel-console-output t)
                   (put-text-property (1- end) end 'rear-nonsticky
                                      '(scalpel-console-output face))))
+         ;; Shared deletion rule for REFRESH and STOP: delete from BEG
+         ;; through the end of the line, but never past point-max.  If
+         ;; the user's typing removed the line's trailing newline, the
+         ;; line-end position plus one would exceed point-max and the
+         ;; delete would signal; clamping both call sites to the same
+         ;; bound keeps them from diverging.
+         (erase (lambda (_beg)
+                  (let ((end (min (1+ (line-end-position))
+                                  (point-max))))
+                    (when (> end (point))
+                      (delete-region (point) end)))))
          timer beg)
     (save-excursion
       (goto-char (point-max))
@@ -815,7 +833,7 @@ occupied."
                    (save-excursion
                      (let ((inhibit-read-only t))
                        (goto-char beg)
-                       (delete-region (point) (1+ (line-end-position)))
+                       (funcall erase beg)
                        (let ((line-beg (point)))
                          (insert (funcall line
                                           (- scalpel-llm--total-received down0)
@@ -834,7 +852,7 @@ occupied."
                    (save-excursion
                      (let ((inhibit-read-only t))
                        (goto-char beg)
-                       (delete-region (point) (1+ (line-end-position)))))
+                       (funcall erase beg)))
                    (set-marker beg nil))))))
         (cons refresh stop)))))
 
