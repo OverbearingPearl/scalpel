@@ -205,8 +205,8 @@ with a different command."
 (defconst scalpel-prompt-rule--web-search
 "Backends with server-side retrieval capability MUST perform their
 searches directly inside the chat; the planner MUST NOT issue
-web-search tool calls against such backends. Call the web-search tool
-only when external structured retrieval results are required. The
+web-search tool calls against such backends. When external structured
+retrieval results would help, actively use the web-search tool. The
 `engine` field may be omitted to use the default engine; requests
 naming an unregistered engine are rejected.  Web search is a read-only
 external interaction; every result presented to the user MUST cite
@@ -214,11 +214,11 @@ its source."
 "Prompt rule governing web-search tool usage.
 Backends that can retrieve on the server side search directly inside
 the chat; the planner must not call the web-search tool against them.
-Invoke web-search only when external structured retrieval results are
-needed.  The `engine` field may be omitted to use the default engine;
-requests naming an unregistered engine are rejected.  Web search is a
-read-only external interaction, and every result shown to the user
-must cite its source.")
+When external structured retrieval results would help, feel free to
+invoke web-search proactively.  The `engine` field may be omitted to
+use the default engine; requests naming an unregistered engine are
+rejected.  Web search is a read-only external interaction, and every
+result shown to the user must cite its source.")
 
 (defconst scalpel-prompt-rule--feedback-fence
   "Runtime feedback fence rules: a scalpel error fence in the conversation

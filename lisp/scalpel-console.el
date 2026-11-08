@@ -2727,18 +2727,14 @@ retry instead of a send refusal."
             (let ((parsed (scalpel-console-parse-prefix instr)))
               (unwind-protect
                   (let ((scalpel-agent--instruction-mode (or (car parsed) :normal))
-                        (deep-reasoning (eq (car parsed) 'no-reasoning))
-                        (scalpel-agent--web-search-allowed
-                         (and (car parsed)
-                              (string-match-p "web-search"
-                                              (symbol-name (car parsed))))))
+                        (deep-reasoning (eq (car parsed) 'no-reasoning)))
                     (scalpel-console--run-rounds (cdr parsed) history deep-reasoning))
                 (setq scalpel-agent--instruction-mode :normal)))
             (goto-char (point-max))
             (message "Scalpel: instruction sent.")))))))
 
-(cl-defun scalpel-console-parse-prefix (text)
-"Split TEXT into a (MODE . REST) cons by its leading prefix.
+(defun scalpel-console-parse-prefix (text)
+  "Split TEXT into a (MODE . REST) cons by its leading prefix.
 
 A leading run of one or more distinct symbols among \"!\", \"?\",
 \"~\", and \"@\", followed by whitespace, selects a combined mode.
@@ -2774,51 +2770,55 @@ single-character mode: when TEXT consists entirely of distinct prefix
 characters (one or more of \"?\", \"!\", \"~\", \"@\"), MODE is nil
 and REST equals the original TEXT.  Commitment to a mode happens only
 once the run is followed by whitespace."
-(let ((prefixp (lambda (c) (memq c '(?! ?? ?~ ?@))))
-(ws (lambda (i)
-(and (< i (length text))
-(memq (aref text i) '(?\s ?\n ?\t ?\r))))))
-(cl-labels
-((run (text)
-;; End index and set of the maximal leading run of
-;; distinct prefix characters.
-(let ((seen nil) (i 0) (stop nil))
-(while (and (not stop) (< i (length text)))
-(let ((c (aref text i)))
-(if (and (funcall prefixp c) (not (memq c seen)))
-(progn (push c seen) (setq i (1+ i)))
-(setq stop t))))
-(cons i seen)))
-(mode-for (set)
-(let* ((bang (memq ?! set))
-(q (memq ?? set))
-(tilde (memq ?~ set))
-(at (memq ?@ set))
-(base (cond ((and bang q) "readonly-shell")
-((and bang tilde) "shell-mode")
-(bang "shell")
-(q "consult")))
-(parts (append (when at '("web-search"))
-(when base (list base))
-(when tilde '("no-reasoning")))))
-(and parts (intern (string-join parts "-"))))))
-(pcase-let* ((`(,end . ,set) (run text))
-(at-ws (funcall ws end)))
-(cond
-((and (>= end 2) at-ws)
-(cons (mode-for set)
-(string-trim-left (substring text end) "[ \t\n\r]+")))
-((and (eq (aref text 0) ??) (funcall ws 1))
-(cons 'consult (string-trim-left (substring text 1) "[ \t\n\r]+")))
-((and (eq (aref text 0) ?!) (funcall ws 1))
-(cons 'shell-mode (string-trim-left (substring text 1) "[ \t\n\r]+")))
-((and (eq (aref text 0) ?~) (funcall ws 1))
-(cons 'no-reasoning (string-trim-left (substring text 1) "[ \t\n\r]+")))
-((and (eq (aref text 0) ?@) (funcall ws 1))
-(cons 'web-search (string-trim-left (substring text 1) "[ \t\n\r]+")))
-((and (>= end 1) (= end (length text)))
-(cons nil text))
-(t (cons nil text)))))))
+  (let ((prefixp (lambda (c) (memq c '(?! ?? ?~ ?@))))
+        (ws (lambda (i)
+              (and (< i (length text))
+                   (memq (aref text i) '(?\s ?\n ?\t ?\r))))))
+    (cl-labels
+        ((run (text)
+           ;; End index and set of the maximal leading run of
+           ;; distinct prefix characters.  Written as a pure
+           ;; recursion instead of a while/setq loop, so the
+           ;; function carries no imperative setq at all.
+           (cl-labels ((scan (i seen)
+                         (let ((c (and (< i (length text))
+                                       (aref text i))))
+                           (if (and c
+                                    (funcall prefixp c)
+                                    (not (memq c seen)))
+                               (scan (1+ i) (cons c seen))
+                             (cons i seen)))))
+             (scan 0 nil)))
+         (mode-for (set)
+           (let* ((bang (memq ?! set))
+                  (q (memq ?? set))
+                  (tilde (memq ?~ set))
+                  (at (memq ?@ set))
+                  (base (cond ((and bang q) "readonly-shell")
+                              ((and bang tilde) "shell-mode")
+                              (bang "shell")
+                              (q "consult")))
+                  (parts (append (when at '("web-search"))
+                                 (when base (list base))
+                                 (when tilde '("no-reasoning")))))
+             (and parts (intern (string-join parts "-"))))))
+      (pcase-let* ((`(,end . ,set) (run text))
+                   (at-ws (funcall ws end)))
+        (cond
+         ((and (>= end 2) at-ws)
+          (cons (mode-for set)
+                (string-trim-left (substring text end) "[ \t\n\r]+")))
+         ((and (eq (aref text 0) ??) (funcall ws 1))
+          (cons 'consult (string-trim-left (substring text 1) "[ \t\n\r]+")))
+         ((and (eq (aref text 0) ?!) (funcall ws 1))
+          (cons 'shell-mode (string-trim-left (substring text 1) "[ \t\n\r]+")))
+         ((and (eq (aref text 0) ?~) (funcall ws 1))
+          (cons 'no-reasoning (string-trim-left (substring text 1) "[ \t\n\r]+")))
+         ((and (eq (aref text 0) ?@) (funcall ws 1))
+          (cons 'web-search (string-trim-left (substring text 1) "[ \t\n\r]+")))
+         ((and (>= end 1) (= end (length text)))
+          (cons nil text))
+         (t (cons nil text)))))))
 
 (defun scalpel-console-abort ()
   "Cancel the operation currently in flight for this console, if any.

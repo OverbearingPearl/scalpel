@@ -57,10 +57,10 @@ yields the full vocabulary.  The result is always a subset of
 `scalpel-agent--tool-vocabulary', so it stays in sync with that
 constant.
 
- Independently of MODE, \"web-search\" is excluded unless the
-dynamic variable `scalpel-agent--web-search-allowed' is non-nil;
-the console binds it via a let around --run-rounds/--run-round
-execution."
+ Independently of MODE, \"web-search\" is excluded when the
+dynamic variable `scalpel-agent--web-search-suppressed' is
+non-nil; the console binds it via a let around
+--run-rounds/--run-round execution."
   (let ((excluded
          (pcase mode
            ('consult '("block-edit" "block-insert" "block-delete"
@@ -73,7 +73,7 @@ execution."
                               "file-create" "file-rename" "file-delete"
                               "file-substitute-dry-run" "confirm"))
            (_ nil))))
-    (unless scalpel-agent--web-search-allowed
+    (when scalpel-agent--web-search-suppressed
       (push "web-search" excluded))
     (seq-remove (lambda (tool) (member tool excluded))
                 scalpel-agent--tool-vocabulary)))
@@ -4406,13 +4406,14 @@ The console resets this variable to :normal around each run so the
 restriction never leaks across rounds.  It is deliberately transient
 state and is therefore not added to `scalpel-console--session-variables'.")
 
-(defvar scalpel-agent--web-search-allowed nil
-  "Gate for the web-search tool in `scalpel-agent--tools-for-mode'.
-When nil, web-search is excluded from every mode's allowed tool set.
-The console binds it non-nil with a `let' around a round only when
-the @ prefix was used.  Deliberately a plain `defvar' (dynamic
-scope for let-binding), not buffer-local, because a round spans
-many buffers.")
+(defvar scalpel-agent--web-search-suppressed nil
+  "Non-nil suppresses the web-search tool in `scalpel-agent--tools-for-mode'.
+Default nil, so web-search is included in every mode's allowed tool
+set without requiring the @ prefix; the prefix no longer controls
+this gate.  The console may still bind it to non-nil with a `let'
+around a round to temporarily suppress web-search.  Deliberately
+a plain `defvar' (dynamic scope for let-binding), not
+buffer-local, because a round spans many buffers.")
 
 (provide 'scalpel-agent)
 
