@@ -741,7 +741,7 @@ Key is a cons cell (BACKEND-NAME . MODEL-NAME); value is the plist of
 pure server-side retrieval parameters probed for that combination.
 Probing is not yet implemented, so this cache starts out empty.")
 
-(defun scalpel-llm-probe-retrieval-params ()
+(cl-defun scalpel-llm-probe-retrieval-params ()
   "Return the cached retrieval plist for the current gptel backend/model.
 Serves as the source of retrieval parameters when restoring deep-reasoning
 turns.  Builds the cache key from `gptel-backend' and `gptel-model' and looks
@@ -767,7 +767,7 @@ the cache is empty, so nil is the safe degraded outcome."
       (when (string-match-p (regexp-quote marker) text)
         (setq hit t)))))
 
-(defun scalpel-llm-probe-retrieval ()
+(cl-defun scalpel-llm-probe-retrieval ()
   "Synchronously probe retrieval params for the current backend/model.
 
 Sends a baseline request, then one request per candidate plist,
