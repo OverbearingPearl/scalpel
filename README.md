@@ -296,9 +296,9 @@ The web-search tool is controlled by three defcustom options: the
 default engine, a per-engine proxy table, and the engine registry.
 
 `scalpel-agent-web-search-default-engine` names the engine used when an
-action omits the engine field. The built-in engines are `bing`,
-`duckduckgo` and `zhipu`; `duckduckgo` needs no API key, which is why it
-works well as the default.
+action omits the engine field. The only remaining built-in engine is
+`zhipu`, which talks to a structured API and is therefore unaffected by
+anti-scraping on the engine side; it is also the default.
 
 `scalpel-agent-web-search-proxy-table` is an alist mapping an engine
 name to a proxy address of the form `host:port`. Engines without an
@@ -317,12 +317,10 @@ from `auth-source` and fail loudly when the key is missing.
 ```elisp
 (use-package scalpel-agent
   :custom
-  (scalpel-agent-web-search-default-engine "duckduckgo")
+  (scalpel-agent-web-search-default-engine "zhipu")
   (scalpel-agent-web-search-proxy-table
-   '(("duckduckgo" . "127.0.0.1:7897"))))
+   '(("zhipu" . "127.0.0.1:7897"))))
 ```
-
----
 
 ## Quickstart
 

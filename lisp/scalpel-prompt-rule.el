@@ -107,7 +107,7 @@ replacement = '''...'''
 [[action]]
 tool = '''web-search'''
 query = '''...'''
-engine = '''duckduckgo'''
+engine = '''zhipu'''
 
 [[action]]
 tool = '''shell'''

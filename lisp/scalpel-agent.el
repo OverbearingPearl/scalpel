@@ -117,28 +117,7 @@ Omitting the `web-search' :engine field falls back to
 `scalpel-agent-web-search-default-engine'.")
 
 (defcustom scalpel-agent-web-search-engine-registry
-  '(("bing"
-     . (:endpoint "https://www.bing.com/search"
-        :method GET
-        :build-request
-        (lambda (query)
-          (list "https://www.bing.com/search/"
-                "-L"
-                "-G"
-                "--data-urlencode" (concat "q=" query)))
-        :parse
-        scalpel-agent-web-search--parse-html))
-    ("duckduckgo"
-     . (:endpoint "https://html.duckduckgo.com/html/"
-        :method GET
-        :build-request
-        (lambda (query)
-          (list "https://html.duckduckgo.com/html/"
-                "-G"
-                "--data-urlencode" (concat "q=" query)))
-        :parse
-        scalpel-agent-web-search--parse-html))
-    ("zhipu"
+  '(("zhipu"
      . (:endpoint "https://open.bigmodel.cn/api/paas/v4/web_search"
         :method POST
         :auth-host "open.bigmodel.cn"
@@ -160,11 +139,12 @@ Omitting the `web-search' :engine field falls back to
                      (cdr (assq 'content item))))
            (cdr (assq 'search_result (json-read-from-string body)))
            "\n\n")))))
-  "Declarative registry of web search engines.
-Each entry is (NAME . PLIST) where PLIST describes the endpoint,
-HTTP method, request construction and response parsing.  Adding a
-new engine is a pure configuration change: append an entry here
-without touching any engine-agnostic driving code."
+  "Registry of web search engines.
+Currently holds only zhipu, a structured web-search API.  HTML
+scraping engines (bing, duckduckgo) were removed: their results
+depend on anti-scraping behavior that cannot be controlled or
+relied upon.  Web search therefore only supports engines of the
+zhipu kind, i.e. structured API endpoints."
   :type '(alist
           :key-type string
           :value-type
@@ -176,102 +156,32 @@ without touching any engine-agnostic driving code."
                   (:parse function))))
   :group 'scalpel-agent)
 
-(defun scalpel-agent-web-search--parse-html (body)
-  "Parse search-result HTML BODY into plain-text entries.
-Detects anti-crawl verification pages first and signals an error.
-Recognizes DuckDuckGo (result__a / result__snippet) and Bing
-\(b_algo) structures; signals an error when neither is present.
-Signals an error when libxml2 is unavailable."
-  (unless (libxml-available-p)
-    (error "Libxml2 HTML parser unavailable; cannot parse search response"))
-  (let* ((dom (with-temp-buffer
-                (insert body)
-                (libxml-parse-html-region (point-min) (point-max))))
-         (ddg-links
-          (scalpel-agent-web-search--collect-nodes
-           dom
-           (lambda (n)
-             (and (eq (car n) 'a)
-                  (let ((attrs (cadr n)))
-                    (and (consp attrs)
-                         (let ((val (plist-get attrs 'class)))
-                           (and (stringp val)
-                                (string-match-p (regexp-quote "result__a") val)))))))))
-         (bing-blocks
-          (scalpel-agent-web-search--collect-nodes
-           dom
-           (lambda (n)
-             (let ((attrs (cadr n)))
-               (and (consp attrs)
-                    (let ((val (plist-get attrs 'class)))
-                      (and (stringp val)
-                           (string-match-p (regexp-quote "b_algo") val)))))))))
-    (when (scalpel-agent-web-search--collect-nodes
-           dom
-           (lambda (n)
-             (let ((attrs (cadr n)))
-               (and (consp attrs)
-                    (let ((val (plist-get attrs 'class)))
-                      (and (stringp val)
-                           (string-match-p (regexp-quote "anomaly-modal") val)))))))
-      (error "Anti-crawl verification page detected (anomaly-modal); aborting search"))
-    (let ((entries))
-      (cond
-       (ddg-links
-        (let* ((snippets
-                (scalpel-agent-web-search--collect-nodes
-                 dom
-                 (lambda (n)
-                   (let ((attrs (cadr n)))
-                     (and (consp attrs)
-                          (let ((val (plist-get attrs 'class)))
-                            (and (stringp val)
-                                 (string-match-p (regexp-quote "result__snippet") val))))))))
-               (snippets (mapcar #'scalpel-agent-web-search--node-text snippets)))
-          (dolist (link ddg-links)
-            (let* ((attrs (cadr link))
-                   (href (plist-get attrs 'href)))
-              (when (and (stringp href) (> (length href) 0))
-                (push (string-trim
-                       (format "Title: %s\nURL: %s\nSnippet: %s"
-                               (scalpel-agent-web-search--node-text link)
-                               href
-                               (or (car snippets) "")))
-                      entries))
-              (when snippets
-                (setq snippets (cdr snippets)))))
-          (setq entries (nreverse entries))))
-       (bing-blocks
-        (dolist (block bing-blocks)
-          (let ((link (car (scalpel-agent-web-search--collect-nodes
-                            block (lambda (n) (eq (car n) 'a))))))
-            (when link
-              (let* ((attrs (cadr link))
-                     (href (plist-get attrs 'href))
-                     (text (scalpel-agent-web-search--node-text link)))
-                (when (and (stringp href) (> (length href) 0))
-                  (push (format "Title: %s\nURL: %s" text href) entries))))))
-        (setq entries (nreverse entries)))
-       (t
-        (if (string-match-p "si_ST" body)
-    (error "Anti-crawl challenge page detected (si_ST); aborting search")
-  (error "No known search result structure found (DuckDuckGo or Bing)"))))
-      (if entries
-          (mapconcat #'identity entries "\n---\n")
-        (error "No search result entries extracted from known structure")))))
+(defun scalpel-agent-web-search--parse-json (body)
+  "Parse the web search response BODY into Lisp data.
+
+Objects become plists, arrays become lists.  Return nil on any
+parse failure: the response body is untrusted and this is a
+non-critical degradation point."
+  (condition-case nil
+      (let ((json-object-type 'plist)
+            (json-array-type 'list))
+        (json-read-from-string body))
+    (error nil)))
 
 (defun scalpel-agent-web-search--collect-nodes (node pred)
   "Return every descendant of NODE, including NODE itself, satisfying PRED.
 Traversal is depth-first over child nodes; NODE may be nil, in which case
-the result is nil."
+the result is nil.  Text nodes produced by `libxml-parse-html-region' are
+strings, not lists, and are ignored."
   (when node
     (let ((result nil))
       (when (funcall pred node)
         (push node result))
       (let ((child (cddr node)))
         (while child
-          (setq result (nconc (nreverse (scalpel-agent-web-search--collect-nodes (car child) pred))
-                              result))
+          (when (consp (car child))
+            (setq result (nconc (nreverse (scalpel-agent-web-search--collect-nodes (car child) pred))
+                                result)))
           (setq child (cdr child))))
       (nreverse result))))
 
@@ -308,11 +218,10 @@ unauthenticated request."
 add it to auth-source (e.g. ~/.authinfo.gpg)" host)))
 
 (defcustom scalpel-agent-web-search-default-engine "zhipu"
-  "Engine tried first when performing a web search.
-When an engine fails, the search falls back to the next engine in
-registry order (`scalpel-agent-web-search-engine-registry');
-DuckDuckGo, being unauthenticated, is kept as the last resort so
-the feature still works when no API keys are configured."
+  "Engine used when performing a web search.
+The only built-in engine is `zhipu'; requesting an engine not
+present in `scalpel-agent-web-search-engine-registry' signals an
+error instead of falling back to another engine."
   :type '(string :tag "Engine name")
   :group 'scalpel-agent)
 

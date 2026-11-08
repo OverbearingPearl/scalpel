@@ -135,13 +135,13 @@ killed."
     (:given ((valid nil)))
     (:when
      (setq valid (scalpel-agent--validate-action
-                  (list :tool "web-search" :query "q" :engine "duckduckgo"))))
+                  (list :tool "web-search" :query "q" :engine "zhipu"))))
     (:then
      (ert-info ("web-search action with all required fields passes validation and projects per field contract")
        (should (equal (plist-get valid :tool) "web-search"))
        (should (equal (plist-get valid :query) "q"))
-       (should (equal (plist-get valid :engine) "duckduckgo"))
-       (should (equal valid (list :tool "web-search" :query "q" :engine "duckduckgo"))))))
+       (should (equal (plist-get valid :engine) "zhipu"))
+       (should (equal valid (list :tool "web-search" :query "q" :engine "zhipu"))))))
 
 (provide 'scalpel-story-web-search-test)
 

@@ -76,6 +76,22 @@ profile.  Prefer the narrowest grant that makes the tool work."
                                (const :tag "Writable (DIR . t)" t))))
   :group 'scalpel-sandbox)
 
+(defcustom scalpel-sandbox-extra-network-grants nil
+  "Additional outbound network grants for the macOS sandbox-exec profile.
+Each entry is a \"HOST:PORT\" string such as \"127.0.0.1:7897\".
+
+Each entry is emitted as an
+`(allow network-outbound (remote tcp \"HOST:PORT\"))` clause,
+intended for tools that genuinely need outbound connections, such
+as local proxies.
+
+Every entry widens the network surface of all sandboxed child
+processes, so grant only the narrowest address actually required.
+Entries are not validated; a malformed string makes sandbox-exec
+reject the entire profile."
+  :type '(repeat string)
+  :group 'scalpel-sandbox)
+
 (defconst scalpel-sandbox--probe-sentinel "SCALPEL-SANDBOX-PROBE-OK"
   "Output a working sandbox must print back from its probe run.
 Structural contract shared by `scalpel-sandbox--preflight' and the
@@ -237,6 +253,7 @@ tool directories are granted according to `scalpel-sandbox-extra-grants'."
   (scalpel-sandbox--file-paths files)
   (let ((files (mapcar #'expand-file-name files))
         (extra-grants scalpel-sandbox-extra-grants)
+        (network-grants scalpel-sandbox-extra-network-grants)
         (git-excludes (or (condition-case nil
                             (string-trim
                              (car (process-lines
@@ -383,6 +400,23 @@ tool directories are granted according to `scalpel-sandbox-extra-grants'."
       extra-grants
       "\n")
      "\n"
+     ;; Outbound network targets configured in
+     ;; `scalpel-sandbox-extra-network-grants'.  The default profile is
+     ;; `deny default', so tools such as curl that need to reach a
+     ;; local proxy are refused with "Operation not permitted"; each
+     ;; entry is an explicit user configuration of an outbound
+     ;; "host:port" destination and is allowed individually.  When the
+     ;; list is empty no network-outbound rule is emitted and the
+     ;; sandbox stays fully offline.  `sandbox-exec' only accepts `*'
+     ;; or `localhost' as the host of a `remote tcp' filter, so a
+     ;; loopback proxy must be configured as `localhost:PORT'; a bare
+     ;; IP spelling is rejected by the filter and never matches.
+     (mapconcat
+      (lambda (target)
+        (format "(allow network-outbound (remote tcp %S))" target))
+      network-grants
+      "\n")
+     (if network-grants "\n" "")
      ;; Git reads the user-level git configuration before anything
      ;; else it does, so the sandbox must grant it read access or
      ;; every git invocation fails while probing the config.
