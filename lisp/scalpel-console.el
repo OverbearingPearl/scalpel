@@ -663,7 +663,7 @@ text."
          (hint (cond
                 ((or (null region)
                      (string-empty-p trimmed))
-                 "Input anything … (Special prefixes: \"!␣\" shell, \"?␣\" consult, \"~␣\" reasoning, \"@␣\" search, \"@~!?␣\" combines in any order)")
+                 "[1+ of ~!@? + space] anything; ~reasoning !shell @search ?consult")
                 (combination
                  (concat (funcall symbol-hint (aref text 0))
                          (funcall symbol-hint (aref text 1))))
@@ -1495,7 +1495,10 @@ preamble line, while the buffer text and the history projection
 keep every byte.  The turn is located by searching for
 `scalpel-prompt--history-compress-preamble', which occurs only in
 the summary turn; an absent or already folded summary does
-nothing.  The placeholder is tagged `scalpel-console-collapsed',
+nothing.  The fold stops before the trailing newlines at the end
+of the turn, so the turn still renders its final line break and
+pending input restored after the summary starts on its own line.
+The placeholder is tagged `scalpel-console-collapsed',
 so `scalpel-console-toggle-output' expands and refolds the
 summary together with the report bodies."
   (save-excursion
@@ -1507,7 +1510,11 @@ summary together with the report bodies."
                         'scalpel-console-role nil (point-max)))
              (body-start (1+ (point)))
              (placeholder "[compressed history; C-c C-o shows]"))
-        (when (and turn-end (> turn-end body-start)
+        (while (and (> turn-end body-start)
+                    (char-before turn-end)
+                    (eq (char-before turn-end) ?\n))
+          (setq turn-end (1- turn-end)))
+        (when (and (> turn-end body-start)
                    (not (get-text-property body-start
                                            'scalpel-console-collapsed)))
           (put-text-property body-start turn-end

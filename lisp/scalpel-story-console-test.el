@@ -20,6 +20,43 @@
   "Holds the pending input regions captured inside a story.")
 
 (ert-gwt-deftest
+    (:given ((root (make-temp-file "scalpel-story-console-test-" t))
+             (scalpel-console-collapse-output t)
+             (scalpel-console-trim-consumed-output nil))
+            (let ((default-directory root))
+              (scalpel-console-open))
+            (scalpel-console--append
+             (concat scalpel-prompt--history-compress-preamble
+                     "\n"
+                     "compressed preamble")
+             'user))
+    (:when (progn
+             (scalpel-console--collapse-summary)
+             (goto-char (point-max))
+             (insert "an unsent instruction")))
+    (:then (should (catch 'found
+                     (let ((pos (point-min)))
+                       (while (< pos (point-max))
+                         (when (get-text-property pos
+                                                  'scalpel-console-collapsed)
+                           (throw 'found t))
+                         (setq pos (next-single-property-change
+                                    pos 'scalpel-console-collapsed
+                                    nil (point-max))))
+                       nil))))
+    (:then (let ((len (length "an unsent instruction"))
+                 (text "an unsent instruction"))
+             (should (equal (char-before (- (point-max) len)) ?\n))
+             (should (equal (buffer-substring-no-properties
+                             (- (point-max) len)
+                             (point-max))
+                            text))
+             (should (not (get-text-property (- (point-max) len 1) 'display)))
+             (should (not (get-text-property (- (point-max) len) 'display)))
+             (should (not (get-text-property (- (point-max) 1) 'display)))))
+    (:cleanup (delete-directory root t)))
+
+(ert-gwt-deftest
   (:given ((root (make-temp-file "scalpel-story-" t))
            (scalpel-console-collapse-output t)
            (scalpel-console-trim-consumed-output nil))
