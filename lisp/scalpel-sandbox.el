@@ -581,6 +581,9 @@ the unresolved name."
 (defun scalpel-sandbox--invoke (command files)
   "Run COMMAND through this system's sandbox; return (EXIT . OUTPUT).
 FILES is the list of context files to expose, read-only.
+OUTPUT is decoded as UTF-8 regardless of locale or coding negotiation;
+bytes that cannot be decoded do not surface here as raw escaped bytes
+but through the caller's binary reporting path instead.
 Signal `user-error' when no backend exists, when the built ARGV is
 not a sandbox invocation, or when the sandbox runtime dies from a
 signal: a command whose sandbox failed must never be reported as if
@@ -597,7 +600,9 @@ it had run."
       (scalpel-sandbox--fail
        "Scalpel: refusing to run a command outside the sandbox"))
     (with-temp-buffer
-      (let* ((default-directory (scalpel-sandbox--workdir))
+      (let* ((coding-system-for-read 'utf-8)
+             (coding-system-for-write 'utf-8-unix)
+             (default-directory (scalpel-sandbox--workdir))
              (status (apply #'call-process (car argv) nil t nil (cdr argv))))
         ;; A string status is Emacs' report of a signal (for example
         ;; "Abort trap: 6"): the sandbox runtime died before the command

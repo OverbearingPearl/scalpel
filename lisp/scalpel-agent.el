@@ -1224,28 +1224,34 @@ nil on the first turn.  History goes before the instruction so the
 instruction stays the last thing the LLM reads.  The project user
 prompt rules are appended every turn, between the conversation
 history and the user instruction.  The agent holds no state of its
-own: everything the LLM may rely on arrives here."
-  ;; Outbound redaction: the assembled prompt (context, history,
-  ;; project user prompt rules and instruction) is passed through
-  ;; scalpel-redact-apply so secrets are scrubbed before anything
-  ;; leaves the agent.
+own: everything the LLM may rely on arrives here.  The assembled
+prompt is passed through `scalpel-agent--sanitize-raw-bytes'
+before redaction, so non-UTF-8 bytes (e.g. from file content
+typed into the prompt) are normalized to U+FFFD before JSON
+encoding."
+  ;; Sanitization: the fully assembled prompt goes through
+  ;; scalpel-agent--sanitize-raw-bytes first, normalizing non-UTF-8
+  ;; bytes (e.g. file content typed into the prompt) to U+FFFD so
+  ;; JSON encoding never hits utf-8-string-p errors at this single
+  ;; exit point.
   (scalpel-redact-apply
-   (concat (scalpel-agent-context)
-           "\n\n"
-           (when (and history (not (string-empty-p history)))
-             (format scalpel-prompt--history-header history))
-           (let ((rules (scalpel-user-prompt-for-files
-                         scalpel-agent--context-files)))
-             (when (and rules (not (string-empty-p rules)))
-               (format scalpel-prompt--project-rules-header rules)))
-           (format scalpel-prompt--instruction-header
-                   instruction)
-           (pcase scalpel-agent--instruction-mode
-             ((or 'consult 'shell-mode 'readonly-shell)
-              (string-trim-right
-               (scalpel-prompt-rule--action-mode-rule
-                scalpel-agent--instruction-mode)))
-             (_ nil)))))
+   (scalpel-agent--sanitize-raw-bytes
+    (concat (scalpel-agent-context)
+            "\n\n"
+            (when (and history (not (string-empty-p history)))
+              (format scalpel-prompt--history-header history))
+            (let ((rules (scalpel-user-prompt-for-files
+                          scalpel-agent--context-files)))
+              (when (and rules (not (string-empty-p rules)))
+                (format scalpel-prompt--project-rules-header rules)))
+            (format scalpel-prompt--instruction-header
+                    instruction)
+            (pcase scalpel-agent--instruction-mode
+              ((or 'consult 'shell-mode 'readonly-shell)
+               (string-trim-right
+                (scalpel-prompt-rule--action-mode-rule
+                 scalpel-agent--instruction-mode)))
+              (_ nil))))))
 
 (defun scalpel-agent-plan (instruction history on-success on-error)
   "Ask the LLM for a structured plan for INSTRUCTION, without blocking.
@@ -2573,6 +2579,23 @@ inside a character, so the result stays a valid string."
               (setq low mid)
             (setq high (1- mid)))))
       (substring text 0 low))))
+
+(defun scalpel-agent--sanitize-raw-bytes (text)
+  "Replace raw eight-bit characters with U+FFFD so TEXT can be JSON-encoded.
+
+Non-UTF-8 files decoded by `insert-file-contents' leave raw bytes as
+eight-bit control/graphic characters in the string.  Feeding such a
+string to `json-encode' trips `utf-8-string-p' and aborts prompt
+assembly.  Replacing those raw bytes with the Unicode replacement
+character U+FFFD yields a string that is valid UTF-8 and safe to
+encode."
+  (let ((chars (string-to-list text)))
+    (apply #'string
+           (mapcar (lambda (ch)
+                     (if (memq (char-charset ch) '(eight-bit-control eight-bit-graphic))
+                         #xfffd
+                       ch))
+                   chars))))
 
 (defun scalpel-agent--file-read-limit ()
   "Return the current value of `scalpel-agent-file-read-max-bytes'.

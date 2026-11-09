@@ -663,7 +663,7 @@ text."
          (hint (cond
                 ((or (null region)
                      (string-empty-p trimmed))
-                 "[1+ of ~!@? + space] anything; ~reasoning !shell @search ?consult")
+                 "Input anything with optional prefix: 1+ of ~!@? + ␣ (~reasoning !shell @search ?consult)")
                 (combination
                  (concat (funcall symbol-hint (aref text 0))
                          (funcall symbol-hint (aref text 1))))

@@ -10,53 +10,68 @@
 
 (require 'ert)
 (require 'scalpel-locate-js)
+(require 'ert-gwt)
 
-(ert-deftest scalpel-story-locate-js-test-string-fake-braces ()
-  "Brace and paren characters inside a string never disturb counts."
-  (should (scalpel-locate-js-balanced-p "var a = \")}{(\";"))
-  (should (scalpel-locate-js-balanced-p "var a = '))){'")))
+(ert-gwt-deftest
+  (:given ((results nil)))
+  (:when (setq results
+               (list (scalpel-locate-js-balanced-p "var a = \")}{(\";")
+                     (scalpel-locate-js-balanced-p "var a = '))){'"))))
+  (:then (should (nth 0 results)))
+  (:then (should (nth 1 results))))
 
-(ert-deftest scalpel-story-locate-js-test-regex-char-class ()
-  "A regex character class holding brackets still balances."
-  (should (scalpel-locate-js-balanced-p "const re = /[\\\\]){}]/g;"))
-  (should (scalpel-locate-js-single-definition-p "const re = /[\\\\]){}]/g;\\n")))
+(ert-gwt-deftest
+  (:given ((results nil)))
+  (:when (setq results
+               (list (scalpel-locate-js-balanced-p "const re = /[\\\\]){}]/g;")
+                     (scalpel-locate-js-single-definition-p
+                      "const re = /[\\\\]){}]/g;\n"))))
+  (:then (should (nth 0 results)))
+  (:then (should (nth 1 results))))
 
-(ert-deftest scalpel-story-locate-js-test-template-interpolation ()
-  "Interpolation braces, even holding quoted braces, keep balance."
-  (should (scalpel-locate-js-balanced-p
-           "const tpl = `a ${ b ? \"{\" : \"}\" } c`;")))
+(ert-gwt-deftest
+  (:given ((result nil)))
+  (:when (setq result (scalpel-locate-js-balanced-p
+                       "const tpl = `a ${ b ? \"{\" : \"}\" } c`;")))
+  (:then (should result)))
 
-(ert-deftest scalpel-story-locate-js-test-template-then-declaration ()
-  "A declaration after a template literal is still found."
-  (with-temp-buffer
-    (insert "const tpl = `a ${ b ? \"{\" : \"}\" } c`;\nconst after = 1;\n")
-    (should (equal (scalpel-locate-js-list-symbols nil)
-                   (list "tpl" "after")))))
+(ert-gwt-deftest
+  (:given ((symbols nil)))
+  (:when (with-temp-buffer
+           (insert "const tpl = `a ${ b ? \"{\" : \"}\" } c`;\nconst after = 1;\n")
+           (setq symbols (scalpel-locate-js-list-symbols nil))))
+  (:then (should (equal symbols (list "tpl" "after")))))
 
-(ert-deftest scalpel-story-locate-js-test-single-definition-positive ()
-  "One complete function is exactly one definition."
-  (should (scalpel-locate-js-single-definition-p
-           "function f(x) { return x; }\\n")))
+(ert-gwt-deftest
+  (:given ((result nil)))
+  (:when (setq result (scalpel-locate-js-single-definition-p
+                       "function f(x) { return x; }\n")))
+  (:then (should result)))
 
-(ert-deftest scalpel-story-locate-js-test-single-definition-negative ()
-  "Two functions are not one definition."
-  (should-not (scalpel-locate-js-single-definition-p
-               "function a() {}\nfunction b() {}\n")))
+(ert-gwt-deftest
+  (:given nil)
+  (:when nil)
+  (:then (should-not (scalpel-locate-js-single-definition-p
+                      "function a() {}\nfunction b() {}\n"))))
 
-(ert-deftest scalpel-story-locate-js-test-range-covers-body ()
-  "The range of a function covers its parameter list and body."
-  (with-temp-buffer
-    (insert "function f(a, b) { return a + b; }\\nconst g = 1;\\n")
-    (let ((range (scalpel-locate-js-range nil "f")))
-      (should range)
-      (should (= (car range) 1))
-      (should (= (char-after (1- (cdr range))) 125)))))
+(ert-gwt-deftest
+  (:given ((result nil)
+           (end-char nil)))
+  (:when (with-temp-buffer
+           (insert "function f(a, b) { return a + b; }\nconst g = 1;\n")
+           (setq result (scalpel-locate-js-range nil "f"))
+           (setq end-char (and result (char-after (1- (cdr result)))))))
+  (:then
+   (should result)
+   (should (= (car result) 1))
+   (should (= end-char 125))))
 
-(ert-deftest scalpel-story-locate-js-test-parameters-with-strings ()
-  "A parameter default holding brackets is skipped without hanging."
-  (with-temp-buffer
-    (insert "function f(a = \"){\") { return a; }\\n")
-    (should (scalpel-locate-js-range nil "f"))))
+(ert-gwt-deftest
+  (:given ((result nil)))
+  (:when (with-temp-buffer
+           (insert "function f(a = \"){\") { return a; }\n")
+           (setq result (scalpel-locate-js-range nil "f"))))
+  (:then (should result)))
 
 (provide 'scalpel-story-locate-js-test)
 
