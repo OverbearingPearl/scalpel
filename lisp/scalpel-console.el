@@ -558,19 +558,12 @@ by collecting the content of each region whose
   (save-excursion
     (goto-char (point-min))
     (let ((result '()))
-      (while (let ((prop (get-text-property (point) 'scalpel-console-role)))
-               (or prop
-                   (progn
-                     (goto-char (or (next-single-property-change
-                                     (point) 'scalpel-console-role)
-                                    (point-max)))
-                     nil)))
-        (let ((beg (point))
-              (end (or (next-single-property-change
-                        (point) 'scalpel-console-role)
-                       (point-max))))
+      (while (< (point) (point-max))
+        (let* ((beg (point))
+               (end (or (next-single-property-change
+                         beg 'scalpel-console-role)
+                        (point-max))))
           (when (eq (get-text-property beg 'scalpel-console-role) 'user)
-            (goto-char beg)
             (let ((text (buffer-substring-no-properties beg end)))
               (when (string-match "\\`User: " text)
                 (setq text (substring text (match-end 0))))
