@@ -538,6 +538,42 @@ caller can delete them without invalidating earlier ones."
         (setq pos next)))
     (nreverse regions)))
 
+(defvar-local scalpel-console--history-index nil
+  "Current position in the sent-instruction history being browsed.
+Nil means the navigation is not active; an integer indexes into the
+list returned by `scalpel-console--sent-instructions', where 0 is the
+most recently sent instruction.")
+
+(defvar-local scalpel-console--saved-draft nil
+  "Pending input preserved when history navigation replaces it.
+Holds the draft text so it can be restored when the user walks back
+off the newest end of the history.")
+
+(defun scalpel-console--sent-instructions ()
+  "Return the already-sent instructions, newest first.
+Each element is the instruction text with the logged \"User: \"
+prefix stripped; the list is derived from the linear history buffer
+by collecting the content of each user-role region."
+  (save-excursion
+    (goto-char (point-min))
+    (let ((result '()))
+      (while (re-search-forward "^User: " nil t)
+        (let ((beg (point)))
+          (let ((end (if (re-search-forward "\n\n" nil t)
+                         (match-beginning 0)
+                       (point-max))))
+            (push (buffer-substring-no-properties beg end) result))))
+      result)))
+
+(defun scalpel-console--pending-input-region-at (&optional pos)
+  "Return (BEG . END) of the pending-input region containing POS.
+POS defaults to point.  Return nil when POS lies outside every
+pending-input region."
+  (let ((pos (or pos (point))))
+    (cl-loop for region in (scalpel-console--pending-input-regions)
+             when (and (>= pos (car region)) (<= pos (cdr region)))
+             return region)))
+
 (defun scalpel-console--placeholder-refresh (&rest _)
   "Two-phase shadow hint for the console input area.
 Empty input shows a plain waiting message whose ellipsis only
@@ -669,10 +705,68 @@ later ones are removed.  Must be called inside the console buffer."
         (dolist (region (reverse regions))
           (delete-region (car region) (cdr region)))))))
 
+(defun scalpel-console--input-history-replace (text)
+  "Replace the pending input region with TEXT, preserving the draft.
+The current pending input is captured into
+`scalpel-console--saved-draft' only when history navigation is not
+already active, so repeated navigation never overwrites the user's
+own draft with a recalled instruction."
+  (when (null scalpel-console--history-index)
+    (setq scalpel-console--saved-draft
+          (mapconcat
+           (lambda (region)
+             (buffer-substring-no-properties (car region) (cdr region)))
+           (scalpel-console--pending-input-regions)
+           "")))
+  (scalpel-console--delete-pending-input-regions)
+  (goto-char (point-max))
+  (let ((inhibit-read-only t))
+    (insert text)))
+
+(defun scalpel-console-input-history-previous ()
+  "Move the history index toward older sent instructions.
+Stops with a message at the oldest entry instead of wrapping."
+  (interactive)
+  (let ((history (scalpel-console--sent-instructions)))
+    (if (null history)
+        (ding)
+      (let ((next (if (null scalpel-console--history-index)
+                      0
+                    (1+ scalpel-console--history-index))))
+        (if (>= next (length history))
+            (progn
+              (message "Scalpel: already at the oldest sent instruction.")
+              (ding))
+          (setq scalpel-console--history-index next)
+          (scalpel-console--input-history-replace (nth next history)))))))
+
+(defun scalpel-console-input-history-next ()
+  "Move the history index toward newer sent instructions.
+Passing beyond the newest entry restores the saved draft and ends
+navigation instead of wrapping."
+  (interactive)
+  (if (null scalpel-console--history-index)
+      (ding)
+    (let ((next (1- scalpel-console--history-index)))
+      (if (< next 0)
+          (progn
+            (scalpel-console--delete-pending-input-regions)
+            (goto-char (point-max))
+            (let ((inhibit-read-only t))
+              (insert (or scalpel-console--saved-draft "")))
+            (setq scalpel-console--history-index nil)
+            (setq scalpel-console--saved-draft nil)
+            (message "Scalpel: already past the newest sent instruction."))
+        (setq scalpel-console--history-index next)
+        (scalpel-console--input-history-replace
+         (nth next (scalpel-console--sent-instructions)))))))
+
 (defvar scalpel-console-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "RET") #'scalpel-console-send-line)
     (define-key map (kbd "S-<return>") #'newline)
+    (define-key map (kbd "M-p") #'scalpel-console-input-history-previous)
+    (define-key map (kbd "M-n") #'scalpel-console-input-history-next)
     (define-key map (kbd "C-c C-k") #'scalpel-console-abort)
     (define-key map (kbd "C-c C-b") #'scalpel-llm-select-backend)
     (define-key map (kbd "C-c C-a") #'scalpel-console-add-file)
