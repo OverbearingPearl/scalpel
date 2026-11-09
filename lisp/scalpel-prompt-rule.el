@@ -203,22 +203,30 @@ with a different command."
   "Reading contract: file-peek for code, shell for finding.")
 
 (defconst scalpel-prompt-rule--web-search
-"Backends with server-side retrieval capability MUST perform their
-searches directly inside the chat; the planner MUST NOT issue
-web-search tool calls against such backends. When external structured
-retrieval results would help, actively use the web-search tool. The
+"Without an @ prefix, instructions MUST NOT use the web-search tool;
+the tool table already excludes it by default. With an @ prefix,
+proactive retrieval is strongly encouraged, but it is never
+mandatory: simple greetings and other trivial turns need no
+retrieval. Before retrieving, first call `scalpel-llm-probe-retrieval`
+to determine whether the backend has server-side retrieval capability.
+If it does, the backend MUST perform its searches directly inside the
+chat and the planner MUST NOT issue web-search tool calls against it;
+if it does not, use the web-search tool. The `engine` field may be
+omitted to use the default engine; requests naming an unregistered
+engine are rejected.  Web search is a read-only external interaction;
+every result presented to the user MUST cite its source."
+"Prompt rule governing web-search tool usage.
+The web-search tool is only available to instructions carrying an @
+prefix; without it, the tool table excludes it and its use is
+forbidden.  With an @ prefix, retrieval is strongly encouraged but
+optional: trivial turns such as greetings need none.  Probe the backend
+with `scalpel-llm-probe-retrieval` first; if the backend retrieves on
+the server side, search directly inside the chat and never call
+web-search against it, otherwise use the web-search tool.  The
 `engine` field may be omitted to use the default engine; requests
 naming an unregistered engine are rejected.  Web search is a read-only
-external interaction; every result presented to the user MUST cite
-its source."
-"Prompt rule governing web-search tool usage.
-Backends that can retrieve on the server side search directly inside
-the chat; the planner must not call the web-search tool against them.
-When external structured retrieval results would help, feel free to
-invoke web-search proactively.  The `engine` field may be omitted to
-use the default engine; requests naming an unregistered engine are
-rejected.  Web search is a read-only external interaction, and every
-result shown to the user must cite its source.")
+external interaction, and every result shown to the user must cite its
+source.")
 
 (defconst scalpel-prompt-rule--feedback-fence
   "Runtime feedback fence rules: a scalpel error fence in the conversation

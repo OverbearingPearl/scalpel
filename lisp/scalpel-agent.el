@@ -52,27 +52,44 @@ itself after the user approves the dry-run preview.")
 
 (defun scalpel-agent--tools-for-mode (mode)
   "Return the planner-allowed tool names for run MODE.
-MODE is `consult', `shell-mode', `readonly-shell', or nil; nil
-yields the full vocabulary.  The result is always a subset of
-`scalpel-agent--tool-vocabulary', so it stays in sync with that
-constant.
+MODE is `consult', `shell-mode', `readonly-shell', `web-search',
+a `web-search-' prefixed combination such as `web-search-consult'
+or `web-search-readonly-shell', or nil; non-web-search modes and
+nil yield the full vocabulary minus \"web-search\".  The result is
+always a subset of `scalpel-agent--tool-vocabulary', so it stays
+in sync with that constant.
 
- Independently of MODE, \"web-search\" is excluded when the
-dynamic variable `scalpel-agent--web-search-suppressed' is
-non-nil; the console binds it via a let around
---run-rounds/--run-round execution."
-  (let ((excluded
-         (pcase mode
-           ('consult '("block-edit" "block-insert" "block-delete"
-                       "file-create" "file-rename" "file-delete"
-                       "file-substitute-dry-run" "confirm"))
-           ('shell-mode '("block-edit" "block-insert" "block-delete"
-                          "file-create" "file-rename" "file-delete"
-                          "file-substitute-dry-run"))
-           ('readonly-shell '("block-edit" "block-insert" "block-delete"
-                              "file-create" "file-rename" "file-delete"
-                              "file-substitute-dry-run" "confirm"))
-           (_ nil))))
+The \"web-search\" tool is only visible when MODE itself starts
+with the `web-search' prefix (the @ prefix on the console selects
+such modes), so callers control its visibility via MODE rather
+than by mutating the vocabulary.  Independently of MODE,
+\"web-search\" is excluded when the dynamic variable
+`scalpel-agent--web-search-suppressed' is non-nil; the console
+binds it via a let around --run-rounds/--run-round execution."
+  (let* ((web-search-mode
+          (and (symbolp mode)
+               (string-prefix-p "web-search" (symbol-name mode))))
+         (base-excluded
+          (pcase mode
+            ('consult '("block-edit" "block-insert" "block-delete"
+                        "file-create" "file-rename" "file-delete"
+                        "file-substitute-dry-run" "confirm"))
+            ('shell-mode '("block-edit" "block-insert" "block-delete"
+                           "file-create" "file-rename" "file-delete"
+                           "file-substitute-dry-run"))
+            ('readonly-shell '("block-edit" "block-insert" "block-delete"
+                               "file-create" "file-rename" "file-delete"
+                               "file-substitute-dry-run" "confirm"))
+            ((or 'web-search
+                 (pred (lambda (m)
+                         (and (symbolp m)
+                              (string-prefix-p "web-search-"
+                                               (symbol-name m))))))
+             nil)
+            (_ '("web-search"))))
+         (excluded (if web-search-mode
+                       base-excluded
+                     (cons "web-search" (remq "web-search" base-excluded)))))
     (when scalpel-agent--web-search-suppressed
       (push "web-search" excluded))
     (seq-remove (lambda (tool) (member tool excluded))
