@@ -394,6 +394,7 @@ git reports for it."
       ;; sequentially, making DIR and the sanitized env actually apply.
       (let* ((default-directory dir)
              (process-environment (scalpel-agent--git-environment))
+             (coding-system-for-read 'utf-8)
              (status (condition-case nil
                          (call-process "git" nil t nil
                                        "rev-parse" "--show-toplevel")
@@ -406,7 +407,8 @@ git reports for it."
 Paths are absolute.  Return nil when DIR is not inside a git tree."
   (when (scalpel-agent--git-toplevel dir)
     (let ((default-directory (file-name-as-directory (expand-file-name dir)))
-          (process-environment (scalpel-agent--git-environment)))
+          (process-environment (scalpel-agent--git-environment))
+          (coding-system-for-read 'utf-8))
       (with-temp-buffer
         (let ((status (condition-case nil
                           (call-process "git" nil t nil
