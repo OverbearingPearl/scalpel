@@ -580,9 +580,12 @@ Empty input shows a plain waiting message whose ellipsis only
 marks waiting, followed by a parenthetical description of the
 accepted prefixes
 \( \"!␣\" shell, \"?␣\" consult, \"~␣\" default reasoning, \"@␣\" web
-search, and one fixed-order combination example, \"?!␣\" read-only
-shell); the empty-input hint advertises each single prefix plus
-that one example rather than every ordering, while
+search, and one fixed-order combination example, \"@~!?␣\", with a
+brief note that the four prefixes may be combined in any order
+and that \"@~!?␣\" stands for one command enabling web search,
+deep reasoning, shell, and consult together); the empty-input
+hint advertises each single prefix plus that one example rather
+than every ordering, while
 `scalpel-console-parse-prefix' accepts any order.  Prefixed input
 gets a one-line explanation of the mode
 `scalpel-console-parse-prefix' detects.  A trimmed input whose
@@ -654,7 +657,7 @@ text."
          (hint (cond
                 ((or (null region)
                      (string-empty-p trimmed))
-                 "Input what you want to do … (Special prefixes: \"!␣\" shell, \"?␣\" consult, \"~␣\" default reasoning, \"@␣\" web search, \"?!␣\" read-only shell)")
+                 "Input anything … (Special prefixes: \"!␣\" shell, \"?␣\" consult, \"~␣\" reasoning, \"@␣\" search, \"@~!?␣\" combines in any order)")
                 (combination
                  (concat (funcall symbol-hint (aref text 0))
                          (funcall symbol-hint (aref text 1))))
