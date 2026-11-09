@@ -1477,6 +1477,35 @@ buffer, so one call never leaves a half-expanded console."
             (setq pos next)))
         (message "Scalpel: report bodies %s" (if expand "shown" "hidden"))))))
 
+(defun scalpel-console--collapse-summary ()
+  "Fold the compressed-history summary turn into one display line.
+The summary appended by `scalpel-console--offer-history-compression'
+is a user turn that every send re-uploads, so the fold must be
+display-only: a `display' placeholder covers the body after the
+preamble line, while the buffer text and the history projection
+keep every byte.  The turn is located by searching for
+`scalpel-prompt--history-compress-preamble', which occurs only in
+the summary turn; an absent or already folded summary does
+nothing.  The placeholder is tagged `scalpel-console-collapsed',
+so `scalpel-console-toggle-output' expands and refolds the
+summary together with the report bodies."
+  (save-excursion
+    (goto-char (point-min))
+    (when (search-forward
+           scalpel-prompt--history-compress-preamble nil t)
+      (let* ((turn-end (next-single-property-change
+                        (line-beginning-position)
+                        'scalpel-console-role nil (point-max)))
+             (body-start (1+ (point)))
+             (placeholder "[compressed history; C-c C-o shows]"))
+        (when (and turn-end (> turn-end body-start)
+                   (not (get-text-property body-start
+                                           'scalpel-console-collapsed)))
+          (put-text-property body-start turn-end
+                             'scalpel-console-collapsed placeholder)
+          (put-text-property body-start turn-end
+                             'display placeholder))))))
+
 (defun scalpel-console--render-diff (lines)
   "Return LINES as text with per-name change highlighting.
 LINES is a list of display cells as returned by
@@ -1831,6 +1860,7 @@ summary below")
                                   "\n"
                                   held)
                           "user")
+                         (scalpel-console--collapse-summary)
                          ;; Keep the consumed-body marks in sync with the
                          ;; rewritten buffer.
                          (scalpel-console--refresh-consumed-body-markers)
