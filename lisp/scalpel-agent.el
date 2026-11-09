@@ -394,12 +394,21 @@ git reports for it."
       ;; sequentially, making DIR and the sanitized env actually apply.
       (let* ((default-directory dir)
              (process-environment (scalpel-agent--git-environment))
-             (status (condition-case nil
-                         (call-process "git" nil t nil
-                                       "rev-parse" "--show-toplevel")
-                       (error nil))))
+             (status (progn
+                       ;; Insert git output as raw bytes, then decode
+                       ;; explicitly as UTF-8, instead of binding
+                       ;; `coding-system-for-read'.
+                       (set-buffer-multibyte nil)
+                       (condition-case nil
+                           (call-process "git" nil t nil
+                                         "rev-parse" "--show-toplevel")
+                         (error nil)))))
         (when (and (numberp status) (= status 0) (> (buffer-size) 0))
-          (file-name-as-directory (string-trim (buffer-string))))))))
+          (decode-coding-region (point-min) (point-max) 'utf-8)
+          (set-buffer-multibyte t)
+          (file-name-as-directory
+           (string-trim (buffer-substring-no-properties
+                         (point-min) (point-max)))))))))
 
 (defun scalpel-agent--git-listed-files (dir)
   "Return files under DIR that git does not ignore.
@@ -409,11 +418,15 @@ Paths are absolute.  Return nil when DIR is not inside a git tree."
           (process-environment (scalpel-agent--git-environment)))
       (with-temp-buffer
         (let ((status (condition-case nil
-                          (call-process "git" nil t nil
-                                        "ls-files" "--cached" "--others"
-                                        "--exclude-standard" "-z")
+                          (progn
+                            (set-buffer-multibyte nil)
+                            (call-process "git" nil t nil
+                                          "ls-files" "--cached" "--others"
+                                          "--exclude-standard" "-z"))
                         (error nil))))
           (when (and (numberp status) (= status 0))
+            (decode-coding-region (point-min) (point-max) 'utf-8)
+            (set-buffer-multibyte t)
             (mapcar (lambda (rel) (expand-file-name rel default-directory))
                     (split-string (buffer-string) "\0" t))))))))
 
