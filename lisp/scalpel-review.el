@@ -25,11 +25,14 @@
     (define-key map (kbd "k") #'scalpel-review-reject-block)
     (define-key map (kbd "K") #'scalpel-review-reject-hunk)
     (define-key map (kbd "q") #'scalpel-review-accept-all)
+    (define-key map (kbd "g") #'scalpel-review-refresh)
     (define-key map (kbd "RET") #'scalpel-review-jump)
     (define-key map (kbd "<return>") #'scalpel-review-jump)
     map)
   "Keymap for session review buffers.
 K rejects a single hunk; k rejects a whole block.
+g re-fetches the lineage records and re-renders the review buffer,
+eliminating line-number drift after the source has changed.
 RET jumps to the source location of the diff block under point.")
 
 (defun scalpel-review--jump-line (record beg end)
@@ -114,22 +117,40 @@ resolved line number, or nil when no level yields a confident answer."
 
 (defun scalpel-review--jump-hunk (record)
   "Jump to the hunk of RECORD in its source file.
-Message and return nil when point is not on a hunk or the target
-line cannot be located; otherwise open the file in another window
-and return the buffer."
+Try the precise diff line via `scalpel-review--hunk-line-at-point'
+first; refuse on deleted lines; fall back to fuzzy search only when
+point is not on a hunk body line.  Return the target buffer, or nil
+when no hunk is at point or the target line cannot be located."
   (let ((region (scalpel-review--hunk-region-at-point)))
     (if (not region)
         (progn
           (message "No hunk at point")
           nil)
-      (let ((line (scalpel-review--jump-line record (car region) (cdr region))))
-        (when line
+      (let ((hunk-line (scalpel-review--hunk-line-at-point)))
+        (cond
+         ((null hunk-line)
+          ;; Point is on the @@ header, a continuation line, or outside
+          ;; the hunk body: fall back to the fuzzy search path.
+          (let ((line (scalpel-review--jump-line record (car region) (cdr region))))
+            (when line
+              (let ((buffer (find-file-other-window (plist-get record :file))))
+                (with-current-buffer buffer
+                  (goto-char (point-min))
+                  (forward-line (1- line))
+                  (recenter-top-bottom))
+                buffer))))
+         ((cdr hunk-line)
+          (message "Deleted line: no source location")
+          nil)
+         (t
+          (require 'pulse)
           (let ((buffer (find-file-other-window (plist-get record :file))))
             (with-current-buffer buffer
               (goto-char (point-min))
-              (forward-line (1- line))
-              (recenter-top-bottom))
-            buffer))))))
+              (forward-line (1- (car hunk-line)))
+              (recenter-top-bottom)
+              (pulse-momentary-highlight-one-line (point)))
+            buffer)))))))
 
 (defun scalpel-review-jump ()
   "Jump to the review target described by the record at point.
@@ -316,6 +337,59 @@ inside a record's diff hunks."
             (forward-line 1))
           (setq hunk-end (point))))
       (when hunk-beg (cons hunk-beg hunk-end)))))
+
+(defun scalpel-review--hunk-line-at-point ()
+  "Map point inside a diff hunk body to its post-image line number.
+Return (LINE . DELETEDP), where LINE is the new-file line number of
+the line point resides on and DELETEDP is non-nil when that line is
+a removed (\"-\") line.  Return nil when point sits on the @@ header
+itself, on a \"\\\\\" continuation line, on a file-header line, or
+anywhere outside a hunk body."
+  (save-excursion
+    (catch 'hunk-line
+      (let* ((point-line (line-number-at-pos))
+             header-line new-start)
+        ;; Find the nearest @@ header at or above the current line.
+        (beginning-of-line)
+        (when (re-search-backward "^@@" nil t)
+          (setq header-line (line-number-at-pos))
+          (if (= header-line point-line)
+              ;; Point is on the @@ header itself.
+              (throw 'hunk-line nil)
+            (setq new-start
+                  (and (looking-at
+                        "@@ -[0-9]+\\(?:,[0-9]+\\)? \\+\\([0-9]+\\)\\(?:,[0-9]+\\)? @@")
+                       (string-to-number (match-string 1))))))
+        (unless (and header-line new-start)
+          (throw 'hunk-line nil))
+        ;; Walk down from the header, counting new-file lines.
+        (goto-char (point-min))
+        (forward-line header-line)
+        (let (deletedp)
+          (while t
+            (forward-line 1)
+            (cond
+             ((eobp) (throw 'hunk-line nil))
+             ;; Next hunk or file header reached without passing point.
+             ((looking-at "^\\(@@\\|diff --git\\|Index:\\|--- \\|+++ \\)")
+              (throw 'hunk-line nil))
+             ;; "\ No newline at end of file" continuation line.
+             ((looking-at "^\\\\")
+              (when (= (line-number-at-pos) point-line)
+                (throw 'hunk-line nil)))
+             ((looking-at "^-")
+              (when (= (line-number-at-pos) point-line)
+                (setq deletedp t)
+                (throw 'hunk-line (cons new-start deletedp))))
+             ;; Context line: starts with a single space.  A context line
+             ;; exists in both pre- and post-image, so it consumes a
+             ;; new-file line number just like an added line does.
+             ((looking-at "^ ")
+              (when (= (line-number-at-pos) point-line)
+                (throw 'hunk-line (cons new-start deletedp)))
+              (setq new-start (1+ new-start)))
+             ;; Malformed hunk body line: outside any well-formed hunk.
+             (t (throw 'hunk-line nil)))))))))
 
 (defun scalpel-review--hunk-operations (beg end)
   "Return the hunk's line operations between BEG and END.
@@ -625,6 +699,13 @@ records the pre-rename path)."
       (dolist (record records)
         (scalpel-review--insert-record record)))
     (goto-char (point-min))))
+
+(defun scalpel-review-refresh ()
+  "Re-render the review buffer by rerunning `scalpel-review--refresh'.
+Bound to \\[scalpel-review-refresh] in the review keymap."
+  (interactive)
+  (scalpel-review--refresh)
+  nil)
 
 (defun scalpel-review--refresh ()
   "Re-render the review buffer after a block was restored."

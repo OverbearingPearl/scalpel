@@ -553,16 +553,29 @@ off the newest end of the history.")
   "Return the already-sent instructions, newest first.
 Each element is the instruction text with the logged \"User: \"
 prefix stripped; the list is derived from the linear history buffer
-by collecting the content of each user-role region."
+by collecting the content of each region whose
+`scalpel-console-role' text property is `user'."
   (save-excursion
     (goto-char (point-min))
     (let ((result '()))
-      (while (re-search-forward "^User: " nil t)
-        (let ((beg (point)))
-          (let ((end (if (re-search-forward "\n\n" nil t)
-                         (match-beginning 0)
+      (while (let ((prop (get-text-property (point) 'scalpel-console-role)))
+               (or prop
+                   (progn
+                     (goto-char (or (next-single-property-change
+                                     (point) 'scalpel-console-role)
+                                    (point-max)))
+                     nil)))
+        (let ((beg (point))
+              (end (or (next-single-property-change
+                        (point) 'scalpel-console-role)
                        (point-max))))
-            (push (buffer-substring-no-properties beg end) result))))
+          (when (eq (get-text-property beg 'scalpel-console-role) 'user)
+            (goto-char beg)
+            (let ((text (buffer-substring-no-properties beg end)))
+              (when (string-match "\\`User: " text)
+                (setq text (substring text (match-end 0))))
+              (push text result)))
+          (goto-char end)))
       result)))
 
 (defun scalpel-console--pending-input-region-at (&optional pos)
@@ -1760,7 +1773,9 @@ On acceptance the busy flag is set so RET is blocked while the
 request runs, a progress message is printed, the current
 conversation is sent to the LLM for a factual summary, and the
 symbol `deferred' is returned immediately so the caller can hold
-back the pending instruction.  In the success callback the
+back the pending instruction.  Before the request is sent the
+user's pending input is held via `scalpel-console--hold-pending-input'
+and both callbacks close over the held value.  In the success callback the
 summary is held in a local first; a non-string or whitespace-only
 summary is treated as a failure with a display-only note only.
 Otherwise the old history is forgotten by calling
@@ -1771,12 +1786,16 @@ appended as a user turn prefixed by
 `scalpel-prompt--history-compress-preamble', the consumed-body
 markers are refreshed, the compression baseline is reset to the
 token count of the new (compressed) history so subsequent growth
-is measured from the small compressed history, the busy flag is
-cleared, and the user is told to press RET again to send the
-pending instruction with the compressed history.  The error
-callback clears the busy flag and leaves a display-only note only.
-Neither callback re-enters the send path; the user always confirms
-the resend."
+is measured from the small compressed history, and the held
+pending input is restored via `scalpel-console--restore-pending-input'
+just before the busy flag is cleared, so the unsent instruction
+reappears below the summary.  In both failure callbacks
+\\(empty summary and error\\) the held pending input is restored the
+same way before clearing the busy flag, leaving a display-only
+note only.  The busy flag is cleared and the user is told to press
+RET again to send the pending instruction with the compressed
+history.  Neither callback re-enters the send path; the user
+always confirms the resend."
   (let* ((history-tokens (scalpel-llm--count-tokens
                           (scalpel-console--history)))
          ;; Sanitize the baseline: session snapshots restored by
@@ -1817,6 +1836,10 @@ the resend."
           ;; request runs in the background.
           (setq scalpel-console--compression-baseline history-tokens)
           (let ((console-buffer (current-buffer))
+                ;; Hold the user's pending input before the request is
+                ;; sent so it survives the buffer rewrite and can be
+                ;; restored in both callback outcomes.
+                (held-input (scalpel-console--hold-pending-input))
                 (prompt
                  (concat
                   (scalpel-prompt--history-compress-instruction)
@@ -1839,6 +1862,7 @@ the resend."
                          (progn
                            (scalpel-console--insert-compression-note
                             "history compression failed: empty summary")
+                           (scalpel-console--restore-pending-input held-input)
                            (setq scalpel-console--busy nil)
                            (message "History compression failed; press RET \
 to resend the instruction."))
@@ -1873,6 +1897,9 @@ summary below")
                          (setq scalpel-console--compression-baseline
                                (scalpel-llm--count-tokens
                                 (scalpel-console--history)))
+                         ;; Restore the held pending input below the
+                         ;; summary so the unsent instruction reappears.
+                         (scalpel-console--restore-pending-input held-input)
                          ;; Unblock RET and tell the user to confirm the
                          ;; resend; never re-enter the send path here.
                          (setq scalpel-console--busy nil)
@@ -1885,6 +1912,9 @@ the instruction."))))))
                      ;; Failure: display-only note only; roles untouched.
                      (scalpel-console--insert-compression-note
                       (format "history compression failed: %s" error))))
+                 ;; Restore the held pending input so the unsent
+                 ;; instruction reappears.
+                 (scalpel-console--restore-pending-input held-input)
                  ;; Unblock RET; the user re-sends by pressing RET.
                  (setq scalpel-console--busy nil)
                  (message "History compression failed; press RET to resend \
@@ -1913,6 +1943,44 @@ these properties."
       ;; Make the final character rear-nonsticky so text typed right
       ;; after the note does not pick up the note's properties.
       (put-text-property (1- (point)) (point) 'rear-nonsticky t))))
+
+(defun scalpel-console--hold-pending-input ()
+  "Withdraw and return the user's unsent instruction.
+Reads the regions reported by the function
+`scalpel-console--pending-input-regions', joins their text with
+no separator exactly the way `send-line' assembles the
+instruction, then deletes those regions back to front inside
+`inhibit-read-only'.  Returns nil when there are no pending
+regions.  The compression offer flow calls this before rewriting
+the history so the held text can be reinserted after the
+compressed summary instead of being left sandwiched before it or
+glued to the compression note."
+  (with-current-buffer (scalpel-console--target-buffer)
+    (let ((regions (scalpel-console--pending-input-regions)))
+      (when regions
+        (let (chunks)
+          (dolist (region regions)
+            (push (buffer-substring-no-properties (car region) (cdr region))
+                  chunks))
+          (let ((inhibit-read-only t))
+            (dolist (region (reverse regions))
+              (delete-region (car region) (cdr region))))
+          (apply #'concat (nreverse chunks)))))))
+
+(defun scalpel-console--restore-pending-input (text)
+  "Reinsert held pending input TEXT below the freshly appended compressed summary.
+When TEXT is a non-empty string, moves to point-max in the target console
+buffer and inserts TEXT with no properties at all, so the restored text
+carries neither `scalpel-console-role' nor `scalpel-console-output' and
+therefore reads back as pending input on the next send.  Point is left at
+point-max afterwards.  This pairs with `scalpel-console--hold-pending-input'
+to keep the user's unsent instruction out of the compressed history while
+still preserving it for delivery."
+  (when (and (stringp text) (not (string-empty-p text)))
+    (with-current-buffer (scalpel-console--target-buffer)
+      (goto-char (point-max))
+      (insert text)
+      (goto-char (point-max)))))
 
 (defun scalpel-console-reset-context ()
   "Clear the agent context.
