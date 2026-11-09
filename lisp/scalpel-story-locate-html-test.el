@@ -71,7 +71,7 @@
            (setq range (scalpel-locate-html-range nil "s"))
            (setq text (buffer-substring-no-properties
                        (car range) (cdr range)))))
-  (:then (should (equal result '("s" "ok")))
+  (:then (should (equal result '("s" "s.x" "ok")))
          (should (equal text "<script id=\"s\">var x = \"<div id=\\\"nope\\\">\";</script>"))))
 
 (provide 'scalpel-story-locate-html-test)

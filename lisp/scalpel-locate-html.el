@@ -205,28 +205,52 @@ tag), group 2 the tag name."
   "Return (BEG . END) of the element whose id is SYMBOL.
 BEG is the start tag's `<'; END is just past the matching end
 tag.  Trailing blank lines are excluded.  Return nil when no
-element in the buffer carries that id."
-  (save-excursion
-    (goto-char (point-min))
-    (let (beg name)
-      (while (and (not beg)
-                  (re-search-forward
-                   scalpel-locate-html--tag-regexp nil t))
-        (let* ((tag-beg (match-beginning 0))
-               (tag-name (match-string 1))
-               (id (scalpel-locate-html--tag-id tag-beg)))
-          (when (and id (string= id symbol))
-            (setq beg tag-beg name tag-name))
-          (unless beg
-            (scalpel-locate-html--skip-raw-text tag-name))))
-      (when beg
-        (goto-char beg)
-        (let ((end (scalpel-locate-html--element-end name)))
-          (goto-char end)
-          (skip-chars-backward " \t\n\r")
-          (if (< (point) beg)
-              (cons beg (1+ beg))
-            (cons beg (point))))))))
+element in the buffer carries that id.
+When SYMBOL is dotted as scriptId.jsName, first resolve the
+element whose id is scriptId, then locate the JS declaration of
+jsName inside that element's body and return its full JS
+definition (BEG . END), matching the semantics of ranges
+produced for .js files."
+  (if (string-match "\\`\\([^.]+\\)\\.\\([^.]+\\)\\'" symbol)
+      (let* ((script-id (match-string 1 symbol))
+             (js-name (match-string 2 symbol))
+             (range (scalpel-locate-html--top-definition-range script-id)))
+        (when range
+          (save-excursion
+            (save-restriction
+              (narrow-to-region (car range) (cdr range))
+              (goto-char (point-min))
+              (let (found)
+                (while (and (not found)
+                            (re-search-forward
+                             scalpel-locate-js--decl-regexp nil t))
+                  (let ((name (or (match-string 1) (match-string 2))))
+                    (when (and name (string= name js-name))
+                      (setq found
+                            (cons (match-beginning 0)
+                                  (scalpel-locate-js--definition-end))))))
+                found)))))
+    (save-excursion
+      (goto-char (point-min))
+      (let (beg name)
+        (while (and (not beg)
+                    (re-search-forward
+                     scalpel-locate-html--tag-regexp nil t))
+          (let* ((tag-beg (match-beginning 0))
+                 (tag-name (match-string 1))
+                 (id (scalpel-locate-html--tag-id tag-beg)))
+            (when (and id (string= id symbol))
+              (setq beg tag-beg name tag-name))
+            (unless beg
+              (scalpel-locate-html--skip-raw-text tag-name))))
+        (when beg
+          (goto-char beg)
+          (let ((end (scalpel-locate-html--element-end name)))
+            (goto-char end)
+            (skip-chars-backward " \t\n\r")
+            (if (< (point) beg)
+                (cons beg (1+ beg))
+              (cons beg (point)))))))))
 
 (defun scalpel-locate-html-range (_file symbol)
   "Return the range of SYMBOL's element as (BEG . END).
@@ -237,9 +261,12 @@ Current buffer is the HTML file referenced by FILE."
   "Return the id attribute values of all elements in the buffer.
 Script and style bodies are skipped so their raw text is never
 scanned for ids, but the ids of the script or style tags
-themselves are collected, making them locatable definitions."
+themselves are collected, making them locatable definitions.
+For scripts carrying an id, the body is scanned by the JS
+scanner and each JS name is emitted as scriptId.name."
   (save-excursion
     (goto-char (point-min))
+    (require 'scalpel-locate-js)
     (let (ids)
       (while (re-search-forward
               scalpel-locate-html--tag-regexp nil t)
@@ -249,7 +276,21 @@ themselves are collected, making them locatable definitions."
           (if (member (downcase tag-name) '("script" "style"))
               (progn
                 (when id (push id ids))
-                (scalpel-locate-html--skip-raw-text tag-name))
+                (when (and id (string= (downcase tag-name) "script"))
+                  (let ((body-beg (point)))
+                    (scalpel-locate-html--skip-raw-text tag-name)
+                    (let* ((body-end (point))
+                           (body-text (and (> body-end body-beg)
+                                           (buffer-substring
+                                            body-beg body-end))))
+                      (when body-text
+                        (with-temp-buffer
+                          (insert body-text)
+                          (dolist (name (car (scalpel-locate-js--scan-region
+                                              (point-min) (point-max))))
+                            (push (concat id "." name) ids)))))))
+                (unless (string= (downcase tag-name) "script")
+                  (scalpel-locate-html--skip-raw-text tag-name)))
             (when id (push id ids)))))
       (nreverse ids))))
 

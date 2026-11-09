@@ -59,6 +59,8 @@ Registering the same REGEXP replaces the previous provider."
                               (string= (car entry) regexp))
                             scalpel-locate-providers))))
 
+(require 'scalpel-locate-js)
+
 (require 'scalpel-locate-html)
 
 (scalpel-locate-register-provider
@@ -170,6 +172,14 @@ refusal instead of deciding whether to make one."
   (let* ((provider (scalpel-locate-provider-for-file file))
          (pred (and provider (plist-get provider :balanced-p))))
     (if pred (funcall pred text) t)))
+
+;; Built-in JavaScript provider.
+(scalpel-locate-register-provider
+ "\\.js\\'"
+ (list :locate #'scalpel-locate-js-range
+       :list-symbols #'scalpel-locate-js-list-symbols
+       :single-definition-p #'scalpel-locate-js-single-definition-p
+       :balanced-p #'scalpel-locate-js-balanced-p))
 
 (defun scalpel-locate-list-symbols (file)
   "Return a list of top-level symbol names in FILE.
