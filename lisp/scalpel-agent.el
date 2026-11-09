@@ -3578,7 +3578,8 @@ can offer block-edit as the retry."
         ;; The bracket question is the language provider's, asked of the rewritten
         ;; text: one answer for both this check and a refused reply, so a language
         ;; that says nothing about bracket shape is never reported as having one.
-        (when (not (scalpel-locate-balanced-p resolved new))
+        (when (and (scalpel-locate-balanced-p resolved old)
+                   (not (scalpel-locate-balanced-p resolved new)))
           (let ((diagnosis (scalpel-diagnose-paren-defects resolved new)))
             (user-error (concat "Scalpel: file-substitute of %s would leave unbalanced "
                                 "brackets; refused whole\n%s%s%s")
