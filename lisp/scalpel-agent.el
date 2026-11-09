@@ -89,7 +89,7 @@ binds it via a let around --run-rounds/--run-round execution."
             (_ '("web-search"))))
          (excluded (if web-search-mode
                        base-excluded
-                     (cons "web-search" (remq "web-search" base-excluded)))))
+                     (cons "web-search" (delete "web-search" base-excluded)))))
     (when scalpel-agent--web-search-suppressed
       (push "web-search" excluded))
     (seq-remove (lambda (tool) (member tool excluded))

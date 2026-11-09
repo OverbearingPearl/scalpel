@@ -558,7 +558,7 @@ by collecting the content of each region whose
   (save-excursion
     (goto-char (point-min))
     (let ((result '()))
-      (while (< (point) (point-max))
+      (while (not (eobp))
         (let* ((beg (point))
                (end (or (next-single-property-change
                          beg 'scalpel-console-role)

@@ -344,7 +344,8 @@ Return (LINE . DELETEDP), where LINE is the new-file line number of
 the line point resides on and DELETEDP is non-nil when that line is
 a removed (\"-\") line.  Return nil when point sits on the @@ header
 itself, on a \"\\\\\" continuation line, on a file-header line, or
-anywhere outside a hunk body."
+anywhere outside a hunk body.  The returned LINE is the new-file line
+number of the added or context line point resides on."
   (save-excursion
     (catch 'hunk-line
       (let* ((point-line (line-number-at-pos))
@@ -362,9 +363,8 @@ anywhere outside a hunk body."
                        (string-to-number (match-string 1))))))
         (unless (and header-line new-start)
           (throw 'hunk-line nil))
-        ;; Walk down from the header, counting new-file lines.
-        (goto-char (point-min))
-        (forward-line header-line)
+        ;; Point is still on the @@ header line; the walk loop's
+        ;; initial forward-line moves onto the first body line.
         (let (deletedp)
           (while t
             (forward-line 1)
@@ -381,6 +381,13 @@ anywhere outside a hunk body."
               (when (= (line-number-at-pos) point-line)
                 (setq deletedp t)
                 (throw 'hunk-line (cons new-start deletedp))))
+             ;; Added line: exists only in the post-image, so it
+             ;; consumes a new-file line number just like a context
+             ;; line does; count it the same way.
+             ((looking-at "^\\+")
+              (when (= (line-number-at-pos) point-line)
+                (throw 'hunk-line (cons new-start deletedp)))
+              (setq new-start (1+ new-start)))
              ;; Context line: starts with a single space.  A context line
              ;; exists in both pre- and post-image, so it consumes a
              ;; new-file line number just like an added line does.
