@@ -792,6 +792,20 @@ the note names the file and the limit that did it."
                       "`scalpel-agent-context-max-files'")
               resolved (length scalpel-agent--context-files))))))
 
+(defvar scalpel-agent--touched-files nil
+  "Truenames of files read via file-peek or hit by write actions this session.")
+
+(defun scalpel-agent--mark-touched (file)
+  "Mark FILE as touched, deduplicated by `file-truename'."
+  (let ((name (file-truename file)))
+    (unless (member name scalpel-agent--touched-files)
+      (push name scalpel-agent--touched-files))))
+
+(defun scalpel-agent--file-touched-p (file)
+  "Return non-nil when FILE was touched this session."
+  (and (boundp 'scalpel-agent--touched-files)
+       (member (file-truename file) scalpel-agent--touched-files)))
+
 (defun scalpel-agent--context-untrack (file)
   "Drop FILE from the session context when it is there.
 FILE is matched by its truename, the spelling the context stores, so a
@@ -1102,22 +1116,37 @@ names that git ignores, marked \"(gitignored)\".  Return the string
         "none"
       (scalpel-agent--context-tree-from-entries entries))))
 
+(defconst scalpel-agent-context-symbols-threshold 5
+  "Context files up to this count always get SYMBOLS injected.")
+
 (defun scalpel-agent-context ()
-  "Return the LLM context text from the explicit session file list."
+  "Return the LLM context text from the explicit session file list.
+
+Cost trade-off: the SYMBOLS line is injected only for files that
+were recently touched (members of `scalpel-agent--touched-files',
+compared by truename) or when the context file count does not
+exceed `scalpel-agent-context-symbols-threshold'; remaining files
+list FILE only, leaving symbol discovery to on-demand file-peek."
   (if (null scalpel-agent--context-files)
       "No files in context."
-    (string-join
-     (mapcar (lambda (file)
-               (let ((base (if (scalpel-locate-provider-for-file file)
+    (let ((touched (mapcar #'file-truename scalpel-agent--touched-files)))
+      (string-join
+       (mapcar
+        (lambda (file)
+          (let* ((base (if (scalpel-locate-provider-for-file file)
+                           (if (or (<= (length scalpel-agent--context-files)
+                                       scalpel-agent-context-symbols-threshold)
+                                   (member (file-truename file) touched))
                                (format "FILE: %s\nSYMBOLS: %s"
                                        file
                                        (string-join (scalpel-locate-list-symbols file) ", "))
-                             (format "FILE: %s" file))))
-                 (if-let* ((note (scalpel-agent-unregistered-definers-note file)))
-                     (concat base "\n" note)
-                   base)))
-             scalpel-agent--context-files)
-     "\n\n")))
+                             (format "FILE: %s" file))
+                         (format "FILE: %s" file))))
+            (if-let* ((note (scalpel-agent-unregistered-definers-note file)))
+                (concat base "\n" note)
+              base)))
+        scalpel-agent--context-files)
+       "\n\n"))))
 
 (defvar scalpel-agent-definer-registry nil
   "Alist mapping definer name strings to their description strings.
@@ -1844,6 +1873,7 @@ region was modified while an LLM request was in flight."
     (let* ((range (scalpel-agent--verified-range file symbol expected-body))
            (old-text (buffer-substring-no-properties (car range) (cdr range))))
       (scalpel-execute-replace (car range) (cdr range) new-text)
+      (scalpel-agent--mark-touched file)
       (condition-case nil
           (progn
             (require 'scalpel-lineage nil t)
@@ -2623,7 +2653,9 @@ When a definition exceeds `scalpel-agent-file-read-max-bytes', signal
 `user-error' with its true size instead, and leave the caller to
 ask for the whole file.  A whole-file read is a partial view by
 construction, so it is truncated at that limit with a marker that
-states the true size.  Output holding a NUL byte is withheld."
+states the true size.  Output holding a NUL byte is withheld.
+Each successful resolution records FILE via
+`scalpel-agent--mark-touched' for on-demand SYMBOLS injection."
   (unless file
     (user-error "Scalpel: malformed file-peek action"))
   (unless (scalpel-agent--context-file-p file)
@@ -2642,6 +2674,7 @@ states the true size.  Output holding a NUL byte is withheld."
            (format "\nNote: %s" drift)
          ""))))
   (let ((resolved (file-truename (expand-file-name file))))
+    (scalpel-agent--mark-touched resolved)
     (if symbol
         (let* ((hit (scalpel-agent--resolve-symbol resolved symbol))
                (resolved (car hit))

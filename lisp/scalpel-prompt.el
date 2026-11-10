@@ -290,7 +290,12 @@ Independently of the reply language, when `scalpel-thinking-language'
 is non-nil the thinking-language rule (from
 `scalpel-prompt--thinking-language-rule', defined next to
 `scalpel-prompt--reply-language-rule') is appended so that the
-model's thinking follows that language."
+model's thinking follows that language.
+The prompt is top-and-tailed by `scalpel-prompt-rule--no-wrapper':
+it appears both as the first and as the last segment of the
+returned concat.  The trailing repetition is intentional, a design
+invariant asserted by `scalpel-story-prompt-test', not a
+redundancy to be trimmed."
   (concat
    scalpel-prompt-rule--no-wrapper "\n"
    scalpel-prompt-rule--document "\n"
@@ -330,8 +335,7 @@ model's thinking follows that language."
    (if scalpel-thinking-language
        (concat "\n" (scalpel-prompt--thinking-language-rule))
      "")
-   "\n"
-   scalpel-prompt-rule--no-wrapper))
+   "\n" scalpel-prompt-rule--no-wrapper))
 
 (provide 'scalpel-prompt)
 
