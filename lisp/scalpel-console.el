@@ -2089,19 +2089,14 @@ holds the real paths the user typed.  The model tag shown on the
 reply line is snapshotted before the request is sent and reused
 when the report is inserted, so the tag names the model that was
 actually selected at send time rather than whatever a live read
-would return later.  When DEEP-REASONING is non-nil, the model
-symbol's `:request-params' property is saved with `get' before the
-round and set to the server-side retrieval params returned by
-`scalpel-llm-probe-retrieval-params' for the whole round -- every LLM
-request the round issues, not just the first -- so the model falls
-back to its own defaults and may think deeply, while probed
-retrieval parameters survive the `~@' combination; the saved value is restored
-afterwards via `unwind-protect', so the exact prior value comes
-back rather than being clobbered with nil.  Probe is
-suppressed for the whole round (`scalpel-llm-probe-inhibit' is set
-and restored), so a first uncached DEEP-REASONING round never
-triggers the reasoning probe and a mid-round probe cannot
-reinstall `:request-params'."
+would return later.  When DEEP-REASONING is non-nil, the round
+sets the buffer-local `scalpel-llm-allow-thinking' to t in the
+session buffer before the round and resets it to nil afterwards,
+so the model may think deeply in this console only.
+`scalpel-llm-request-async' builds each request under the
+buffer's own value, so a concurrent console cannot observe this
+one's thinking window, and probed retrieval parameters survive
+the `~@' combination."
   (setq scalpel-console--round-error nil)
   (let* ((target (scalpel-console--target-buffer))
          ;; Round start: read at settle for the elapsed column in the token ledger.
@@ -2181,12 +2176,6 @@ reinstall `:request-params'."
          ;; the round's cost is the diff of the never-reset totals.
          (up0 scalpel-llm--total-uploaded)
          (down0 scalpel-llm--total-received)
-         ;; Save the model's original `:request-params' before the round
-         ;; overwrites it, so the cleanup can restore the exact prior
-         ;; value rather than clobbering it with nil.
-         (saved-request-params (and deep-reasoning
-                                    (get gptel-model :request-params)))
-         (saved-probe-inhibit scalpel-llm-probe-inhibit)
          (settled nil)
          (settle (lambda (round-result)
                    (unless settled
@@ -2244,8 +2233,7 @@ reinstall `:request-params'."
         (unwind-protect
             (progn
               (when deep-reasoning
-                (put gptel-model :request-params (scalpel-llm-probe-retrieval-params))
-                (setq scalpel-llm-probe-inhibit t))
+                (setq-local scalpel-llm-allow-thinking t))
               (condition-case err
                   (scalpel-agent-run
                    ;; Outbound text is redacted here, at the console's single
@@ -2364,9 +2352,7 @@ reinstall `:request-params'."
                 ((error quit)
                  (funcall settle nil)
                  (signal (car err) (cdr err)))))
-          (when deep-reasoning
-            (put gptel-model :request-params saved-request-params)
-            (setq scalpel-llm-probe-inhibit saved-probe-inhibit)))))))
+          (setq-local scalpel-llm-allow-thinking nil))))))
 
 (defun scalpel-console--shell-description (shell)
   "Describe one entry of the :shells list for a confirmation prompt.

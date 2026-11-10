@@ -347,6 +347,18 @@ off quickly and diagnosably while normal replies are unaffected."
       (condition-case err
           (progn
             (arm-deadline)
+            ;; Per-request thinking control: when thinking is not
+            ;; allowed on this buffer, install the probed retrieval
+            ;; parameters on the model transiently, just around the
+            ;; gptel-request call, so the request body is built with
+            ;; them but no other console's request can observe the
+            ;; window.  The prior value is stashed on the model and
+            ;; restored immediately after the call below.
+            (unless scalpel-llm-allow-thinking
+              (put gptel-model :scalpel-llm--saved-request-params
+                   (get gptel-model :request-params))
+              (put gptel-model :request-params
+                   (scalpel-llm-probe-retrieval-params)))
             (gptel-request prompt
               :system system
               :stream t
@@ -415,8 +427,18 @@ off quickly and diagnosably while normal replies are unaffected."
                                 (setq scalpel-llm--tokens-received received)
                                 (when progress
                                   (funcall progress))))))))
-            (unless cancelled
-              (arm-timeout)))
+            ;; Restore the model's original request parameters: the request
+             ;; body has been built by now, so no later request can
+             ;; observe the override window.  The guard mirrors the
+             ;; install site, since install and restore run back to back
+             ;; in the same synchronous path and the buffer-local value
+             ;; cannot change in between.
+             (unless scalpel-llm-allow-thinking
+               (put gptel-model :request-params
+                    (get gptel-model :scalpel-llm--saved-request-params))
+               (put gptel-model :scalpel-llm--saved-request-params nil))
+             (unless cancelled
+               (arm-timeout)))
         (error
          (abandon)
          (let ((payload
@@ -720,11 +742,16 @@ window.")
   "Lazy pre-request probe entry point.
 Runs a one-shot reasoning probe for the current gptel backend/model
 pair unless it has already been probed.  Does nothing when
-`scalpel-llm-probe-inhibit' is non-nil, or when the gptel backend or
-model is unset.  A probe failure is logged and swallowed so the
-request path is never broken; the failed pair is not cached, so the
-probe retries on the next request."
+`scalpel-llm-probe-inhibit' is non-nil, `scalpel-llm-allow-thinking'
+is non-nil in the current buffer, or when the gptel backend or model
+is unset.  A deep-reasoning round marks its session buffer with
+`scalpel-llm-allow-thinking', so its requests never trigger a probe
+that would reinstall thinking-suppression parameters.  A probe
+failure is logged and swallowed so the request path is never broken;
+the failed pair is not cached, so the probe retries on the next
+request."
   (when (and (not scalpel-llm-probe-inhibit)
+             (not scalpel-llm-allow-thinking)
              gptel-backend
              gptel-model)
     (let ((key (cons (gptel-backend-name gptel-backend)
