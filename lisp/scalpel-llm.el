@@ -702,6 +702,20 @@ Probes are normally triggered by backend switches or console
 opening; inhibiting them keeps test runs and batch reloads
 side-effect free.")
 
+(defvar-local scalpel-llm-allow-thinking nil
+  "Buffer-local flag letting one LLM round keep default thinking behavior.
+It is set and reset by the console round layer, which uses it to opt a
+single round out of the thinking suppression parameters.
+
+Non-nil means requests issued with this buffer as the current context are
+sent without the thinking suppression parameters, leaving the model's
+default thinking in effect; nil means the suppression parameters are
+installed as usual.  The console round layer sets this to t in the
+session buffer when a round is started with the tilde prefix and resets
+it to nil when the round ends, success or failure, so two concurrent
+consoles each hold an independent flag and never share a global thinking
+window.")
+
 (defun scalpel-llm-probe-reasoning-lazy ()
   "Lazy pre-request probe entry point.
 Runs a one-shot reasoning probe for the current gptel backend/model

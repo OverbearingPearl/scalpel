@@ -7,8 +7,8 @@
 ;; with an explicit exit status; a command that fails surfaces its
 ;; status and output instead of hiding the failure; a forbidden tool
 ;; is refused with a remedy instead of run.  The sandbox boundary is
-;; stubbed inside the story itself, so the stub is alive for the one
-;; action under test.  Every clause is a single form; every THEN is
+;; stubbed as a `:given' place binding, so the stub stays alive for
+;; the whole story.  Every clause is a single form; every THEN is
 ;; one `should'.  The deftest macro only accepts anonymous clause
 ;; lists, so no story carries a name of its own.
 
@@ -24,17 +24,17 @@
   "Holds a shell refusal captured inside a story.")
 
 (ert-gwt-deftest
-  (:given ((root (make-temp-file "scalpel-story-" t))
+  (:given (((symbol-function 'scalpel-sandbox-run)
+            (lambda (_command _root _files)
+              (cons 1
+                    "ls: no-such-file: No such file or directory")))
+           (root (make-temp-file "scalpel-story-" t))
            (scalpel-agent--context-files nil))
           (setq default-directory root)
           (setq scalpel-story-shell-test-report nil))
-  (:when (cl-letf (((symbol-function 'scalpel-sandbox-run)
-                    (lambda (_command _root _files)
-                      (cons 1
-                            "ls: no-such-file: No such file or directory"))))
-           (setq scalpel-story-shell-test-report
-                 (scalpel-agent-shell "ls no-such-file"
-                                      "show the missing file"))))
+  (:when (setq scalpel-story-shell-test-report
+               (scalpel-agent-shell "ls no-such-file"
+                                    "show the missing file")))
   (:then (should (string-search "Exit: 1"
                                 scalpel-story-shell-test-report)))
   (:then (should (string-search "No such file or directory"
@@ -44,15 +44,15 @@
                   scalpel-agent--context-files nil)))
 
 (ert-gwt-deftest
-  (:given ((root (make-temp-file "scalpel-story-" t))
+  (:given (((symbol-function 'scalpel-sandbox-run)
+            (lambda (command _root _files)
+              (cons 0 (shell-command-to-string command))))
+           (root (make-temp-file "scalpel-story-" t))
            (scalpel-agent--context-files nil))
           (setq default-directory root)
           (setq scalpel-story-shell-test-report nil))
-  (:when (cl-letf (((symbol-function 'scalpel-sandbox-run)
-                    (lambda (command _root _files)
-                      (cons 0 (shell-command-to-string command)))))
-           (setq scalpel-story-shell-test-report
-                 (scalpel-agent-shell "echo hello" "show the greeting"))))
+  (:when (setq scalpel-story-shell-test-report
+               (scalpel-agent-shell "echo hello" "show the greeting")))
   (:then (should (string-search "Shell: echo hello"
                                 scalpel-story-shell-test-report)))
   (:then (should (string-search "Exit: 0"
@@ -82,15 +82,15 @@
                   scalpel-agent--context-files nil)))
 
 (ert-gwt-deftest
-  (:given ((root (make-temp-file "scalpel-story-" t))
+  (:given (((symbol-function 'scalpel-sandbox-run)
+            (lambda (_command _root _files)
+              (cons 0 "ok\0hidden")))
+           (root (make-temp-file "scalpel-story-" t))
            (scalpel-agent--context-files nil))
           (setq default-directory root)
           (setq scalpel-story-shell-test-report nil))
-  (:when (cl-letf (((symbol-function 'scalpel-sandbox-run)
-                    (lambda (_command _root _files)
-                      (cons 0 "ok\0hidden"))))
-           (setq scalpel-story-shell-test-report
-                 (scalpel-agent-shell "cat blob" "read the blob"))))
+  (:when (setq scalpel-story-shell-test-report
+               (scalpel-agent-shell "cat blob" "read the blob")))
   (:then (should (string-search "binary output suppressed"
                                 scalpel-story-shell-test-report)))
   (:then (should (not (string-search "hidden"

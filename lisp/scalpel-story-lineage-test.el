@@ -106,10 +106,13 @@
   (:then (with-current-buffer buffer
            ;; The header lines precede the first block, so locate the
            ;; block boundary by the record text property.
-           (let ((block-pos (next-single-property-change
-                             (point-min) 'scalpel-review-record)))
-             (should block-pos)
-             (should (get-text-property block-pos 'scalpel-review-record)))))
+           (should (next-single-property-change
+                    (point-min) 'scalpel-review-record))))
+  (:then (with-current-buffer buffer
+           (should (get-text-property
+                    (next-single-property-change
+                     (point-min) 'scalpel-review-record)
+                    'scalpel-review-record))))
   (:cleanup (when (buffer-live-p buffer)
               (kill-buffer buffer))
             (scalpel-lineage-reset)))

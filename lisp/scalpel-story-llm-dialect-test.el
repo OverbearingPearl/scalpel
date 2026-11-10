@@ -163,12 +163,12 @@ free-variable warning.")
   (:cleanup (scalpel-story-llm-dialect-test-cleanup)))
 
 (ert-gwt-deftest
-  (:given ((gptel-model nil)))
-  (:when (cl-letf (((symbol-function #'scalpel-llm-dialect--served-model-names)
-                    (lambda () (list "z-ai/glm-5.3-flash"))))
-           (set 'gptel-model "z-ai/glm-5.3-flash")
-           (setq scalpel-story-llm-dialect-test-result
-                 (scalpel-llm-dialect--model-name))))
+  (:given ((gptel-model nil)
+           ((symbol-function #'scalpel-llm-dialect--served-model-names)
+            (lambda () (list "z-ai/glm-5.3-flash"))))
+          (set 'gptel-model "z-ai/glm-5.3-flash"))
+  (:when (setq scalpel-story-llm-dialect-test-result
+               (scalpel-llm-dialect--model-name)))
   (:then (should (equal scalpel-story-llm-dialect-test-result
                         "glm-5.3-flash")))
   (:cleanup (progn

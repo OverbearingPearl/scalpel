@@ -66,7 +66,7 @@ live accounting is never reset."
 
 (defconst scalpel-token--header
   "Scalpel token estimates (4 chars/token ASCII, 1 token/char CJK; not API usage).
-One line per round: time | console | round up/down | sys/ctx/hist/instr prompt makeup | console up/down | ALL up/down.")
+One line per round: time | elapsed | console | round up/down | sys/ctx/hist/instr prompt makeup | console up/down | ALL up/down.")
 (defun scalpel-token--ensure-header ()
   "Ensure the token buffer carries its header text.
 The header is re-created after `scalpel-token-reset' or any external
@@ -86,23 +86,29 @@ initialization."
 (defun scalpel-token--append-line (console up down breakdown)
   "Append one accounting line for CONSOLE to the token buffer.
 UP and DOWN are this round's estimates; BREAKDOWN is a plist with
-:system :context :history :instruction token counts.  The console
-name is never truncated: it is the account key.  The breakdown
-columns are dimmed and the ALL columns bolded, so visual weight
-matches the account hierarchy."
+:system :context :history :instruction token counts and an
+optional :elapsed, the round's duration in seconds; when the key
+is absent the elapsed column shows a dash placeholder.  The
+console name is never truncated: it is the account key.  The
+breakdown columns are dimmed and the ALL columns bolded, so
+visual weight matches the account hierarchy."
   (with-current-buffer (get-buffer-create scalpel-token-buffer-name)
     (scalpel-token--ensure-header)
     ;; The header line above states the heuristic; keep it in sync with
     ;; `scalpel-llm--count-tokens'.
     (let ((inhibit-read-only t)
-          (ctot (scalpel-token--console-totals console)))
+          (ctot (scalpel-token--console-totals console))
+          (elapsed (plist-get breakdown :elapsed)))
       (save-excursion
         (goto-char (point-max))
         (insert
          (format
-          (concat "%s | %s | round %d/%d | %d/%d/%d/%d"
+          (concat "%s | %s | %s | round %d/%d | %d/%d/%d/%d"
                   " | console %d/%d | ALL %d/%d\n")
           (format-time-string "%H:%M:%S")
+          (if (numberp elapsed)
+              (number-to-string (round elapsed))
+            "-")
           console up down
           (plist-get breakdown :system)
           (plist-get breakdown :context)

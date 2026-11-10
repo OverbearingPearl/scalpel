@@ -57,18 +57,16 @@
             (with-temp-file el-file
               (insert original)))
     (:when (let ((buf (find-file-noselect el-file)))
-             (unwind-protect
-                 (with-current-buffer buf
-                   (setq-local scalpel-agent--context-files (list truename))
-                   (setq-local scalpel-agent--context-readonly-files (list truename))
-                   (condition-case err
-                       (scalpel-execute-replace
-                        (point-min) (point-max)
-                        "(defun scalpel-test-replaced ()\n  (* 3 4))\n")
-                     (user-error
-                      (setq scalpel-story-edit-test-replacement
-                            (error-message-string err)))))
-               (kill-buffer buf))
+             (with-current-buffer buf
+               (setq-local scalpel-agent--context-files (list truename))
+               (setq-local scalpel-agent--context-readonly-files (list truename))
+               (condition-case err
+                   (scalpel-execute-replace
+                    (point-min) (point-max)
+                    "(defun scalpel-test-replaced ()\n  (* 3 4))\n")
+                 (user-error
+                  (setq scalpel-story-edit-test-replacement
+                        (error-message-string err)))))
              scalpel-story-edit-test-replacement))
     (:then (should (and (stringp scalpel-story-edit-test-replacement)
                         (string-match-p "read-only"

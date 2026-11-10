@@ -94,6 +94,8 @@ the model for this session or globally."
                               (expand-file-name root))))
       (scalpel-console-open suffix))))
 
+(require 'scalpel-lineage-history)
+
 (defalias 'scalpel-set-backend #'scalpel-llm-select-backend
   "Interactively switch the gptel backend used for future Scalpel requests.")
 

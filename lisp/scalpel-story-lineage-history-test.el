@@ -135,7 +135,10 @@
   (:given ((root (make-temp-file "scalpel-story-lh-" t))
            (fa nil) (fb nil)
            (rec-buf (get-buffer-create " *story-lh-rec*"))
-           (msg nil))
+           (msg nil)
+           ((symbol-function 'message)
+            (lambda (fmt &rest args)
+              (setq msg (apply #'format fmt args)))))
           (setq fa (expand-file-name "a.el" root))
           (setq fb (expand-file-name "b.el" root))
           (with-temp-file fa (insert "old\n"))
@@ -153,10 +156,7 @@
   (:when (with-temp-buffer
            (scalpel-lineage-history--render)
            (goto-char (point-min))
-           (cl-letf (((symbol-function 'message)
-                      (lambda (fmt &rest args)
-                        (setq msg (apply #'format fmt args)))))
-             (scalpel-lineage-history-rollback))))
+           (scalpel-lineage-history-rollback)))
   (:then (should (string=
                   (with-temp-buffer
                     (insert-file-contents fb)

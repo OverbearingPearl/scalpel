@@ -27,6 +27,29 @@
   "A file whose bar-helper sits in a `use-package' :config body.")
 
 (ert-gwt-deftest
+    (:given ((file (make-temp-file "scalpel-story-locate-when" nil ".el"))
+             (_ (with-temp-file file
+                  (insert "(when (require 'windmove nil :noerror)\n"
+                          "  (defun my/smart-window-switch ()\n"
+                          "    \"Switch windows in a smart order.\"\n"
+                          "    nil))\n")))
+             (buffer (find-file-noselect file))
+             (symbols nil)))
+    (:when (setq symbols
+                 (with-current-buffer buffer
+                   (scalpel-locate-elisp-list-symbols file))))
+    (:then (ert-info ("The when guard is not a defining form, so no symbol or placeholder is synthesized from it")
+             (should-not symbols)))
+    (:then (ert-info ("The defun nested inside the when guard is not located")
+             (should-not (member "my/smart-window-switch" symbols))))
+    (:cleanup (when (buffer-live-p buffer)
+                (with-current-buffer buffer
+                  (set-buffer-modified-p nil))
+                (kill-buffer buffer))
+              (when (file-exists-p file)
+                (delete-file file))))
+
+(ert-gwt-deftest
   (:given ((sample scalpel-story-locate-nested-test-sample)
            (file (make-temp-file "scalpel-story-nested-" nil ".el"))
            (_ (with-temp-file file (insert sample)))

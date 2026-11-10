@@ -44,16 +44,19 @@
                                     pos 'scalpel-console-collapsed
                                     nil (point-max))))
                        nil))))
-    (:then (let ((len (length "an unsent instruction"))
-                 (text "an unsent instruction"))
-             (should (equal (char-before (- (point-max) len)) ?\n))
-             (should (equal (buffer-substring-no-properties
-                             (- (point-max) len)
-                             (point-max))
-                            text))
-             (should (not (get-text-property (- (point-max) len 1) 'display)))
-             (should (not (get-text-property (- (point-max) len) 'display)))
-             (should (not (get-text-property (- (point-max) 1) 'display)))))
+    (:then (should (equal (char-before
+                           (- (point-max) (length "an unsent instruction")))
+                          ?\n)))
+    (:then (should (equal (buffer-substring-no-properties
+                           (- (point-max) (length "an unsent instruction"))
+                           (point-max))
+                          "an unsent instruction")))
+    (:then (should (not (get-text-property
+                         (- (point-max) (length "an unsent instruction") 1)
+                         'display))))
+    (:then (should (not (get-text-property
+                         (- (point-max) (length "an unsent instruction"))
+                         'display))))
     (:cleanup (delete-directory root t)))
 
 (ert-gwt-deftest
@@ -86,7 +89,11 @@
   (:cleanup (delete-directory root t)))
 
 (ert-gwt-deftest
-  (:given ((root (make-temp-file "scalpel-story-" t))
+  (:given (((symbol-function 'scalpel-console--run-rounds)
+            (lambda (_instr _history _deep-reasoning)
+              (scalpel-console--append
+               "Here is the answer." 'assistant)))
+           (root (make-temp-file "scalpel-story-" t))
            (scalpel-console-collapse-output t)
            (scalpel-console-trim-consumed-output nil)
            (buf (progn
@@ -97,11 +104,7 @@
             (goto-char (point-max))
             (insert "fix the bug in the parser\n")))
   (:when (with-current-buffer buf
-           (cl-letf (((symbol-function 'scalpel-console--run-rounds)
-                      (lambda (_instr _history _deep-reasoning)
-                        (scalpel-console--append
-                         "Here is the answer." 'assistant))))
-             (scalpel-console-send-line))))
+           (scalpel-console-send-line)))
   (:then (with-current-buffer buf
            (should (not (string-search
                          "Roger. Working"

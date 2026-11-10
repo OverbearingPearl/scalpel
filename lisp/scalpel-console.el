@@ -663,7 +663,7 @@ text."
          (hint (cond
                 ((or (null region)
                      (string-empty-p trimmed))
-                 "Input anything with optional prefix: 1+ of ~!@? + ␣ (~reasoning !shell @search ?consult)")
+                 "Input anything or prefixed by one or more of ~!@? + ␣ (~think !shell @search ?ask)")
                 (combination
                  (concat (funcall symbol-hint (aref text 0))
                          (funcall symbol-hint (aref text 1))))
@@ -2104,6 +2104,8 @@ triggers the reasoning probe and a mid-round probe cannot
 reinstall `:request-params'."
   (setq scalpel-console--round-error nil)
   (let* ((target (scalpel-console--target-buffer))
+         ;; Round start: read at settle for the elapsed column in the token ledger.
+         (round-start (current-time))
          ;; The acknowledgement `send-line' appended exists only for the
          ;; gap before this status line appears: remove it now, so it
          ;; neither lingers in the buffer nor lands in the conversation
@@ -2201,7 +2203,11 @@ reinstall `:request-params'."
                           (buffer-name target)
                           (- scalpel-llm--total-uploaded up0)
                           (- scalpel-llm--total-received down0)
-                          breakdown)
+                          (plist-put (copy-sequence breakdown)
+                                     :elapsed
+                                     (float-time
+                                      (time-subtract (current-time)
+                                                     round-start))))
                        (error
                         (message "Scalpel: token accounting failed: %S" err)))
                      (condition-case err
