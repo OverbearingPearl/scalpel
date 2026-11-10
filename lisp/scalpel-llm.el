@@ -347,14 +347,14 @@ off quickly and diagnosably while normal replies are unaffected."
       (condition-case err
           (progn
             (arm-deadline)
-            ;; Per-request thinking control: when thinking is not
-            ;; allowed on this buffer, install the probed retrieval
-            ;; parameters on the model transiently, just around the
-            ;; gptel-request call, so the request body is built with
-            ;; them but no other console's request can observe the
-            ;; window.  The prior value is stashed on the model and
-            ;; restored immediately after the call below.
-            (unless scalpel-llm-allow-thinking
+            ;; Per-request thinking control: in a deep-reasoning round the
+            ;; model may carry probed thinking-suppression parameters on
+            ;; `:request-params'; strip them just around this
+            ;; gptel-request call, so only this request body is built
+            ;; without suppression and no concurrent request can
+            ;; observe the window.  The prior value is stashed on the
+            ;; model and restored immediately after the call below.
+            (when scalpel-llm-allow-thinking
               (put gptel-model :scalpel-llm--saved-request-params
                    (get gptel-model :request-params))
               (put gptel-model :request-params
@@ -433,7 +433,7 @@ off quickly and diagnosably while normal replies are unaffected."
              ;; install site, since install and restore run back to back
              ;; in the same synchronous path and the buffer-local value
              ;; cannot change in between.
-             (unless scalpel-llm-allow-thinking
+             (when scalpel-llm-allow-thinking
                (put gptel-model :request-params
                     (get gptel-model :scalpel-llm--saved-request-params))
                (put gptel-model :scalpel-llm--saved-request-params nil))
