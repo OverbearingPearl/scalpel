@@ -140,6 +140,22 @@ the streaming hot path; token numbers are unchanged."
       (setq pos (1+ pos)))
     (+ cjk (ceiling (/ (- (length text) cjk) 4.0)))))
 
+(defun scalpel-llm--display-text (obj)
+  "Decode raw bytes in OBJ for human-readable error display.
+
+Strings containing bytes in 0x80-0xFF (raw or unibyte text) are
+decoded as UTF-8 so multi-byte text such as Chinese does not appear
+as backslash octal escapes; other strings are returned unchanged and
+non-string objects fall back to `prin1-to-string'."
+  (cond
+   ((stringp obj)
+    (if (seq-some (lambda (ch) (>= ch #x80)) obj)
+        (condition-case _
+            (decode-coding-string obj 'utf-8)
+          (coding-system-error obj))
+      obj))
+   (t (prin1-to-string obj))))
+
 (defun scalpel-llm--reset-reasoning-buffer (&optional buffer-name)
   "Clear the reasoning buffer for a new request.
 BUFFER-NAME names the buffer to clear, defaulting to
@@ -838,8 +854,7 @@ the regular request path is untouched."
                  (scalpel-llm--probe-send nil)
                (error
                 (message "Scalpel: retrieval probe: baseline request failed: %s"
-                         (decode-coding-string
-                          (prin1-to-string (cdr err)) 'utf-8))
+                         (scalpel-llm--display-text (cdr err)))
                 nil))))
         (when baseline
           (if (scalpel-llm--retrieval-markers-p baseline)
@@ -855,8 +870,7 @@ the regular request path is untouched."
                            (error
                             (message "Scalpel: retrieval probe: candidate %S failed: %s"
                                      candidate
-                                     (decode-coding-string
-                                      (prin1-to-string (cdr err)) 'utf-8))
+                                     (scalpel-llm--display-text (cdr err)))
                             nil))))
                     (cond
                      ((null resp)

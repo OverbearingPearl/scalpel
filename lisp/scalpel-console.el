@@ -2932,7 +2932,9 @@ retry instead of a send refusal."
             (let ((parsed (scalpel-console-parse-prefix instr)))
               (unwind-protect
                   (let ((scalpel-agent--instruction-mode (or (car parsed) :normal))
-                        (deep-reasoning (eq (car parsed) 'no-reasoning)))
+                        (deep-reasoning (and (car parsed)
+                                             (string-suffix-p "no-reasoning"
+                                                              (symbol-name (car parsed))))))
                     (scalpel-console--run-rounds (cdr parsed) history deep-reasoning))
                 (setq scalpel-agent--instruction-mode :normal)))
             (goto-char (point-max))

@@ -99,7 +99,6 @@
                   (list :type 'tool-call
                         :input
                         "junk line\n[[action]]\ntool = 'reply'\n")))))
-  (:then (should (stringp repaired)))
   (:then (should (string-match-p "\\[\\[action\\]\\]" repaired))))
 
 ;; Story J: a no-such-symbol error is repaired by swapping the name.
@@ -112,7 +111,6 @@
                         :message
                         "No such symbol: foo-bar, did you mean: foo-baz"
                         :input "(use foo-bar)")))))
-  (:then (should (stringp repaired)))
   (:then (should (string-match-p "foo-baz" repaired))))
 
 (provide 'scalpel-story-diagnose-advice-test)

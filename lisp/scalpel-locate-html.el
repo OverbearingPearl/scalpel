@@ -259,11 +259,12 @@ Current buffer is the HTML file referenced by FILE."
 
 (defun scalpel-locate-html-list-symbols (_file)
   "Return the id attribute values of all elements in the buffer.
-Script and style bodies are skipped so their raw text is never
-scanned for ids, but the ids of the script or style tags
-themselves are collected, making them locatable definitions.
-For scripts carrying an id, the body is scanned by the JS
-scanner and each JS name is emitted as scriptId.name."
+The bodies of script and style elements are always skipped so
+their raw text is never mistaken for ids, while the ids of the
+script or style tags themselves are still collected, making them
+locatable definitions.  For scripts carrying an id, the JS
+scanner runs over the body and each JS name is emitted as
+scriptId.name; scripts without an id contribute no JS names."
   (save-excursion
     (goto-char (point-min))
     (require 'scalpel-locate-js)
@@ -272,13 +273,14 @@ scanner and each JS name is emitted as scriptId.name."
               scalpel-locate-html--tag-regexp nil t)
         (let* ((tag-beg (match-beginning 0))
                (tag-name (match-string 1))
+               (tag-type (downcase tag-name))
                (id (scalpel-locate-html--tag-id tag-beg)))
-          (if (member (downcase tag-name) '("script" "style"))
+          (if (member tag-type '("script" "style"))
               (progn
                 (when id (push id ids))
-                (when (and id (string= (downcase tag-name) "script"))
-                  (let ((body-beg (point)))
-                    (scalpel-locate-html--skip-raw-text tag-name)
+                (let ((body-beg (point)))
+                  (scalpel-locate-html--skip-raw-text tag-name)
+                  (when (and id (string= tag-type "script"))
                     (let* ((body-end (point))
                            (body-text (and (> body-end body-beg)
                                            (buffer-substring
@@ -286,11 +288,9 @@ scanner and each JS name is emitted as scriptId.name."
                       (when body-text
                         (with-temp-buffer
                           (insert body-text)
-                          (dolist (name (car (scalpel-locate-js--scan-region
+                          (dolist (name (car (scalpel-locate-js-scan-region
                                               (point-min) (point-max))))
-                            (push (concat id "." name) ids)))))))
-                (unless (string= (downcase tag-name) "script")
-                  (scalpel-locate-html--skip-raw-text tag-name)))
+                            (push (concat id "." name) ids))))))))
             (when id (push id ids)))))
       (nreverse ids))))
 

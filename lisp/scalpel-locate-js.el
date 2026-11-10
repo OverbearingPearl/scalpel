@@ -195,6 +195,14 @@ whose cadr is non-nil when all brackets balance."
         (list (nreverse names)
               (and balanced (= curly 0) (= round 0) (= bracket 0)))))))
 
+(defun scalpel-locate-js-scan-region (beg end)
+  "Scan BEG..END for JS declarations via `scalpel-locate-js--scan-region'.
+Public entry point for same-package callers such as the HTML
+locator, so they need not reference the internal
+`scalpel-locate-js--scan-region' or `scalpel-locate-js--decl-regexp'
+directly."
+  (scalpel-locate-js--scan-region beg end))
+
 (defun scalpel-locate-js-list-symbols (_file)
   "Return top level declaration names of the current JS buffer."
   (car (scalpel-locate-js--scan-region (point-min) (point-max))))

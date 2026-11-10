@@ -29,7 +29,7 @@
            (setq names
                  (scalpel-locate-elisp-ert-gwt--names
                   scalpel-story-locate-ert-gwt-test--file))))
-  (:then (should (equal names (list "ert-gwt-deftest-69ca97a0"))))
+  (:then (should (equal names (list (concat (file-name-base scalpel-story-locate-ert-gwt-test--file) "-69ca97a0")))))
   (:cleanup (when (and scalpel-story-locate-ert-gwt-test--file
                        (file-exists-p
                         scalpel-story-locate-ert-gwt-test--file))
@@ -69,8 +69,8 @@
                  (scalpel-locate-elisp-ert-gwt--names
                   scalpel-story-locate-ert-gwt-test--file))))
   (:then (should (equal names
-                        (list "ert-gwt-deftest-69ca97a0"
-                              "ert-gwt-deftest-69ca97a0-2"))))
+                        (list (concat (file-name-base scalpel-story-locate-ert-gwt-test--file) "-69ca97a0")
+                              (concat (file-name-base scalpel-story-locate-ert-gwt-test--file) "-69ca97a0-2")))))
   (:cleanup (when (and scalpel-story-locate-ert-gwt-test--file
                        (file-exists-p
                         scalpel-story-locate-ert-gwt-test--file))

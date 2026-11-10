@@ -286,7 +286,7 @@ Applies `scalpel-redact-apply' before returning."
                       (rx (or "<invoke>" "</invoke>" ""))
                       "" input t t))
              (lines (split-string no-xml "\n" t)))
-        (while (and lines (not (string-match-p "^\\[\\[" (car lines))))
+        (while (and lines (not (string-match-p "\\`\\s-*\\[\\[" (car lines))))
           (setq lines (cdr lines)))
         (while (and lines
                     (string-match-p fence-close-rx (car (last lines))))
@@ -294,7 +294,7 @@ Applies `scalpel-redact-apply' before returning."
         (setq content (mapconcat #'identity lines "\n"))))
      ((eq type 'parse)
       (let* ((lines (split-string input "\n")))
-        (while (and lines (not (string-match-p "^\\[\\[" (car lines))))
+        (while (and lines (not (string-match-p "\\`\\s-*\\[\\[" (car lines))))
           (setq lines (cdr lines)))
         (while (and lines
                     (string-match-p (rx bol (0+ blank) "]]" (0+ blank) eol)
@@ -410,38 +410,191 @@ Applies `scalpel-redact-apply' before returning."
           (delete-file file)))
     (error nil)))
 
+(defun scalpel-diagnose-advice--validate-repair-text (text)
+  "Validate candidate repair document TEXT as a complete Scalpel action document.
+Parse TEXT as a whole TOML document; accept it only when the parse
+succeeds and the parsed top-level table carries a \"tool\" key, which
+distinguishes a complete action document from a fragment containing
+prose between tables.  Return TEXT on success, nil on any parse
+failure or missing \"tool\" key."
+  (condition-case nil
+      (let ((parsed (scalpel-diagnose-advice--toml-parse text)))
+        (when parsed
+          (let ((has-tool-p
+                 (cond
+                  ((hash-table-p parsed) (gethash "tool" parsed))
+                  ((listp parsed) (assoc "tool" parsed)))))
+            (when has-tool-p text))))
+    (error nil)))
+
+(defun scalpel-diagnose-advice--valid-repair-p (text)
+  "Validity gate for mechanically repaired suggestion bodies.
+Return non-nil when TEXT parses as TOML as a whole, carries at
+least one action table or tool key, and contains no duplicated
+tool plus symbol pair across action tables, so that a repair
+offering two conflicting versions of one edit, or interleaving
+prose with tables, is rejected instead of suggested."
+  (let ((parsed t)
+        (has-action nil)
+        (seen (make-hash-table :test #'equal)))
+    ;; Whole-text TOML gate: prose interleaved with tables, stray
+    ;; headings or truncation makes the parse fail, rejecting the body.
+    (condition-case nil
+        (scalpel-diagnose-advice--toml-parse text)
+      (error (setq parsed nil)))
+    (when parsed
+      (catch 'invalid
+        (let ((table nil)
+              (tool nil)
+              (sym nil)
+              ;; Strip one leading and trailing quote of either kind;
+              ;; an unquoted value passes through unchanged.
+              (unquote
+               (lambda (s)
+                 (if (and (>= (length s) 2)
+                          (member (aref s 0) '(?\" ?\'))
+                          (eq (aref s 0) (aref s (1- (length s)))))
+                     (substring s 1 (1- (length s)))
+                   s)))
+              ;; On leaving a table, register its tool + symbol pair;
+              ;; a second table offering the same pair means the repair
+              ;; carries two conflicting versions of one edit.
+              (close-table
+               (lambda (cur-tool cur-sym)
+                 (when (and cur-tool cur-sym)
+                   (let ((key (concat cur-tool "\0" cur-sym)))
+                     (if (gethash key seen)
+                         (throw 'invalid nil)
+                       (puthash key t seen)))))))
+          (dolist (line (split-string text "\n"))
+            (cond
+             ;; blank line or comment
+             ((string-match "\\`\\s-*\\(?:#[^\n]*\\)?\\'" line))
+             ;; array-of-tables header
+             ((string-match "\\`\\s-*\\[\\[\\([^]\n]+\\)\\]\\]\\s-*\\'" line)
+              (funcall close-table tool sym)
+              (setq tool nil sym nil)
+              (setq table (match-string 1 line))
+              (when (string-match "action" table)
+                (setq has-action t)))
+             ;; plain table header
+             ((string-match "\\`\\s-*\\[\\([^]\n]+\\)\\]\\s-*\\'" line)
+              (funcall close-table tool sym)
+              (setq tool nil sym nil)
+              (setq table (match-string 1 line)))
+             ;; key = value assignment
+             ((string-match "\\`\\s-*\\([A-Za-z0-9_.\"'-]+\\)\\s*=\\(.+\\)\\'" line)
+              (let* ((key (funcall unquote (match-string 1 line)))
+                     (val (match-string 2 line)))
+                (when (string-match "\\`\\s-*\\(\\S-\\(?:.*\\S-\\)?\\)\\s-*\\'" val)
+                  (setq val (match-string 1 val)))
+                (setq val (funcall unquote val))
+                (cond
+                 ((string= key "tool")
+                  (setq tool val)
+                  (setq has-action t))
+                 ((string= key "symbol")
+                  (setq sym val)))))
+             ;; anything else is prose the TOML gate failed to reject;
+             ;; stay conservative and reject the body here as well
+             (t (throw 'invalid nil))))
+          (funcall close-table tool sym)
+          (setq tool nil sym nil)
+          has-action)))))
+
 (defun scalpel-diagnose-advice--curly-quote-candidate (input)
-  "Return INPUT with curly quotes normalized to ASCII quotes.
-Return nil when the original text already parses, when the normalized
-text does not parse, or when the normalized text is not a Scalpel
-action document."
-  (when (stringp input)
-    (let ((candidate
-           (replace-regexp-in-string
-            "[‘’“”]"
-            (lambda (match)
-              (let ((ch (aref match 0)))
-                (char-to-string
-                 (if (or (= ch #x201c) (= ch #x201d)) 34 39))))
-            input t t)))
-      (when (and (not (string-equal candidate input))
-                 (null (scalpel-diagnose-advice--toml-parse input))
-                 (let ((parsed
-                        (scalpel-diagnose-advice--toml-parse candidate)))
-                   (and parsed
-                        (or (assoc "tool" parsed)
-                            (assoc "action" parsed)))))
-        candidate))))
+  "Judge INPUT as a whole repaired Scalpel action document, not by segments.
+
+A candidate is accepted only when three gate conditions hold:
+1. The candidate parses as TOML as a whole document.
+2. Every action table carries a tool key.
+3. No two action tables share the same tool and symbol pair, since a
+   duplicate pair is the signature of conflicting half-edits offered
+   verbatim.
+
+Returns the parsed candidate (plist form) on success, or nil when the
+candidate fails any gate.  Returns the symbol `unparseable' when the
+candidate does not even parse as TOML, so callers can distinguish
+structural failure from semantic rejection."
+  (catch 'gate
+    (let (parsed)
+      ;; Gate 1: the candidate must parse as TOML as a whole.  Parsing
+      ;; per-segment and stitching results would hide conflicting
+      ;; half-edits, so the full text goes through one parse attempt.
+      (condition-case _
+          (setq parsed (if (fboundp 'tomelr-read)
+                           (tomelr-read input)
+                         (error "No TOML parser available")))
+        (error (throw 'gate 'unparseable)))
+      (unless (listp parsed)
+        (throw 'gate 'unparseable))
+      (let ((seen (make-hash-table :test 'equal))
+            (action-count 0))
+        (dolist (table parsed)
+          (when (and (listp table)
+                     ;; Only tables that look like action tables are
+                     ;; subject to the action gates.
+                     (or (plist-member table :tool)
+                         (plist-member table :symbol)
+                         (assoc "tool" (cdr (assq nil table)))))
+            (cl-incf action-count)
+            ;; Gate 2: every action table must carry a tool key.
+            (unless (or (plist-get table :tool)
+                        (cdr (assoc "tool" table)))
+              (throw 'gate nil))
+            (let* ((tool (or (plist-get table :tool)
+                             (cdr (assoc "tool" table))))
+                   (symbol (or (plist-get table :symbol)
+                               (cdr (assoc "symbol" table))))
+                   (key (cons tool symbol)))
+              ;; Gate 3: no duplicate tool+symbol pair.
+              (when (gethash key seen)
+                (throw 'gate nil))
+              (puthash key t seen))))
+        ;; A document with no action tables at all is not a complete
+        ;; Scalpel action document.
+        (if (zerop action-count)
+            nil
+          parsed)))))
 
 (defun scalpel-diagnose-advice--mechanical-repair-curly (ORIG error-plist)
   "Add a curly-quote mechanical repair around ORIG.
-Parse errors described by ERROR-PLIST are eligible.  Keep the
-original repair when it already produces a suggestion.  A
-suggestion is produced only when the normalized text parses as a
-Scalpel action document."
-  (let ((result (funcall ORIG error-plist)))
-    (or result
-        (when (eq (plist-get error-plist :type) 'parse)
+Parse errors described by ERROR-PLIST are eligible.  ORIG may
+return the full fenced suggestion string (header line, body,
+\"@scalpel@ end of suggestion\" trailer); validation targets the
+fenced body text extracted from that string, not the fenced
+string itself.  For parse and prose errors the extracted body
+must validate as a complete Scalpel action document for the
+original repair to be kept; for other error types (e.g.
+tool-call, no-such-symbol) the body is the repaired original
+input text, which is not itself a Scalpel action document, so
+ORIG's non-nil string result is passed through unchanged.  When
+the original repair is dropped or ORIG returns nil, a
+curly-quote fallback suggestion is produced only for parse
+errors whose normalized text parses as a Scalpel action
+document."
+  (let* ((result (funcall ORIG error-plist))
+         (body
+          (when (stringp result)
+            (save-match-data
+              (if (string-match
+                   (rx string-start
+                       "@scalpel@ suggestion"
+                       (zero-or-more (not (in "\n"))) "\n"
+                       (group-n 1 (*? anychar))
+                       "\n@scalpel@ end of suggestion"
+                       string-end)
+                   result)
+                  (match-string 1 result)
+                result))))
+         (type (plist-get error-plist :type))
+         (validate-p (memq type '(parse prose))))
+    (or (and (stringp result)
+             (or (not validate-p)
+                 (and body
+                      (scalpel-diagnose-advice--valid-repair-p body)))
+             result)
+        (when (eq type 'parse)
           (let ((candidate
                  (scalpel-diagnose-advice--curly-quote-candidate
                   (plist-get error-plist :input))))

@@ -33,19 +33,22 @@
   "Return, in source order, the ert-gwt test names defined in FILE.
 Read FILE into a temp buffer and walk its top-level forms with
 `read'; for each (`ert-gwt-deftest' ...) call pass the clause list
-\(cdr form) to `ert-gwt-name-from-clauses' with the fixed prefix
-\"ert-gwt-deftest\" and a single hash table (with `equal' key
-comparison, since keys are clause list objects that only `equal'
-can match) shared by all forms of the file, so the naming
-rule—including the suffix numbering for duplicated blocks, which
-is incremented across the whole file—is applied by the single
-documented source of truth that ert-gwt exposes for external
-tools like this locator.  The prefix does not depend on FILE, so
-generated names are determined solely by clause content and stay
-deterministic regardless of the file's own name.  No evaluation,
-no loading, and no session state is touched.  Return nil when
-FILE is nil, the file contains no `ert-gwt-deftest' call, or
-ert-gwt is not loaded in this Emacs."
+\(cdr form) to `ert-gwt-name-from-clauses' with the prefix
+\(file-name-base FILE), matching the runtime prefix the ert-gwt
+macro derives from `load-file-name' at expansion time, and a
+single hash table (with `equal' key comparison, since keys are
+clause list objects that only `equal' can match) shared by all
+forms of the file, so the naming rule—including the suffix
+numbering for duplicated blocks, which is incremented across the
+whole file—is applied by the single documented source of truth
+that ert-gwt exposes for external tools like this locator.  The
+prefix follows the same rule as the runtime expansion—the base
+name of the defining file—so generated names are determined by
+clause content and the file's base name and stay deterministic
+for any given FILE.  No evaluation, no loading, and no session
+state is touched.  Return nil when FILE is nil, the file contains
+no `ert-gwt-deftest' call, or ert-gwt is not loaded in this
+Emacs."
   (when (and file
              (file-readable-p file)
              (fboundp 'ert-gwt-name-from-clauses))
@@ -60,7 +63,7 @@ ert-gwt is not loaded in this Emacs."
                 (when (and (consp form)
                            (eq (car form) 'ert-gwt-deftest))
                   (push (ert-gwt-name-from-clauses
-                         "ert-gwt-deftest"
+                         (file-name-base file)
                          (cdr form)
                          seen)
                         names))))

@@ -38,9 +38,9 @@
     (:when (setq symbols
                  (with-current-buffer buffer
                    (scalpel-locate-elisp-list-symbols file))))
-    (:then (ert-info ("The when guard is not a defining form, so no symbol or placeholder is synthesized from it")
-             (should-not symbols)))
-    (:then (ert-info ("The defun nested inside the when guard is not located")
+    (:then (ert-info ("A defun under a when wrapper is listed as the synthesized container name when-1")
+             (should (member "when-1" symbols))))
+    (:then (ert-info ("The nested defun is not listed; the whole when block is the addressable unit")
              (should-not (member "my/smart-window-switch" symbols))))
     (:cleanup (when (buffer-live-p buffer)
                 (with-current-buffer buffer

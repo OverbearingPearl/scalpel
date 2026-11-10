@@ -1499,9 +1499,10 @@ SYMBOL may be a string or a symbol.
 Return a hint line beginning with a newline and two spaces when
 SYMBOL is found inside such a hosting block: it names the block,
 states that the locator cannot address it individually, and offers
-two ways out -- edit the form as a whole, or hoist the definition to
-the file's top level.  Return nil when FILE is not an Elisp file,
-when no hosting block is found, or when anything signals (degradation
+two ways out -- edit the block as a whole under its synthesized
+container name (e.g. when-1), or hoist the definition to the file's
+top level.  Return nil when FILE is not an Elisp file, when no
+hosting block is found, or when anything signals (degradation
 point: any error is swallowed and reported as nil).  A nil return
 means \"nothing to add\", not that SYMBOL is absent from FILE."
   (when (and (stringp file)
@@ -1511,8 +1512,8 @@ means \"nothing to add\", not that SYMBOL is absent from FILE."
                (with-current-buffer (find-file-noselect file)
                  (scalpel-locate-elisp--nested-definition-block symbol))))
           (when block-name
-            (format "\n  %s is written inside `%s', a block-granularity top-level form the locator cannot address individually; edit that form as a whole, or hoist the definition to the file's top level."
-                    symbol block-name)))
+            (format "\n  %s is written inside `%s', a block-granularity top-level form the locator cannot address individually; edit that block as a whole under its synthesized name `%s', or hoist the definition to the file's top level."
+                    symbol block-name block-name)))
       (error nil))))
 
 (defun scalpel-agent--resolve-symbol (file symbol)

@@ -87,6 +87,8 @@ rules out both, whatever `regexp-opt' emits inside.")
           "\\([^ \t\n()]+\\)")
   "Regex matching a top-level Emacs Lisp definer and capturing its name.")
 
+(require 'cl-lib)
+
 (defvar scalpel-locate-elisp--anonymous-definer-registry
   '()
   "Alist mapping definer symbols to locator functions for anonymous definitions.
@@ -108,20 +110,72 @@ sorted by filename and have already registered entries; re-evaluation
 by `defconst' would wipe those registrations.")
 
 (defun scalpel-locate-elisp-register-anonymous-definer (symbol function)
-  "Register SYMBOL as an anonymous definer whose names FUNCTION supplies.
+  "Register FUNCTION as the anonymous definer for SYMBOL.
 
-FUNCTION is called with the file path and must return, in call
-order, the definition names the calls of SYMBOL in that file
-generate at macro-expansion time.  Re-registering a symbol
-replaces its function.  Registration belongs to the package that
-defines the macro, because only it knows how the names come
-about.  Returns nil."
+FUNCTION receives the file path as its single argument and returns
+the definition names it produces, in expansion order.  Registering
+SYMBOL again replaces the previous entry.  Returns nil."
   (setq scalpel-locate-elisp--anonymous-definer-registry
-        (assq-delete-all
-         symbol scalpel-locate-elisp--anonymous-definer-registry))
-  (push (cons symbol function)
-        scalpel-locate-elisp--anonymous-definer-registry)
+        (assq-delete-all symbol scalpel-locate-elisp--anonymous-definer-registry))
+  (push (cons symbol function) scalpel-locate-elisp--anonymous-definer-registry)
   nil)
+
+(defun scalpel-locate-elisp--tree-member-predicate (form)
+  "Return non-nil when FORM's tree has an anonymous definer call."
+  (let (found)
+    (cl-labels ((walk (node)
+                  (cond
+                   ((consp node)
+                    (walk (car node))
+                    (walk (cdr node)))
+                   ((and (symbolp node)
+                         (string-match-p
+                          (rx (or "deftest" "definer") symbol-end)
+                          (symbol-name node)))
+                    (setq found t)))))
+      (walk form)
+      found)))
+
+(defconst scalpel-locate-elisp-whole-block-container-heads
+  '(when unless progn with-eval-after-load eval-after-load)
+  "Guard-style container heads eligible for whole-block addressing in Elisp.
+A container counts only when its tree holds any definer call
+\(see `tree-holds-any-definer-call'), so a bare guard clause or a lone
+check never contributes to the block count and is therefore never
+miscounted as a whole-block target.")
+
+(defun scalpel-locate-elisp-whole-block-container-names (file)
+  "Return anonymous definer names for top-level containers in FILE.
+
+A top-level form whose head is a member of
+`scalpel-locate-elisp-whole-block-container-heads' and whose tree
+holds at least one definer call (per
+`scalpel-locate-elisp--tree-holds-any-definer-call', which skips
+quoted data and hash tables) is counted under its head.  Each
+eligible form yields a name \"<head>-N\" where N is the 1-based
+ordinal of that head among eligible forms, in source order.  If FILE
+is unreadable or a form fails to read, return the names collected so
+far instead of raising (explicit degradation point: partial index is
+preferred over losing the whole file)."
+  (let ((counts (mapcar (lambda (h) (cons h 0))
+                        scalpel-locate-elisp-whole-block-container-heads))
+        (names '()))
+    (condition-case err
+        (with-temp-buffer
+          (insert-file-contents file)
+          (let ((form nil))
+            (while (setq form (ignore-error end-of-file (read (current-buffer))))
+              (when (and (consp form)
+                         (symbolp (car form))
+                         (assq (car form) counts)
+                         (scalpel-locate-elisp--tree-holds-any-definer-call form))
+                (let ((entry (assq (car form) counts)))
+                  (setcdr entry (1+ (cdr entry)))
+                  (push (format "%s-%d" (car entry) (cdr entry)) names))))))
+      ;; Degradation: unreadable file or mid-file read error yields truncated list.
+      ((file-error invalid-read-syntax invalid-read-function)
+       (message "scalpel-locate: truncated container scan of %s: %s" file err)))
+    (nreverse names)))
 
 (defun scalpel-locate-elisp--top-definition-range (symbol)
   "Return (BEG . END) of top-level form named SYMBOL in current buffer.
@@ -139,42 +193,56 @@ Return nil when SYMBOL is absent."
           (cons beg (point)))))))
 
 (defun scalpel-locate-elisp--top-definition-anonymous-range (symbol file)
-  "Locate the range of the anonymous top-level definition of SYMBOL.
-Walk the anonymous definer registry: for the first entry whose
-function, called with FILE, returns a name list containing SYMBOL,
-compute SYMBOL's index in that list, then scan the current buffer's
-top-level forms with `read'.  Return (BEG . END) of the definer call
-whose occurrence index matches, where BEG is the form start after
-leading whitespace and END is point after `read' consumed the form.
-Return nil when no registered definer accounts for SYMBOL or when the
-walk ends early on a read error."
-  (let ((target nil))
-    (dolist (entry scalpel-locate-elisp--anonymous-definer-registry)
-      (unless target
-        (let ((names (funcall (cdr entry) file)))
-          (when (member symbol names)
-            (setq target (cons (car entry)
-                               (- (length names)
-                                  (length (member symbol names)))))))))
-    (when target
-      (let ((definer (car target))
-            (index (cdr target))
-            (seen 0))
-        (save-excursion
-          (save-restriction
-            (widen)
-            (goto-char (point-min))
-            (condition-case nil
-                (catch 'done
+  "Resolve SYMBOL as a HEAD-N anonymous container index in FILE.
+SYMBOL must take the HEAD-N form (e.g. `when-1`): HEAD has to be a
+member of `scalpel-locate-elisp-whole-block-container-heads' and N
+has to be non-zero.  Top level forms are replayed in the buffer in
+the same synthesis order that produced `whole-block-container-names';
+a form counts when its head equals HEAD and its tree contains a call
+to one of the definer symbols in
+`scalpel-locate-elisp--defining-forms'.  Returns \(BEG . END) of the
+Nth counted form, or nil when HEAD/N fail the checks, reading hits an
+error, or fewer than N forms match."
+  (let ((parsed
+         (and (stringp symbol)
+              (string-match "\\`\\([a-z][a-z0-9-]*\\)-\\([1-9][0-9]*\\)\\'" symbol)
+              (cons (intern (match-string 1 symbol))
+                    (string-to-number (match-string 2 symbol))))))
+    (when (and parsed
+               (memq (car parsed) scalpel-locate-elisp-whole-block-container-heads)
+               (> (cdr parsed) 0))
+      (let ((head (car parsed))
+            (index (cdr parsed)))
+        (with-current-buffer (find-file-noselect file)
+          (save-excursion
+            (save-restriction
+              (widen)
+              (goto-char (point-min))
+              (forward-comment (buffer-size))
+              (catch 'done
+                (let ((count 0))
                   (while t
-                    (forward-comment (buffer-size))
-                    (let ((beg (point))
-                          (form (read (current-buffer))))
-                      (when (and (consp form) (eq (car form) definer))
-                        (if (eq seen index)
-                            (throw 'done (cons beg (point)))
-                          (setq seen (1+ seen)))))))
-              (error nil))))))))
+                    (let* ((beg (point))
+                           (form (condition-case nil
+                                     (read (current-buffer))
+                                   (error (throw 'done nil))))
+                           (end (point)))
+                      (when (and (consp form)
+                                 (eq (car form) head)
+                                 (cl-labels ((has-definer-call-p (tree)
+                                              (cond
+                                               ((atom tree) nil)
+                                               ((and (symbolp (car tree))
+                                                     (memq (car tree)
+                                                           scalpel-locate-elisp--defining-forms))
+                                                t)
+                                               (t (or (has-definer-call-p (car tree))
+                                                      (cl-some #'has-definer-call-p
+                                                               (cdr tree)))))))
+                                   (has-definer-call-p form)))
+                        (setq count (1+ count))
+                        (when (= count index)
+                          (throw 'done (cons beg end)))))))))))))))
 
 (defun scalpel-locate-elisp--tree-holds-definer-call (tree symbol)
   "Return t if TREE hold a defining call for SYMBOL, nil otherwise.
@@ -203,6 +271,21 @@ three."
    ((eq (car tree) 'quote) nil)
    (t (or (scalpel-locate-elisp--tree-holds-definer-call (car tree) symbol)
           (scalpel-locate-elisp--tree-holds-definer-call (cdr tree) symbol)))))
+
+(defun scalpel-locate-elisp--tree-holds-any-definer-call (tree)
+  "Non-nil when TREE has a subform whose car names one of the defining forms.
+The walk stops at quoted data: inside a
+quote the subforms are literal data, not code to be loaded, so a
+`car' hit there would be a false positive.  Reader output (hash
+tables, #s forms) is likewise skipped, because its contents never
+come back as forms to evaluate and scanning them would attribute
+definitions to positions the reader produced rather than the
+source wrote."
+  (when (consp tree)
+    (or (and (memq (car tree) scalpel-locate-elisp--defining-forms) tree)
+        (unless (memq (car tree) '(quote function))
+          (or (scalpel-locate-elisp--tree-holds-any-definer-call (car tree))
+              (scalpel-locate-elisp--tree-holds-any-definer-call (cdr tree)))))))
 
 (defun scalpel-locate-elisp--nested-definition-block (symbol)
   "Report the block carrying a nested definition of SYMBOL.
@@ -269,9 +352,50 @@ have a second element."
   "Return byte range of SYMBOL definition as (BEG . END) in current buffer.
 Current buffer is the Emacs Lisp file referenced by FILE.  A
 symbol the literal search cannot find may still be generated by a
-registered anonymous definer; that case is tried as a fallback."
+registered anonymous definer; that case is tried as a fallback
+via the anonymous definer registry, after the HEAD-N anonymous
+container lookup."
   (or (scalpel-locate-elisp--top-definition-range symbol)
-      (scalpel-locate-elisp--top-definition-anonymous-range symbol file)))
+      (scalpel-locate-elisp--top-definition-anonymous-range symbol file)
+      (scalpel-locate-elisp-anonymous-definer-range file symbol)))
+
+(defun scalpel-locate-elisp-anonymous-definer-range (file symbol)
+  "Return the byte range of the definer-headed top-level form in FILE.
+SYMBOL names the definition; return nil when there is none.
+`scalpel-locate-elisp--anonymous-definer-registry' maps each definer
+symbol to a locator function taking FILE and returning the names it
+generates in order; the 1-based ordinal of SYMBOL within that list
+selects which definer-headed top-level form of FILE is reported.
+Symbols outside every registered name list yield nil, as does a FILE
+whose definer-headed forms are fewer than the required ordinal."
+  (catch 'found
+    (dolist (entry scalpel-locate-elisp--anonymous-definer-registry)
+      (let* ((definer (car entry))
+             (names (condition-case nil
+                        (funcall (cdr entry) file)
+                      (error nil)))
+             (k nil)
+             (i 0))
+        (dolist (name names)
+          (setq i (1+ i))
+          (when (and (null k) (string= name symbol))
+            (setq k i)))
+        (when k
+          (with-temp-buffer
+            (insert-file-contents file)
+            (goto-char (point-min))
+            (let ((seen 0))
+              (while (and (< seen k) (not (eobp)))
+                (forward-comment (point-max))
+                (condition-case nil
+                    (let ((beg (point))
+                          (form (read (current-buffer))))
+                      (when (eq (car-safe form) definer)
+                        (setq seen (1+ seen))
+                        (when (= seen k)
+                          (throw 'found (cons beg (point))))))
+                  (end-of-file nil)
+                  (invalid-read-syntax nil))))))))))
 
 (defun scalpel-locate-elisp--single-definition-p (text)
   "Return non-nil when TEXT is one or more complete defining forms.
@@ -402,14 +526,17 @@ Literal names come from `scalpel-locate-elisp--def-name-regex'.
 Names a registered anonymous definer generates are asked from its
 registry function and merged in, so macros whose definitions carry
 no source-level name still answer when the file has been loaded.
-Independently of the registry, a load-free source-level fallback
-walks the top-level forms of the buffer one at a time: any form
-whose head is a member of `scalpel-locate-elisp--defining-forms'
-but whose second element is a list rather than a symbol or string
-\(e.g. an `ert-gwt-deftest' call like (ert-gwt-deftest (:given ...)
-...) whose clauses follow the head directly) carries no name in
-the usual place and counts as an anonymous use.  For definers that
-have a registered anonymous-definer function (assq hit in
+Whole-block container names (when-1 style, per
+`scalpel-locate-elisp-whole-block-container-names') are merged in
+as well.  Independently of the registry, a load-free source-level
+fallback walks the top-level forms of the buffer one at a time:
+any form whose head is a member of
+`scalpel-locate-elisp--defining-forms' but whose second element is
+a list rather than a symbol or string \(e.g. an `ert-gwt-deftest'
+call like (ert-gwt-deftest (:given ...) ...) whose clauses follow
+the head directly) carries no name in the usual place and counts
+as an anonymous use.  For definers that have a registered
+anonymous-definer function (assq hit in
 `scalpel-locate-elisp--anonymous-definer-registry') the fallback
 synthesizes nothing: the real hash names come from the registry
 alone, avoiding duplicate placeholder names.  Only unregistered
@@ -436,6 +563,16 @@ unchanged."
         (when names
           (dolist (name names)
             (push name syms)))))
+    ;; Whole-block container names merged in; a failure there
+    ;; degrades to no container names rather than aborting the
+    ;; listing (non-critical path, explicit degradation point).
+    (let ((names (condition-case nil
+                     (scalpel-locate-elisp-whole-block-container-names file)
+                   (file-error nil)
+                   (invalid-read-syntax nil))))
+      (when names
+        (dolist (name names)
+          (push name syms))))
     ;; Source-level fallback needing no registration: walk the
     ;; top-level forms and synthesize placeholder names for
     ;; anonymous defining calls of unregistered definers only.

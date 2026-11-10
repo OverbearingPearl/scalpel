@@ -22,6 +22,32 @@
 (ert-gwt-deftest
     (:given ((root (make-temp-file "scalpel-story-console-test-" t))
              (scalpel-console-collapse-output t)
+             (scalpel-console-trim-consumed-output nil)
+             ((symbol-function 'scalpel-console--run-rounds)
+              (lambda (_instr _history deep-reasoning)
+                (setq scalpel-story-console-test-captured-regions
+                      deep-reasoning)))
+             (buffer (progn
+                       (let ((default-directory root))
+                         (scalpel-console-open))
+                       (scalpel-console--target-buffer))))
+            (with-current-buffer buffer
+              (scalpel-console--append "Seed output." 'assistant)))
+    (:when (with-current-buffer buffer
+             (goto-char (point-max))
+             (insert "~? summarize the captured regions\n")
+             (scalpel-console-send-line)))
+    (:then (ert-info ("prefix \"~?\" enters deep reasoning like bare \"~\"")
+             (should (eq scalpel-story-console-test-captured-regions t))))
+    (:cleanup (progn
+                (when (buffer-live-p buffer)
+                  (let (kill-buffer-query-functions)
+                    (kill-buffer buffer)))
+                (delete-directory root t))))
+
+(ert-gwt-deftest
+    (:given ((root (make-temp-file "scalpel-story-console-test-" t))
+             (scalpel-console-collapse-output t)
              (scalpel-console-trim-consumed-output nil))
             (let ((default-directory root))
               (scalpel-console-open))
