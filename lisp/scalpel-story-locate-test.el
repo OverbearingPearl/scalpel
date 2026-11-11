@@ -47,14 +47,13 @@
   (:then (should (string-search "no form validator" result))))
 
 (ert-gwt-deftest
-  (:given ((result nil) (file nil)))
-  (:when (progn
-           (setq file (make-temp-file "scalpel-story-locate" nil ".el"))
-           (with-temp-file file (insert "(defun a ())\n"))
-           (setq result
-                 (condition-case err
-                     (progn (scalpel-locate-range file "zzz") nil)
-                   (user-error (error-message-string err))))))
+  (:given ((result nil) (file nil))
+          (setq file (make-temp-file "scalpel-story-locate" nil ".el"))
+          (with-temp-file file (insert "(defun a ())\n")))
+  (:when (setq result
+               (condition-case err
+                   (progn (scalpel-locate-range file "zzz") nil)
+                 (user-error (error-message-string err)))))
   (:then (should (string-search "not found" result))))
 
 (provide 'scalpel-story-locate-test)

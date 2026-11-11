@@ -249,8 +249,7 @@
   (:cleanup (delete-directory root t)))
 
 (ert-gwt-deftest
-  (:given "the console keymap bindings are installed"
-          (should (keymapp scalpel-console-mode-map)))
+  (:given "the console keymap bindings are installed")
   (:when (lookup-key scalpel-console-mode-map (kbd "C-c C-a")))
   (:then (should (eq (lookup-key scalpel-console-mode-map (kbd "C-c C-a"))
                        #'scalpel-console-add-file)))

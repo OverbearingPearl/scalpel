@@ -194,6 +194,100 @@ new chunks."
           (goto-char (point-max))
           (insert chunk))))))
 
+(progn
+  (defconst scalpel-llm--freeze-log-file
+    (expand-file-name "scalpel-freeze.log" user-emacs-directory)
+    "Persistent timeline log file used to diagnose Emacs freezes.
+Each observation point appends one line immediately, so the file
+survives a hard kill and reveals where the process hung.")
+
+  (defun scalpel-llm--freeze-log (fmt &rest args)
+    "Append one timestamped line to `scalpel-llm--freeze-log-file'.
+FMT and ARGS follow `format'.  Every write goes to disk
+immediately so the timeline survives a freeze or hard kill.
+Degradation point: all errors are ignored on purpose -- logging
+must never affect the request path."
+    (condition-case nil
+        (with-temp-buffer
+          (insert (format-time-string "%Y-%m-%dT%H:%M:%S.%3NZ"
+                                      (current-time) t))
+          (insert " ")
+          (insert (apply #'format fmt args))
+          (insert "\n")
+          (write-region (point-min) (point-max)
+                        scalpel-llm--freeze-log-file
+                        'append 'silent))
+      (error nil)))
+
+  (defun scalpel-llm--freeze-log-payload ()
+    "Return a one-line summary of the environment for freeze triage."
+    (format "emacs=%s gptel=%s curl=%s stream=%s backend=%s model=%s"
+            emacs-version
+            (if (fboundp 'gptel--version)
+                (gptel--version)
+              "unknown")
+            (if (boundp 'gptel-use-curl) (prin1-to-string gptel-use-curl) "unknown")
+            (if (boundp 'gptel-stream) (prin1-to-string gptel-stream) "unknown")
+            (if (and (boundp 'gptel-backend) gptel-backend)
+                (gptel-backend-name gptel-backend)
+              "unknown")
+            (if (boundp 'gptel-model) (prin1-to-string gptel-model) "unknown")))
+
+  (defun scalpel-llm--freeze-log-install ()
+    "Install around/before advice observability points over gptel.
+Each :around advice logs ENTER before the original function and
+EXIT after it returns; a freeze inside the original function
+leaves an ENTER without a matching EXIT in
+`scalpel-llm--freeze-log-file', which localizes the hang.  No
+gptel source is modified."
+    (scalpel-llm--freeze-log "session start %s"
+                             (scalpel-llm--freeze-log-payload))
+    (advice-add 'gptel-request :around
+                (lambda (orig &rest args)
+                  (scalpel-llm--freeze-log "gptel-request ENTER")
+                  (unwind-protect
+                      (apply orig args)
+                    (scalpel-llm--freeze-log "gptel-request EXIT")))
+                '((name . freeze-log)))
+    (advice-add 'gptel-curl-get-response :around
+                (lambda (orig &rest args)
+                  (scalpel-llm--freeze-log "curl-get-response ENTER")
+                  (unwind-protect
+                      (apply orig args)
+                    (scalpel-llm--freeze-log "curl-get-response EXIT")))
+                '((name . freeze-log)))
+    (advice-add 'gptel--url-get-response :around
+                (lambda (orig &rest args)
+                  (scalpel-llm--freeze-log "url-get-response ENTER")
+                  (unwind-protect
+                      (apply orig args)
+                    (scalpel-llm--freeze-log "url-get-response EXIT")))
+                '((name . freeze-log)))
+    (advice-add 'gptel-curl--stream-filter :before
+                (lambda (_process output)
+                  (scalpel-llm--freeze-log "curl chunk bytes=%d"
+                                           (length output)))
+                '((name . freeze-log)))
+    (advice-add 'gptel-curl--stream-cleanup :before
+                (lambda (process _status)
+                  (condition-case nil
+                      (scalpel-llm--freeze-log
+                       "curl stream-cleanup exit=%d"
+                       (process-exit-status process))
+                    (error
+                     (scalpel-llm--freeze-log
+                      "curl stream-cleanup exit=unknown"))))
+                '((name . freeze-log)))
+    (advice-add 'gptel-curl--sentinel :before
+                (lambda (&rest _args)
+                  (scalpel-llm--freeze-log "curl sentinel"))
+                '((name . freeze-log)))
+    (scalpel-llm--freeze-log "freeze log installed at %s %s"
+                             scalpel-llm--freeze-log-file
+                             (scalpel-llm--freeze-log-payload)))
+
+  (scalpel-llm--freeze-log-install))
+
 (cl-defun scalpel-llm-request-async (prompt on-success on-error &optional system)
   "Send PROMPT to the configured gptel backend without blocking.
 Return immediately.  ON-SUCCESS is called with the accumulated
@@ -763,9 +857,10 @@ is non-nil in the current buffer, or when the gptel backend or model
 is unset.  A deep-reasoning round marks its session buffer with
 `scalpel-llm-allow-thinking', so its requests never trigger a probe
 that would reinstall thinking-suppression parameters.  A probe
-failure is logged and swallowed so the request path is never broken;
-the failed pair is not cached, so the probe retries on the next
-request."
+failure is logged loudly and its pair is cached with a `:failed'
+marker so later requests never retry the probe; probing is
+synchronous and would otherwise block every subsequent request.
+Clear `scalpel-llm-probe-reasoning-cache' to re-probe."
   (when (and (not scalpel-llm-probe-inhibit)
              (not scalpel-llm-allow-thinking)
              gptel-backend
@@ -774,16 +869,21 @@ request."
                      (gptel--model-name gptel-model))))
       (unless (gethash key scalpel-llm-probe-reasoning-cache)
         ;; Degradation point: probe errors must not break the request path,
-        ;; so they are logged loudly and swallowed; failed pairs stay
-        ;; uncached and are retried on the next request.  The probed
-        ;; model object itself is cached so the strip loop can find the
-        ;; real model symbol to remove :request-params from.
+        ;; so they are logged loudly and swallowed.  The failed key is
+        ;; cached with a `:failed' marker so the probe is not retried on
+        ;; every request; probing is synchronous (1 baseline + 4 candidates
+        ;; + fallback) and would otherwise block each request for minutes.
+        ;; The probed model object itself is cached on success so the strip
+        ;; loop can find the real model symbol to remove :request-params
+        ;; from.
         (condition-case err
             (progn
               (scalpel-llm-probe-reasoning)
               (puthash key gptel-model scalpel-llm-probe-reasoning-cache))
           (error
-           (message "scalpel-llm-probe: reasoning probe failed for %S: %s"
+           (puthash key :failed scalpel-llm-probe-reasoning-cache)
+           (message "scalpel-llm-probe: reasoning probe failed for %S, \
+not retrying until scalpel-llm-probe-reasoning-cache is cleared: %s"
                     key (error-message-string err))))))))
 
 (defconst scalpel-llm-probe-reasoning-cache (make-hash-table :test #'equal)
