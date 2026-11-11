@@ -240,8 +240,6 @@ itself and would otherwise overwrite a hint set earlier.
 The hint is rendered right-aligned via a `space' display spec so
 it stays pinned to the header line's right edge instead of being
 pushed off-window by the tabulated-list column widths.
-After display the hub claims the whole frame via
-`delete-other-windows', making the header hint more prominent.
 Refreshes are event driven: consoles call `scalpel-hub-notify'
 when a turn settles or output is written, and the hub holds no
 timers of its own."
@@ -260,8 +258,7 @@ timers of its own."
                                                    ,(string-width
                                                      scalpel-hub--key-hint)))))
                           scalpel-hub--key-hint))))
-    (pop-to-buffer buf)
-    (delete-other-windows)))
+    (pop-to-buffer buf)))
 
 (provide 'scalpel-hub)
 
