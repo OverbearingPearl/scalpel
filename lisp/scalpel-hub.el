@@ -43,14 +43,10 @@
     (define-key map "d" #'scalpel-hub-kill)
     (define-key map "r" #'scalpel-hub-set-mnemonic)
     (define-key map "q" #'quit-window)
-    (with-no-warnings
-      (define-key map "j" #'tabulated-list-next-line))
-    (with-no-warnings
-      (define-key map "n" #'tabulated-list-next-line))
-    (with-no-warnings
-      (define-key map "k" #'tabulated-list-previous-line))
-    (with-no-warnings
-      (define-key map "p" #'tabulated-list-previous-line))
+    (define-key map "j" #'next-line)
+    (define-key map "n" #'next-line)
+    (define-key map "k" #'previous-line)
+    (define-key map "p" #'previous-line)
     (define-key map "f" #'scroll-up-command)
     (define-key map "b" #'scroll-down-command)
     (define-key map "h" #'scroll-down-command)
@@ -223,9 +219,8 @@ be toggled with `toggle-truncate-lines'."
         [("Root" 30 t) ("Mnemonic" 12 t) ("Busy" 6 t)
          ("Tokens" 8 nil) ("Last instruction" 40 nil)]
         tabulated-list-padding 2)
-  (with-no-warnings
-    (setq tabulated-list-revert-function
-          (lambda () (scalpel-hub--refresh))))
+  (setq revert-buffer-function
+        (lambda (&optional _ignore-auto _noconfirm) (scalpel-hub--refresh)))
   (setq truncate-lines t)
   (tabulated-list-init-header))
 

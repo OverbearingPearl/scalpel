@@ -242,33 +242,33 @@ leaves an ENTER without a matching EXIT in
 gptel source is modified."
     (scalpel-llm--freeze-log "session start %s"
                              (scalpel-llm--freeze-log-payload))
-    (advice-add 'gptel-request :around
+    (advice-add #'gptel-request :around
                 (lambda (orig &rest args)
                   (scalpel-llm--freeze-log "gptel-request ENTER")
                   (unwind-protect
                       (apply orig args)
                     (scalpel-llm--freeze-log "gptel-request EXIT")))
                 '((name . freeze-log)))
-    (advice-add 'gptel-curl-get-response :around
+    (advice-add #'gptel-curl-get-response :around
                 (lambda (orig &rest args)
                   (scalpel-llm--freeze-log "curl-get-response ENTER")
                   (unwind-protect
                       (apply orig args)
                     (scalpel-llm--freeze-log "curl-get-response EXIT")))
                 '((name . freeze-log)))
-    (advice-add 'gptel--url-get-response :around
+    (advice-add #'gptel--url-get-response :around
                 (lambda (orig &rest args)
                   (scalpel-llm--freeze-log "url-get-response ENTER")
                   (unwind-protect
                       (apply orig args)
                     (scalpel-llm--freeze-log "url-get-response EXIT")))
                 '((name . freeze-log)))
-    (advice-add 'gptel-curl--stream-filter :before
+    (advice-add #'gptel-curl--stream-filter :before
                 (lambda (_process output)
                   (scalpel-llm--freeze-log "curl chunk bytes=%d"
                                            (length output)))
                 '((name . freeze-log)))
-    (advice-add 'gptel-curl--stream-cleanup :before
+    (advice-add #'gptel-curl--stream-cleanup :before
                 (lambda (process _status)
                   (condition-case nil
                       (scalpel-llm--freeze-log
@@ -278,7 +278,7 @@ gptel source is modified."
                      (scalpel-llm--freeze-log
                       "curl stream-cleanup exit=unknown"))))
                 '((name . freeze-log)))
-    (advice-add 'gptel-curl--sentinel :before
+    (advice-add #'gptel-curl--sentinel :before
                 (lambda (&rest _args)
                   (scalpel-llm--freeze-log "curl sentinel"))
                 '((name . freeze-log)))
