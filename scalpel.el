@@ -94,6 +94,15 @@ the model for this session or globally."
                               (expand-file-name root))))
       (scalpel-console-open suffix))))
 
+;;;###autoload
+;;;###autoload
+(defun scalpel-hub-open ()
+  "Open the multi-session management panel.
+Defined in lisp/scalpel-hub.el; autoloaded here as the top-level entry point."
+  (interactive)
+  (require 'scalpel-hub)
+  (scalpel-hub-open))
+
 (require 'scalpel-lineage-history)
 
 (defalias 'scalpel-set-backend #'scalpel-llm-select-backend

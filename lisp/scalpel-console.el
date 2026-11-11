@@ -1201,11 +1201,15 @@ exactly as `scalpel-console--history' derives the trimming, so the
 marks and the conversation cannot disagree.  Clearing before marking
 keeps the result idempotent, and a call with
 `scalpel-console-trim-consumed-output' nil clears the marks left from
-before it was turned off."
+before it was turned off.  When the hub module is loaded, trigger one
+event-driven hub refresh so hub buffers stay current after report
+appends and error-header rendering."
   (let ((inhibit-read-only t))
     (scalpel-console--clear-consumed-body-markers)
     (dolist (region (scalpel-console--consumed-body-regions))
-      (scalpel-console--mark-consumed-body region))))
+      (scalpel-console--mark-consumed-body region)))
+  (when (fboundp 'scalpel-hub--refresh-on-event)
+    (scalpel-hub--refresh-on-event)))
 
 (defun scalpel-console--history ()
   "Return the conversation recorded in the current buffer, as text.
@@ -1445,7 +1449,10 @@ previous report's output, so the previous body stops being sent."
             ;; happened at point-max, and point rides it.  Restore the
             ;; reader's place explicitly.
             (goto-char user-point))
-          (set-marker user-point nil))))))
+          (set-marker user-point nil)
+          (when follow
+            (dolist (win (get-buffer-window-list buf nil 'all-frames))
+              (set-window-point win (point)))))))))
 
 (defun scalpel-console-toggle-output ()
   "Show or hide every fenced report body in the console.
@@ -2495,6 +2502,8 @@ further growth."
   (condition-case nil (require 'scalpel-lineage) (error nil))
   (let ((operation (cl-incf scalpel-console--operation-generation)))
     (setq scalpel-console--busy t)
+    (when (fboundp 'scalpel-hub--refresh-on-event)
+      (scalpel-hub--refresh-on-event))
     ;; Open the lineage dialogue for this operation, once, at the
     ;; user's question.  A lineage failure must not block the run.
     (condition-case nil
@@ -2589,6 +2598,8 @@ after %s: %s."
                             'scalpel-console--operation-generation target)))
                (with-current-buffer target
                  (setq scalpel-console--busy nil)
+                 (when (fboundp 'scalpel-hub--refresh-on-event)
+                   (scalpel-hub--refresh-on-event))
                  (cond
                   ((and (unattended-p) complete)
                    (let ((elapsed (elapsed-text

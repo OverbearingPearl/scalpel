@@ -61,13 +61,9 @@ An open dialogue (END nil) takes every record at or past START."
    records))
 
 (defun scalpel-lineage-history--truncate-question (question)
-  "Trim QUESTION to one line of at most 60 visible characters."
+  "Fold QUESTION to a single line: first non-empty line, trimmed."
   (when (stringp question)
-    (let ((text (car (split-string question "\n" t))))
-      (setq text (string-trim text))
-      (when (> (length text) 60)
-        (setq text (concat (substring text 0 60) "...")))
-      text)))
+    (string-trim (car (split-string question "\n" t)))))
 
 (defun scalpel-lineage-history--nodes ()
   "Build the node list from the lineage dialogues.
@@ -94,6 +90,7 @@ roadmap reflects every dialogue the consoles opened."
   (let ((inhibit-read-only t)
         (nodes (scalpel-lineage-history--nodes)))
     (erase-buffer)
+    (setq truncate-lines t)
     (setq header-line-format
           " npjk node | fbhl session | RET rollback | g refresh | q quit ")
     (if (null nodes)
