@@ -650,7 +650,7 @@ text."
           (lambda (sym)
             (pcase sym
               (?!
-               " ◂ input is translated into shell commands, which can modify files and is not read-only")
+               " ◂ shell commands, may modify files, not read-only")
               (??
                " ◂ read-only consultation, nothing is ever modified")
               (?~
@@ -672,7 +672,7 @@ text."
                  (concat (funcall symbol-hint (aref text 0))
                          (funcall symbol-hint (aref text 1))))
                 ((eq kind 'shell-mode)
-                 " ◂ input is translated into shell commands, which can modify files and is not read-only")
+                 " ◂ shell commands, may modify files, not read-only")
                 ((eq kind 'consult)
                  " ◂ read-only consultation, nothing is ever modified")
                 ((eq kind 'no-reasoning)
