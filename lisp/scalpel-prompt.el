@@ -291,6 +291,8 @@ is non-nil the thinking-language rule (from
 `scalpel-prompt--thinking-language-rule', defined next to
 `scalpel-prompt--reply-language-rule') is appended so that the
 model's thinking follows that language.
+The SVG rendering rule `scalpel-prompt-rule--svg' is included
+unconditionally because the plain backend needs no external program.
 The prompt is top-and-tailed by `scalpel-prompt-rule--no-wrapper':
 it appears both as the first and as the last segment of the
 returned concat.  The trailing repetition is intentional, a design
@@ -307,6 +309,7 @@ redundancy to be trimmed."
    scalpel-prompt-rule--shell "\n"
    scalpel-prompt-rule--web-search "\n"
    scalpel-prompt-rule--reading "\n"
+   scalpel-prompt-rule--svg "\n"
    scalpel-prompt-rule--feedback-fence "\n"
    scalpel-prompt-rule--shell-hygiene "\n"
    scalpel-prompt-rule--file-actions "\n"

@@ -202,6 +202,21 @@ the user to add it with a confirm action instead of reaching for it
 with a different command."
   "Reading contract: file-peek for code, shell for finding.")
 
+(defconst scalpel-prompt-rule--svg
+  "When a task needs a graphic artifact -- a diagram embedded in HTML
+or a standalone image -- produce it through the scalpel-svg module
+instead of hand-writing SVG from scratch.  Rendering goes through
+`scalpel-svg-render', which tries the backends in
+`scalpel-svg--backends' order (drawio, then plantuml, then plain) and
+always returns the written .svg file's absolute path; embed that path
+in HTML as a relative link.  For the drawio backend
+never quote CLI flags from memory: consult `scalpel-svg--drawio-rule' and
+discover the actual usage by running drawio --help and drawio --version
+through the shell channel first, treating their output as the sole
+authority.  The plain backend is the guaranteed fallback and needs no
+external program."
+  "Prompt rule wording for SVG rendering via the scalpel-svg module.")
+
 (defconst scalpel-prompt-rule--web-search
 "Without an @ prefix, instructions MUST NOT use the web-search tool;
 the tool table already excludes it by default. With an @ prefix,
