@@ -295,6 +295,62 @@ the script element or the declaration cannot be found."
                   (cons (+ body-beg (car range) -1)
                         (+ body-beg (cdr range) -1)))))))))))
 
+(defun scalpel-locate-html--inline-script-declaration-range (name)
+  "Return the (BEG . END) range of NAME's top-level inline script declaration.
+Declarations of NAME inside inline scripts of the current HTML
+buffer are found by this scan.
+
+Script elements carrying an id or src attribute are skipped; only
+inline scripts without those attributes are considered.  For each
+candidate, the script body is copied into a temporary buffer and the
+JS locator is asked for a top-level declaration of NAME; any returned
+range is translated back into the original file coordinates.
+
+Return (BEG . END) on success, nil when no inline script declares
+NAME."
+  (cl-block scalpel-locate-html--inline-script-declaration-range
+    (save-excursion
+      (save-restriction
+        (widen)
+        (goto-char (point-min))
+        (let ((case-fold-search t))
+          (while (re-search-forward
+                  "<script\\(?:[[:space:]][^>]*\\)?>" nil t)
+            (let* ((open-tag-end (match-end 0))
+                   (open-tag (buffer-substring-no-properties
+                              (match-beginning 0) open-tag-end))
+                   (end-tag
+                    (save-excursion
+                      (goto-char open-tag-end)
+                      (re-search-forward "</script[[:space:]]*>"
+                                         nil t))))
+              (unless end-tag
+                (cl-return-from
+                    scalpel-locate-html--inline-script-declaration-range
+                  nil))
+              (let ((body-beg open-tag-end)
+                    (body-end (match-beginning 0)))
+                (if (string-match-p
+                     "[[:space:]]\\(?:id\\|src\\)[[:space:]]*="
+                     open-tag)
+                    ;; Skip this element; continue after </script>.
+                    (goto-char (match-end 0))
+                  (when (> body-end body-beg)
+                    (let* ((body (buffer-substring-no-properties
+                                  body-beg body-end))
+                           (js-range
+                            (with-temp-buffer
+                              (insert body)
+                              (scalpel-locate-js-range nil name))))
+                      (when js-range
+                        (cl-return-from
+                            scalpel-locate-html--inline-script-declaration-range
+                          (cons (+ body-beg (car js-range) -1)
+                                (+ body-beg (cdr js-range) -1)))))
+                    ;; No declaration in this script; continue after it.
+                    (goto-char (match-end 0))))))))
+        nil))))
+
 (defun scalpel-locate-html--js--skip-noise ()
   "Skip over a comment, string, or template literal at point.
 Return non-nil when such a token was consumed; the point then
@@ -515,9 +571,10 @@ whitespace follows it."
 
 (defun scalpel-locate-html--top-definition-range (symbol)
   "Locate the top-level definition range for SYMBOL in the current HTML buffer.
-SYMBOL may be a symbol or a string.  A non-dotted SYMBOL resolves to the
-element bearing that id.  A dotted SYMBOL first resolves its prefix: when
-the prefix names a script element carrying an id, the original
+SYMBOL may be a symbol or a string.  A non-dotted SYMBOL first tries the
+inline-script top-level declaration scan, then falls back to the element
+bearing that id.  A dotted SYMBOL first resolves its prefix: when the
+prefix names a script element carrying an id, the original
 scriptId.jsName declaration scan applies; otherwise
 `scalpel-locate-html--js-entry-range' resolves the NAME.key object entry,
 falling back to the script declaration scan when no object entry matches.
@@ -530,33 +587,37 @@ Return a cons (BEG . END) or nil when SYMBOL cannot be located."
       (save-restriction
         (widen)
         (cond
-         ;; Non-dotted symbol: locate the element with matching id by
-         ;; scanning tag by tag so void/img elements and raw-text
-         ;; elements get exact boundaries.
+         ;; Non-dotted symbol: try the inline-script top-level
+         ;; declaration scan first, then fall back to locating the
+         ;; element with matching id by scanning tag by tag so
+         ;; void/img elements and raw-text elements get exact
+         ;; boundaries.
          ((= (length parts) 1)
-          (let ((id (regexp-quote (car parts))))
-            (goto-char (point-min))
-            (catch 'found
-              (while (re-search-forward
-                      scalpel-locate-html--tag-regexp nil t)
-                (let* ((tag-beg (match-beginning 0))
-                       (tag-name (save-excursion
-                                   (goto-char tag-beg)
-                                   (if (looking-at
-                                        "<\\([[:alpha:]][[:alnum:]:_-]*\\)")
-                                       (match-string 1)
-                                     nil))))
-                  (when tag-name
-                    (if (equal (scalpel-locate-html--tag-id tag-beg) id)
-                        (let ((end (scalpel-locate-html--element-end
-                                    tag-name)))
-                          (when end
-                            (goto-char end)
-                            (skip-chars-backward " \t\r\n")
-                            (throw 'found
-                                   (cons tag-beg (point)))))
-                      (scalpel-locate-html--skip-raw-text
-                       tag-name))))))))
+          (let ((name (car parts)))
+            (or (scalpel-locate-html--inline-script-declaration-range name)
+                (let ((id (regexp-quote name)))
+                  (goto-char (point-min))
+                  (catch 'found
+                    (while (re-search-forward
+                            scalpel-locate-html--tag-regexp nil t)
+                      (let* ((tag-beg (match-beginning 0))
+                             (tag-name (save-excursion
+                                         (goto-char tag-beg)
+                                         (if (looking-at
+                                              "<\\([[:alpha:]][[:alnum:]:_-]*\\)")
+                                             (match-string 1)
+                                           nil))))
+                        (when tag-name
+                          (if (equal (scalpel-locate-html--tag-id tag-beg) id)
+                              (let ((end (scalpel-locate-html--element-end
+                                          tag-name)))
+                                (when end
+                                  (goto-char end)
+                                  (skip-chars-backward " \t\r\n")
+                                  (throw 'found
+                                         (cons tag-beg (point)))))
+                            (scalpel-locate-html--skip-raw-text
+                             tag-name))))))))))
          ;; Dotted symbol: resolve the prefix first.
          ((= (length parts) 2)
           (let ((prefix (nth 0 parts)))
