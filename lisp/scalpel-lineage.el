@@ -16,6 +16,8 @@
 
 ;;; Code:
 
+(require 'scalpel-proc)
+
 (defvar-local scalpel-lineage--records nil
   "Change records of the current buffer's session, oldest last.
 Each entry is a plist: :tool :file :old-text :new-text
@@ -40,12 +42,16 @@ Buffer-local: each console captures its own git baseline, so one
 console's anchor never leaks to another.")
 
 (defun scalpel-lineage--git-ok (args)
-  "Run git with ARGS in the session directory; return output on exit 0."
-  (condition-case nil
-      (with-temp-buffer
-        (when (eq 0 (apply #'call-process "git" nil t nil args))
-          (buffer-string)))
-    (error nil)))
+  "Run git with ARGS in the session directory; return output on exit 0.
+The run is bounded by `scalpel-proc-timeout' and reads raw bytes, so a
+repository on a stalled mount degrades to no baseline instead of
+taking the session with it."
+  (let* ((coding-system-for-read 'no-conversion)
+         (result (condition-case nil
+                     (scalpel-proc-run "git" args :label "lineage-git")
+                   (error nil))))
+    (when (and result (equal (plist-get result :status) 0))
+      (decode-coding-string (plist-get result :output) 'utf-8))))
 
 (defun scalpel-lineage-start ()
   "Anchor the session baseline: a dangling commit of the current worktree.

@@ -21,8 +21,28 @@
 (require 'scalpel-redact)
 
 (require 'cl-lib)
+(require 'url)
+(require 'url-parse)
 (require 'gptel)
 (require 'gptel-transient)
+(require 'scalpel-proc)
+
+(defcustom scalpel-llm-probe-timeout 20
+  "Seconds one reasoning-probe request may run before it is abandoned.
+The probe runs before the first request of a backend/model pair, so a
+long value delays that round; the default bounds one probe attempt to
+twenty seconds while leaving slow reasoning endpoints room to answer."
+  :type 'number
+  :group 'scalpel)
+
+(defcustom scalpel-llm-log-stream-chunks nil
+  "Non-nil means journal every streaming chunk received.
+Off by default: a round delivers about 160 chunks, so leaving it on
+buries the run, verdict and advice lines that diagnose a freeze under
+tens of thousands of byte counts.  Turn it on for a session that has
+to be replayed chunk by chunk."
+  :type 'boolean
+  :group 'scalpel)
 
 (defconst scalpel-llm-timeout 60
   "Seconds of total callback silence before a request is abandoned.
@@ -195,9 +215,11 @@ new chunks."
           (insert chunk))))))
 
 (progn
-  (defconst scalpel-llm--freeze-log-file
-    (expand-file-name "scalpel-freeze.log" user-emacs-directory)
+  (defconst scalpel-llm--freeze-log-file scalpel-proc-log-file
     "Persistent timeline log file used to diagnose Emacs freezes.
+Shared with `scalpel-proc-log-file' on purpose: one file must hold the
+request, the reply and the commands that ran afterwards, or the reader
+cannot tell a stall inside a subprocess from a stall inside gptel.
 Each observation point appends one line immediately, so the file
 survives a hard kill and reveals where the process hung.")
 
@@ -207,17 +229,7 @@ FMT and ARGS follow `format'.  Every write goes to disk
 immediately so the timeline survives a freeze or hard kill.
 Degradation point: all errors are ignored on purpose -- logging
 must never affect the request path."
-    (condition-case nil
-        (with-temp-buffer
-          (insert (format-time-string "%Y-%m-%dT%H:%M:%S.%3NZ"
-                                      (current-time) t))
-          (insert " ")
-          (insert (apply #'format fmt args))
-          (insert "\n")
-          (write-region (point-min) (point-max)
-                        scalpel-llm--freeze-log-file
-                        'append 'silent))
-      (error nil)))
+    (apply #'scalpel-proc-log fmt args))
 
   (defun scalpel-llm--freeze-log-payload ()
     "Return a one-line summary of the environment for freeze triage."
@@ -265,8 +277,9 @@ gptel source is modified."
                 '((name . freeze-log)))
     (advice-add #'gptel-curl--stream-filter :before
                 (lambda (_process output)
-                  (scalpel-llm--freeze-log "curl chunk bytes=%d"
-                                           (length output)))
+                  (when scalpel-llm-log-stream-chunks
+                    (scalpel-llm--freeze-log "curl chunk bytes=%d"
+                                             (length output))))
                 '((name . freeze-log)))
     (advice-add #'gptel-curl--stream-cleanup :before
                 (lambda (process _status)
@@ -601,13 +614,113 @@ the reasoning length otherwise."
       (setq key (condition-case nil (funcall key) (error nil))))
     (and (stringp key) (> (length key) 0) key)))
 
+(defun scalpel-llm--probe-advice (endpoint)
+  "Journal the commands that diagnose ENDPOINT after it failed to answer.
+Only the host and port are quoted, never the request headers, so no
+credential reaches the journal.  The commands are the ones that
+distinguish a resolver problem from a blocked port from a proxy that
+swallows the connect."
+  (let* ((parsed (condition-case nil (url-generic-parse-url endpoint) (error nil)))
+         (host (and parsed (url-host parsed)))
+         (secure (and parsed (equal (url-type parsed) "https")))
+         (port (or (and parsed (url-port parsed))
+                   (and secure 443)
+                   (and parsed 80))))
+    (when host
+      (scalpel-llm--freeze-log
+       "reasoning-probe advice: is the port reachable at all?  nc -vz %s %s"
+       host port))
+    (scalpel-llm--freeze-log
+     (concat "reasoning-probe advice: separate connect time from transfer time:  "
+             "curl -sS -m 10 -o /dev/null -w 'connect=%%{time_connect}s total=%%{time_total}s\\n' %s")
+     endpoint)
+    (scalpel-llm--freeze-log
+     "reasoning-probe advice: a proxy or a resolver is the next suspect:  env | grep -i _proxy ; scutil --dns | head -20")
+    (scalpel-llm--freeze-log
+     "reasoning-probe advice: the failed pair is cached, so clear scalpel-llm-probe-reasoning-cache before retrying")))
+
+(defun scalpel-llm--probe-post (endpoint headers data)
+  "POST DATA to ENDPOINT with HEADERS and return (STATUS-LINE . BODY).
+Return nil when no answer arrives within `scalpel-llm-probe-timeout' or
+the transfer fails.
+
+The wait polls `accept-process-output' against a wall-clock deadline
+instead of calling `url-retrieve-synchronously'.  That function's own
+TIMEOUT argument bounds only the response, not the connection attempt:
+measured against an address that never answers, it returned after 75
+seconds while the 2-second timeout was in force, and the event loop was
+dead for the whole of it, so timers did not run and the frame could not
+be raised.  Because the probe runs before the first request of every
+backend/model pair, that stall arrived as the round simply freezing."
+  (let* ((url-request-method "POST")
+         (url-request-extra-headers headers)
+         (url-request-data data)
+         (start (float-time))
+         (deadline (+ start scalpel-llm-probe-timeout))
+         (done nil)
+         (response nil)
+         (failure nil)
+         (proc nil))
+    (condition-case err
+        (progn
+          (setq proc
+                (url-retrieve
+                 endpoint
+                 (lambda (status)
+                   (setq done t)
+                   (condition-case perr
+                       (if (plist-get status :error)
+                           (setq failure (format "%s" (plist-get status :error)))
+                         (with-current-buffer (current-buffer)
+                           (goto-char (point-min))
+                           (let ((status-line
+                                  (buffer-substring-no-properties
+                                   (line-beginning-position)
+                                   (line-end-position))))
+                             (when (re-search-forward "\r?\n\r?\n" nil t)
+                               (setq response
+                                     (cons status-line
+                                           (buffer-substring-no-properties
+                                            (point) (point-max))))))))
+                     (error
+                      (setq failure (error-message-string perr)))))
+                 nil t))
+          (while (and (not done) (< (float-time) deadline))
+            (accept-process-output nil 0.1))
+          (cond
+           (response
+            (scalpel-llm--freeze-log
+             "reasoning-probe ok endpoint=%s elapsed=%.2fs bytes=%d"
+             endpoint (- (float-time) start) (length (cdr response)))
+            response)
+           (t
+            ;; Abandon the transfer too: a connect still in flight would
+            ;; otherwise keep a process alive for a request nobody reads.
+            (when (processp proc)
+              (condition-case nil (delete-process proc) (error nil)))
+            (scalpel-llm--freeze-log
+             "reasoning-probe failed endpoint=%s elapsed=%.2fs reason=%s"
+             endpoint (- (float-time) start)
+             (or failure
+                 (format "no answer within %.0fs" scalpel-llm-probe-timeout)))
+            (unless failure
+              (scalpel-llm--probe-advice endpoint))
+            nil)))
+      (error
+       (scalpel-llm--freeze-log
+        "reasoning-probe error endpoint=%s reason=%s"
+        endpoint (error-message-string err))
+       nil))))
+
 (defun scalpel-llm--probe-send (params)
-  "Send one synchronous chat-completions probe adding PARAMS to the body.
+  "Send one chat-completions probe adding PARAMS to the body.
 PARAMS is a plist of extra body parameters; nil sends the baseline
 body.  The request body is built as one plist -- the shape gptel
 documents for :request-params -- so the candidate probed here is
 exactly the value later installed on the model symbol.  Return the
-parsed JSON response as a plist, or nil on any failure."
+parsed JSON response as a plist, or nil on any failure.
+The transfer is bounded by `scalpel-llm-probe-timeout' and never stops
+Emacs's event loop; see `scalpel-llm--probe-post'."
   (condition-case err
       (let* ((backend gptel-backend)
              (url (and backend (condition-case nil (gptel-backend-url backend) (error nil))))
@@ -623,11 +736,7 @@ parsed JSON response as a plist, or nil on any failure."
                   (if (string-suffix-p "/chat/completions" url)
                       url
                     (concat (string-trim-right url "/") "/chat/completions")))
-                 (url-request-method "POST")
-                 (url-request-extra-headers
-                  `(("Content-Type" . "application/json")
-                    ("Authorization" . ,(concat "Bearer " key))))
-                 (url-request-data
+                 (body
                   (json-encode
                    (append (list :model model
                                  :messages [((role . "user")
@@ -635,42 +744,41 @@ parsed JSON response as a plist, or nil on any failure."
                                  :stream :json-false)
                            params))))
             (message "Scalpel: reasoning probe: POST %s (%s / %s)" endpoint bname model)
-            (let ((buf (url-retrieve-synchronously endpoint t nil 45)))
-              (if (not buf)
+            (scalpel-llm--freeze-log
+             "reasoning-probe start endpoint=%s backend=%s model=%s timeout=%ss"
+             endpoint bname model scalpel-llm-probe-timeout)
+            (let ((reply (scalpel-llm--probe-post
+                          endpoint
+                          `(("Content-Type" . "application/json")
+                            ("Authorization" . ,(concat "Bearer " key)))
+                          body)))
+              (if (not reply)
                   (progn
-                    (message "Scalpel: reasoning probe: no response buffer from %s (%s / %s)" endpoint bname model)
+                    (message "Scalpel: reasoning probe: no response from %s (%s / %s)"
+                             endpoint bname model)
                     nil)
-                (with-current-buffer buf
-                  (goto-char (point-min))
-                  (message "Scalpel: reasoning probe: HTTP status: %s (%s / %s)"
-                           (buffer-substring-no-properties
-                            (line-beginning-position) (line-end-position))
-                           bname model)
-                  (if (not (re-search-forward "\r?\n\r?\n" nil t))
-                      (progn
-                        (message "Scalpel: reasoning probe: no HTTP body from %s (%s / %s)" endpoint bname model)
-                        nil)
-                    (condition-case perr
-                        (let* ((raw (buffer-substring-no-properties
-                                     (point) (point-max)))
-                               ;; The url library may already have decoded
-                               ;; the response body as multibyte text; encode
-                               ;; multibyte strings back to bytes with
-                               ;; utf-8-unix (characters not representable
-                               ;; in latin-1 still round-trip correctly),
-                               ;; use raw single-byte strings as-is, then
-                               ;; decode everything as UTF-8.
-                               (bytes (if (multibyte-string-p raw)
-                                          (encode-coding-string raw 'utf-8-unix)
-                                        raw))
-                               (text (decode-coding-string bytes 'utf-8))
-                               (json-object-type 'plist)
-                               (json-array-type 'list))
-                          (json-read-from-string text))
-                      (error
-                       (message "Scalpel: reasoning probe: JSON parse failed: %s"
-                                (error-message-string perr))
-                       nil)))))))))
+                (message "Scalpel: reasoning probe: HTTP status: %s (%s / %s)"
+                         (car reply) bname model)
+                (condition-case perr
+                    (let* ((raw (cdr reply))
+                           ;; The url library may already have decoded
+                           ;; the response body as multibyte text; encode
+                           ;; multibyte strings back to bytes with
+                           ;; utf-8-unix (characters not representable
+                           ;; in latin-1 still round-trip correctly),
+                           ;; use raw single-byte strings as-is, then
+                           ;; decode everything as UTF-8.
+                           (bytes (if (multibyte-string-p raw)
+                                      (encode-coding-string raw 'utf-8-unix)
+                                    raw))
+                           (text (decode-coding-string bytes 'utf-8))
+                           (json-object-type 'plist)
+                           (json-array-type 'list))
+                      (json-read-from-string text))
+                  (error
+                   (message "Scalpel: reasoning probe: JSON parse failed: %s"
+                            (error-message-string perr))
+                   nil)))))))
     (error
      (message "Scalpel: reasoning probe: request failed: %s"
               (error-message-string err))

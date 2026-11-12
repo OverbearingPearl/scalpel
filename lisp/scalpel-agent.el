@@ -35,6 +35,7 @@
 (require 'scalpel-locate)
 (require 'scalpel-execute)
 (require 'scalpel-sandbox)
+(require 'scalpel-proc)
 (require 'scalpel-tool)
 
 (defconst scalpel-agent--tool-vocabulary '("file-peek" "block-edit" "block-insert" "block-delete" "file-create" "file-rename" "file-delete" "file-substitute-dry-run" "web-search" "shell" "reply" "confirm")
@@ -294,6 +295,23 @@ not blocked; the scalpel-llm byte cap remains the final backstop.")
   "Maximum bytes of shell command output included in the LLM context.
 Larger outputs are truncated with an explicit marker.")
 
+(defcustom scalpel-agent-perl-timeout 60
+  "Seconds a perl rewrite or compile check may run before it is killed.
+The pattern is written by the planner, so this deadline is what keeps a
+catastrophic regexp from costing more than a minute: the child is
+killed, the action fails, and the journal names the pattern that ran
+away."
+  :type 'number
+  :group 'scalpel)
+
+(defcustom scalpel-agent-git-timeout 60
+  "Seconds a git invocation started by Scalpel may run before it is killed.
+Git normally answers in milliseconds; the deadline exists for the cases
+where it does not, such as a lock held by another process, a hook that
+waits, or a repository on a stalled network mount."
+  :type 'number
+  :group 'scalpel)
+
 (defconst scalpel-agent-file-read-max-bytes 40000
   "Maximum bytes a read action may put into the LLM context.
 This budget is separate from `scalpel-agent-shell-max-bytes':
@@ -408,54 +426,57 @@ inside a repository."
       entry))
    process-environment))
 
+(defun scalpel-agent--git-run (args dir label &optional input)
+  "Run git with ARGS in DIR and return the run plist.
+LABEL names the run in the journal, and INPUT, when non-nil, is written
+to git's stdin before end-of-file.  The environment is sanitized so a
+caller's GIT_DIR and friends cannot redirect the answer, and bytes are
+read raw so the caller can decode UTF-8 explicitly instead of trusting
+the locale.  Return nil when git cannot be started at all; a run that
+outlives `scalpel-agent-git-timeout' returns its plist with a `timeout'
+status and posts a message, because a caller that read the absence of
+output as \"not a repository\" would blame the wrong thing."
+  (let ((default-directory (file-name-as-directory
+                            (expand-file-name dir)))
+        (process-environment (scalpel-agent--git-environment))
+        (coding-system-for-read 'no-conversion)
+        (coding-system-for-write 'utf-8-unix))
+    (condition-case nil
+        (let ((result (scalpel-proc-run "git" args
+                                        :input input
+                                        :timeout scalpel-agent-git-timeout
+                                        :label label)))
+          (when (scalpel-proc-timeout-p result)
+            (message "%s" (scalpel-proc-timeout-message result)))
+          result)
+      (error nil))))
+
 (defun scalpel-agent--git-toplevel (dir)
   "Return the absolute git working-tree root containing DIR, or nil.
 DIR may be the repository root itself, so containment must not be
 tested by path prefix: a directory is always inside the root that
 git reports for it."
-  (let ((dir (file-name-as-directory (expand-file-name dir))))
-    (with-temp-buffer
-      ;; A plain `let' evaluates its value forms before installing the
-      ;; bindings, so `call-process' below would run with the caller's
-      ;; `default-directory' and unstripped environment.  `let*' binds
-      ;; sequentially, making DIR and the sanitized env actually apply.
-      (let* ((default-directory dir)
-             (process-environment (scalpel-agent--git-environment))
-             (status (progn
-                       ;; Insert git output as raw bytes, then decode
-                       ;; explicitly as UTF-8, instead of binding
-                       ;; `coding-system-for-read'.
-                       (set-buffer-multibyte nil)
-                       (condition-case nil
-                           (call-process "git" nil t nil
-                                         "rev-parse" "--show-toplevel")
-                         (error nil)))))
-        (when (and (numberp status) (= status 0) (> (buffer-size) 0))
-          (decode-coding-region (point-min) (point-max) 'utf-8)
-          (set-buffer-multibyte t)
-          (file-name-as-directory
-           (string-trim (buffer-substring-no-properties
-                         (point-min) (point-max)))))))))
+  (let ((result (scalpel-agent--git-run (list "rev-parse" "--show-toplevel")
+                                        dir "git-rev-parse")))
+    (when (and result
+               (equal (plist-get result :status) 0)
+               (> (plist-get result :bytes) 0))
+      (file-name-as-directory
+       (string-trim (decode-coding-string (plist-get result :output) 'utf-8))))))
 
 (defun scalpel-agent--git-listed-files (dir)
   "Return files under DIR that git does not ignore.
 Paths are absolute.  Return nil when DIR is not inside a git tree."
   (when (scalpel-agent--git-toplevel dir)
-    (let ((default-directory (file-name-as-directory (expand-file-name dir)))
-          (process-environment (scalpel-agent--git-environment)))
-      (with-temp-buffer
-        (let ((status (condition-case nil
-                          (progn
-                            (set-buffer-multibyte nil)
-                            (call-process "git" nil t nil
-                                          "ls-files" "--cached" "--others"
-                                          "--exclude-standard" "-z"))
-                        (error nil))))
-          (when (and (numberp status) (= status 0))
-            (decode-coding-region (point-min) (point-max) 'utf-8)
-            (set-buffer-multibyte t)
-            (mapcar (lambda (rel) (expand-file-name rel default-directory))
-                    (split-string (buffer-string) "\0" t))))))))
+    (let* ((result (scalpel-agent--git-run
+                    (list "ls-files" "--cached" "--others"
+                          "--exclude-standard" "-z")
+                    dir "git-ls-files")))
+      (when (and result (equal (plist-get result :status) 0))
+        (let ((listing (decode-coding-string (plist-get result :output) 'utf-8)))
+          (mapcar (lambda (rel) (expand-file-name rel (file-name-as-directory
+                                                       (expand-file-name dir))))
+                  (split-string listing "\0" t)))))))
 
 (defun scalpel-agent--scalpel-ignore-regexp (pattern)
   "Convert one .scalpelignore PATTERN into a regexp.
@@ -945,30 +966,27 @@ node is unmarked)."
 (defun scalpel-agent--git-ignored-in-repo (root files)
   "Return the members of FILES that git would ignore in repository ROOT.
 FILES are absolute names at or below ROOT.  Return nil and log a
-warning when git fails, so callers degrade to \"nothing ignored\"."
-  (with-temp-buffer
-    (let ((default-directory (file-name-as-directory (expand-file-name root)))
-          (process-environment (scalpel-agent--git-environment)))
-      (insert (string-join
-               (mapcar (lambda (file) (file-relative-name file root)) files)
-               "\n")
-              "\n")
-      ;; core.quotePath=false keeps non-ASCII names unquoted in the output.
-      (let ((status (condition-case err
-                        (call-process-region
-                         (point-min) (point-max)
-                         "git" t t nil
-                         "-c" "core.quotePath=false"
-                         "check-ignore" "--stdin")
-                      (error (format "%S" err)))))
-        (if (member status '(0 1))
-            (mapcar (lambda (rel) (expand-file-name rel root))
-                    (split-string (buffer-string) "\n" t))
-          (message
-           (concat "Scalpel: git check-ignore failed in %s (%S); "
-                   "not marking gitignored files")
-           root status)
-          nil)))))
+warning when git fails or exceeds `scalpel-agent-git-timeout', so
+callers degrade to \"nothing ignored\"."
+  (let* ((dir (file-name-as-directory (expand-file-name root)))
+         (input (concat (string-join
+                         (mapcar (lambda (file) (file-relative-name file root))
+                                 files)
+                         "\n")
+                        "\n"))
+         ;; core.quotePath=false keeps non-ASCII names unquoted in the output.
+         (result (scalpel-agent--git-run
+                  (list "-c" "core.quotePath=false" "check-ignore" "--stdin")
+                  dir "git-check-ignore" input))
+         (status (plist-get result :status)))
+    (if (member status '(0 1))
+        (mapcar (lambda (rel) (expand-file-name rel root))
+                (split-string (plist-get result :output) "\n" t))
+      (message
+       (concat "Scalpel: git check-ignore failed in %s (%S); "
+               "not marking gitignored files")
+       root status)
+      nil)))
 
 (defun scalpel-agent--git-ignored-files (files)
   "Return the subset of FILES that git would ignore.
@@ -2296,7 +2314,11 @@ The confirmation gate is driven by `scalpel-agent-confirm-tools'.
 COMMAND may use pipes, redirection and quoting.  The report names the
 command, always states the exit status, and wraps the output in
 explicit markers, so a reader (human or LLM) can tell which command
-produced what.  Output is truncated to
+produced what.  Only the prefix that survives truncation is converted
+for display: `scalpel-agent--printable-output' builds one string per
+character, so converting the whole output first cost tens of bytes of
+heap per output byte and could swap the machine on a large dump.
+Output is truncated to
 `scalpel-agent-shell-max-bytes' bytes, and control characters other
 than newline and tab are dropped from it.  REASON is the planner's
 stated intent, echoed in the report.
@@ -2327,17 +2349,26 @@ probe, so a command is never run outside the sandbox."
            scalpel-agent--context-files))
          (exit (car result))
          (raw (cdr result))
-         ;; Measure and classify RAW before sanitizing: the sanitizer
-         ;; drops NUL bytes, so binary detection must happen here.
+         ;; Measure RAW before touching it: the sanitizer drops bytes, so
+         ;; both the true size and the binary flag must be read here.
          (raw-bytes (string-bytes raw))
-         (binary (and (cl-position 0 raw) t))
-         (output (scalpel-agent--printable-output raw))
-         (truncated (> (length output) max-bytes))
+         (binary (and (string-match "\0" raw) t))
+         ;; Truncate BEFORE sanitizing.  `scalpel-agent--printable-output'
+         ;; turns every character into its own string, so running it over a
+         ;; whole command output costs tens of bytes of heap per output
+         ;; byte: a fifty-megabyte dump became gigabytes and swapped the
+         ;; machine.  Only the prefix that survives truncation is ever
+         ;; displayed, so only that prefix is converted.
+         (kept (if (> (length raw) max-bytes)
+                   (substring raw 0 max-bytes)
+                 raw))
+         (output (scalpel-agent--printable-output kept))
+         (truncated (> (string-bytes raw) max-bytes))
          (body (cond
                 (binary
                  (format "[binary output suppressed: %d bytes]" raw-bytes))
                 (truncated
-                 (concat (substring output 0 max-bytes)
+                 (concat output
                          (format "\n[truncated: showing first %d of %d bytes]"
                                  max-bytes raw-bytes)))
                 (t output))))
@@ -2820,6 +2851,39 @@ damaging replacement is quoted rather than only counted."
                (string-match "\\n" text offset))))
     (substring text beg (or end (length text)))))
 
+(defconst scalpel-agent-substitute-excerpt-lines 5
+  "Number of match lines the substitute report quotes per file.
+The report pairs the Nth match before the rewrite with the Nth match
+after it, so collecting more than this is wasted work; the cap is also
+what bounds the scan when a pattern matches the empty string.")
+
+(defun scalpel-agent--match-lines (text pattern limit)
+  "Return at most LIMIT lines of TEXT on which PATTERN matches.
+Return nil when PATTERN is not a regexp Emacs can compile, which is the
+case for perl-only syntax; the report then quotes no excerpt but still
+reports the rewrite perl performed.  A match that begins and ends at
+the same position advances the scan by one character instead of
+leaving the position untouched: the pattern is written by the planner,
+and anchored or optional ones -- \"^\", \"\\b\", \"x*\" -- match the
+empty string, so stepping to `match-end' alone never moved, pushed the
+same line forever and took Emacs's memory with it."
+  (condition-case nil
+      (let ((case-fold-search nil)
+            (pos 0)
+            (count 0)
+            (length (length text))
+            (lines nil))
+        (while (and (< count limit)
+                    (< pos length)
+                    (string-match pattern text pos))
+          (push (scalpel-agent--line-at text (match-beginning 0)) lines)
+          (setq count (1+ count))
+          (setq pos (if (> (match-end 0) (match-beginning 0))
+                        (match-end 0)
+                      (1+ (match-beginning 0)))))
+        (nreverse lines))
+    (error nil)))
+
 (defun scalpel-agent--excerpt-line (text)
   "Return line TEXT for display.
 Collapse any embedded newlines (or carriage returns) to a literal
@@ -3002,18 +3066,18 @@ table of contents from `scalpel-agent--perlre-toc-for-refusal' so
 the LLM receives learning material alongside the error.  Returns
 nil on success."
   (let* ((script scalpel-agent--perl-compile-check-script)
-         exit-code
-         output)
-    (with-temp-buffer
-      (setq exit-code
-            (let ((process-environment
-                   (cons (concat "SCALPEL_PATTERN=" pattern)
-                         process-environment)))
-              (call-process "perl" nil t nil "-e" script)))
-      ;; Read the output inside the temp buffer: after the buffer is
-      ;; gone, `buffer-string' would read whatever buffer is current.
-      (setq output (buffer-string)))
-    (unless (and (zerop exit-code)
+         (process-environment
+          (cons (concat "SCALPEL_PATTERN=" pattern)
+                process-environment))
+         (result (scalpel-proc-run "perl" (list "-e" script)
+                                   :timeout scalpel-agent-perl-timeout
+                                   :label "perl-compile-check"))
+         (exit-code (plist-get result :status))
+         (output (plist-get result :output)))
+    ;; Signal, rather than return, when the child was killed: the caller
+    ;; reports the two conditions as the planner's to fix.
+    (scalpel-proc-check-result result)
+    (unless (and (integerp exit-code) (zerop exit-code)
                  (string-match-p "\\`SCALPEL-OK" output))
       (let ((trimmed (string-trim output))
             reason)
@@ -3154,51 +3218,56 @@ or when the replacement is statically refused."
          (string-trim refusal)
          (scalpel-agent--substitute-invocation pattern replacement)
          command)))
-    (with-temp-buffer
-      (insert text)
-      (let* ((process-environment
-              (cons (format "SCALPEL_PATTERN=%s" pattern)
-                    (cons (format "SCALPEL_REPLACEMENT=%s" replacement)
-                          process-environment)))
-             (script scalpel-agent--perl-script)
-             (exit
-              (call-process-region
-               (point-min) (point-max) "perl" t t nil "-e" script))
-             (first-line-start (point-min))
-             (first-line-end (progn (goto-char (point-min))
-                                    (line-end-position)))
-             (first-line (buffer-substring-no-properties
-                          first-line-start first-line-end))
-             (new-text (progn (goto-char (point-min))
-                              (buffer-substring-no-properties
-                               (line-beginning-position 2) (point-max)))))
-        (if (/= exit 0)
-            (if (string-match "\\`SCALPEL-ERROR " first-line)
+    (let* ((process-environment
+            (cons (format "SCALPEL_PATTERN=%s" pattern)
+                  (cons (format "SCALPEL_REPLACEMENT=%s" replacement)
+                        process-environment)))
+           (script scalpel-agent--perl-script)
+           (result (scalpel-proc-run "perl" (list "-e" script)
+                                     :input text
+                                     :timeout scalpel-agent-perl-timeout
+                                     :label "perl-substitute"))
+           (exit (plist-get result :status)))
+      ;; Signal, rather than return, when the child was killed: the caller
+      ;; reports the two conditions as the planner's to fix.
+      (scalpel-proc-check-result result)
+      (with-temp-buffer
+        (insert (plist-get result :output))
+        (let* ((first-line-start (point-min))
+               (first-line-end (progn (goto-char (point-min))
+                                      (line-end-position)))
+               (first-line (buffer-substring-no-properties
+                            first-line-start first-line-end))
+               (new-text (progn (goto-char (point-min))
+                                (buffer-substring-no-properties
+                                 (line-beginning-position 2) (point-max)))))
+          (if (/= exit 0)
+              (if (string-match "\\`SCALPEL-ERROR " first-line)
+                  (user-error
+                   (concat "Scalpel: pattern is not valid perl 5.x regexp "
+                           "text compiled with qr//, perl said: %s\n%s\n"
+                           "command: %s")
+                   (string-trim (substring first-line (match-end 0)))
+                   (scalpel-agent--substitute-invocation pattern replacement)
+                   command)
                 (user-error
-                 (concat "Scalpel: pattern is not valid perl 5.x regexp "
-                         "text compiled with qr//, perl said: %s\n%s\n"
-                         "command: %s")
-                 (string-trim (substring first-line (match-end 0)))
+                 (concat "Scalpel: perl exited with code %d while "
+                         "rewriting (target engine perl 5.x, compiled "
+                         "with qr//): %s\n%s\ncommand: %s")
+                 exit
+                 (string-trim first-line)
                  (scalpel-agent--substitute-invocation pattern replacement)
-                 command)
+                 command))
+            (unless (string-match "\\`SCALPEL-COUNT \\([0-9]+\\)" first-line)
               (user-error
-               (concat "Scalpel: perl exited with code %d while "
-                       "rewriting (target engine perl 5.x, compiled "
-                       "with qr//): %s\n%s\ncommand: %s")
-               exit
-               (string-trim first-line)
+               (concat "Scalpel: perl produced no count report (target "
+                       "engine perl 5.x, compiled with qr//); first 200 "
+                       "chars: %s\n%s\ncommand: %s")
+               (substring first-line 0 (min 200 (length first-line)))
                (scalpel-agent--substitute-invocation pattern replacement)
                command))
-          (unless (string-match "\\`SCALPEL-COUNT \\([0-9]+\\)" first-line)
-            (user-error
-             (concat "Scalpel: perl produced no count report (target "
-                     "engine perl 5.x, compiled with qr//); first 200 "
-                     "chars: %s\n%s\ncommand: %s")
-             (substring first-line 0 (min 200 (length first-line)))
-             (scalpel-agent--substitute-invocation pattern replacement)
-             command))
-          (cons (string-to-number (match-string 1 first-line))
-                new-text))))))
+            (cons (string-to-number (match-string 1 first-line))
+                  new-text)))))))
 
 (defun scalpel-agent--perl-substitute-preview (pattern replacement files)
   "Preview PATTERN replaced by REPLACEMENT in each file in FILES.
@@ -3725,22 +3794,12 @@ can offer block-edit as the retry."
         ;; pattern Emacs cannot compile loses only the excerpts, never the rewrite
         ;; or count.
         (let ((excerpts
-               (condition-case nil
-                   (let ((case-fold-search nil)
-                         (old-lines nil)
-                         (new-lines nil)
-                         (pos 0))
-                     (while (string-match pattern new pos)
-                       (push (scalpel-agent--line-at new (match-beginning 0)) new-lines)
-                       (setq pos (match-end 0)))
-                     (setq new-lines (nreverse new-lines))
-                     (setq pos 0)
-                     (while (string-match pattern old pos)
-                       (push (scalpel-agent--line-at old (match-beginning 0)) old-lines)
-                       (setq pos (match-end 0)))
-                     (setq old-lines (nreverse old-lines))
-                     (seq-take (cl-pairlis old-lines new-lines) 5))
-                 (error nil))))
+               (let ((old-lines (scalpel-agent--match-lines
+                                 old pattern scalpel-agent-substitute-excerpt-lines))
+                     (new-lines (scalpel-agent--match-lines
+                                 new pattern scalpel-agent-substitute-excerpt-lines)))
+                 (seq-take (cl-pairlis old-lines new-lines)
+                           scalpel-agent-substitute-excerpt-lines))))
           ;; The definition listing is taken from the two texts before anything is
           ;; written: it is the only record of what the rewrite did to the
           ;; definitions, and the next round has no other way to learn that a name
@@ -3999,6 +4058,16 @@ internal error guards."
                   (scalpel-planner-error
                    (funcall on-error (cdr err))
                    nil)
+                  (scalpel-proc-timeout-error
+                   (funcall on-error
+                            (list :type 'command-timeout
+                                  :message (error-message-string err)))
+                   nil)
+                  (scalpel-proc-oversized-error
+                   (funcall on-error
+                            (list :type 'command-oversized
+                                  :message (error-message-string err)))
+                   nil)
                   (error
                    (funcall on-error
                             (list :type 'action
@@ -4049,6 +4118,16 @@ internal error guards."
                                    (scalpel-planner-error
                                     (funcall on-error (cdr err))
                                     nil)
+                                   (scalpel-proc-timeout-error
+                                    (funcall on-error
+                                             (list :type 'command-timeout
+                                                   :message (error-message-string err)))
+                                    nil)
+                                   (scalpel-proc-oversized-error
+                                    (funcall on-error
+                                             (list :type 'command-oversized
+                                                   :message (error-message-string err)))
+                                    nil)
                                    (error
                                     (funcall on-error
                                              (list :type 'action
@@ -4085,6 +4164,16 @@ internal error guards."
                    nil)
                   (scalpel-planner-error
                    (funcall on-error (cdr err))
+                   nil)
+                  (scalpel-proc-timeout-error
+                   (funcall on-error
+                            (list :type 'command-timeout
+                                  :message (error-message-string err)))
+                   nil)
+                  (scalpel-proc-oversized-error
+                   (funcall on-error
+                            (list :type 'command-oversized
+                                  :message (error-message-string err)))
                    nil)
                   (error
                    (funcall on-error
@@ -4147,6 +4236,16 @@ internal error guards."
                            (scalpel-agent-shell
                             (plist-get action :command)
                             (plist-get action :reason))
+                         (scalpel-proc-timeout-error
+                          (funcall on-error
+                                   (list :type 'command-timeout
+                                         :message (error-message-string err)))
+                          nil)
+                         (scalpel-proc-oversized-error
+                          (funcall on-error
+                                   (list :type 'command-oversized
+                                         :message (error-message-string err)))
+                          nil)
                          (error
                           (funcall on-error
                                    (list :type
@@ -4199,9 +4298,10 @@ Actions are executed in array order; each step dispatch -- the
 first one and every subsequent one -- is deferred onto a
 zero-second timer instead of running synchronously inside the LLM
 process sentinel.  This keeps the sentinel from blocking timers
-and input while heavy work runs; shell `call-process' invocations,
-file I/O and `y-or-n-p' confirmations all execute in ordinary
-command-loop context.  The chain stays serialized exactly as
+and input while heavy work runs; file I/O and `y-or-n-p'
+confirmations all execute in ordinary command-loop context, and
+shell commands go through `scalpel-proc-run', which keeps the
+event loop alive while it waits.  The chain stays serialized exactly as
 before: each timer fires only after the previous action's
 callback has dispatched the next step, so a `block-edit' or
 `block-insert' action still settles from its own LLM callback
@@ -4344,9 +4444,10 @@ re-signaled unchanged with its original data."
                   (step (rest)
                     ;; Defer this step onto a zero-second timer so the
                     ;; sentinel (or any caller context) returns
-                    ;; immediately and shell `call-process', file I/O
-                    ;; and `y-or-n-p' confirms run in ordinary
-                    ;; command-loop context.  Serialization is
+                    ;; immediately and file I/O and `y-or-n-p' confirms
+                    ;; run in ordinary command-loop context; shell
+                    ;; commands reach `scalpel-proc-run', which waits
+                    ;; without stopping the event loop.  Serialization is
                     ;; preserved: each dispatch happens only after the
                     ;; previous action's callback fires.  On dispatch,
                     ;; the plan-time generation is rechecked: if an

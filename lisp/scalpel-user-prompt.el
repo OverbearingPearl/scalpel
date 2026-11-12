@@ -21,6 +21,7 @@
 ;;; Code:
 
 (require 'subr-x)
+(require 'scalpel-proc)
 (require 'scalpel-prompt)
 
 (defcustom scalpel-user-prompt-dir (expand-file-name "~/.scalpel/")
@@ -55,13 +56,19 @@ of the target file is translated through this alist."
 
 (defun scalpel-user-prompt--git-value (dir args)
   "Run git with ARGS in DIR; return the trimmed stdout, or nil.
-Nil covers both a failing git call and a repo outside git, so
-callers can treat an absent value and an error the same way."
-  (with-temp-buffer
-    (let ((default-directory dir))
-      (and (zerop (apply #'call-process "git" nil t nil args))
-           (not (string-empty-p (buffer-string)))
-           (string-trim (buffer-string))))))
+Nil covers a failing git call, a repo outside git, and a run that
+outlives the subprocess deadline, so callers can treat an absent value
+and an error the same way."
+  (let* ((default-directory dir)
+         (coding-system-for-read 'no-conversion)
+         (result (condition-case nil
+                     (scalpel-proc-run "git" args
+                                       :label "user-prompt-git")
+                   (error nil))))
+    (when (and result (equal (plist-get result :status) 0))
+      (let ((value (string-trim
+                    (decode-coding-string (plist-get result :output) 'utf-8))))
+        (unless (string-empty-p value) value)))))
 
 (defun scalpel-user-prompt--author (dir)
   "Return the git user name configured for DIR's repo, or nil."

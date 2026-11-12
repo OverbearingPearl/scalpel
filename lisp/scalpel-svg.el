@@ -25,6 +25,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'scalpel-proc)
 
 (defconst scalpel-svg--backends '(drawio plantuml plain)
   "Backend priority order.  First backend to succeed wins.")
@@ -52,10 +53,18 @@ FORMAT and ARGS as `message'."
   "Run PROGRAM with VERSION-ARGS under the probe timeout.
 Return non-nil when the process exits zero within
 `scalpel-svg--probe-timeout'; return nil if PROGRAM cannot be
-launched."
-  (condition-case nil
-      (= 0 (call-process program nil nil nil version-args))
-    (file-error nil)))
+launched, does not answer in time, or dies.
+An Electron binary such as the drawio CLI can be present on PATH and
+still never return from `--version' when it has no window server to
+talk to, so the deadline is what keeps the probe from costing the
+session; `call-process' had no way to express one."
+  (let ((result (condition-case nil
+                    (scalpel-proc-run program (list version-args)
+                                      :timeout scalpel-svg--probe-timeout
+                                      :label "svg-probe")
+                  (file-error nil))))
+    (and result (integerp (plist-get result :status))
+         (zerop (plist-get result :status)))))
 
 (defun scalpel-svg--probe (program version-args)
   "Probe PROGRAM once per session, caching the result.

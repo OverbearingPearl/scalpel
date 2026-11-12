@@ -19,6 +19,7 @@
 ;;; Code:
 
 (require 'toml)
+(require 'scalpel-proc)
 (require 'scalpel-redact)
 (require 'scalpel-diagnose)
 
@@ -50,6 +51,24 @@ structural check (:balanced-p), so a batch rewrite there cannot be
 validated.  Redo the edit as one block-edit per named definition
 next round; the refusal is what frees the retry, so nothing is
 broken.  To try again anyway: C-c C-e")
+    (command-timeout
+     . "a command or perl rewrite you wrote was killed at its deadline,
+so the round stopped there.  The environment is not at fault: the
+command itself did not finish.  Narrow it -- read
+one file instead of a tree, add a path filter, bound a loop -- or split
+the rewrite into smaller patterns, then re-emit the action.  The
+journal named in the error holds the exact argv, the child's pid, a
+verdict saying whether it never started, blocked mid-run or kept
+working, and a captured stack sample.  Press C-c C-e or M-x
+scalpel-console-repeat to retry")
+    (command-oversized
+     . "a command or perl rewrite you wrote produced more output than the
+runner will collect, so it was killed before the bytes reached the
+context.  The output budget is a few kilobytes, so a command that
+prints megabytes is a planning mistake rather than a working command
+that happened to be cut: narrow it with head, a count, a single path,
+or a pattern that matches fewer lines, then re-emit the action.  Press
+C-c C-e or M-x scalpel-console-repeat to retry")
     (pattern-no-match
      . "the pattern matched nothing in any file, so nothing was
 executed.  The commonest cause is an Emacs-style escaped
@@ -143,9 +162,13 @@ the empty string on any failure; never returns nil."
       (let ((result nil))
         (condition-case nil
             (let ((path ""))
-              (with-temp-buffer
-                (call-process "perldoc" nil t nil "-l" "perlre")
-                (setq path (string-trim (buffer-string))))
+              (let* ((coding-system-for-read 'no-conversion)
+                     (run (scalpel-proc-run "perldoc" (list "-l" "perlre")
+                                            :timeout 20
+                                            :label "perldoc-perlre")))
+                (setq path (string-trim
+                            (decode-coding-string
+                             (plist-get run :output) 'utf-8))))
               (when (and (string-match-p "\\`/.*\\'" path)
                          (file-readable-p path))
                 (let ((raw

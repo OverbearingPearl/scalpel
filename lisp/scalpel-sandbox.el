@@ -20,6 +20,7 @@
 
 (require 'cl-lib)
 (require 'subr-x)
+(require 'scalpel-proc)
 
 (defcustom scalpel-sandbox-program "bwrap"
   "Executable used for Linux command sandboxing."
@@ -75,6 +76,24 @@ profile.  Prefer the narrowest grant that makes the tool work."
                          (cons (string :tag "Directory")
                                (const :tag "Writable (DIR . t)" t))))
   :group 'scalpel-sandbox)
+
+(defcustom scalpel-sandbox-timeout 300
+  "Seconds a sandboxed shell command may run before it is killed.
+This is the deadline for the planner's command itself, not for the
+sandbox probe.  A command that overruns it is killed so Emacs keeps
+its event loop, and the journal records which command it was and what
+the child was doing.  Raise it for a project whose test suite is
+legitimately slower than five minutes."
+  :type 'number
+  :group 'scalpel)
+
+(defcustom scalpel-sandbox-probe-timeout 10
+  "Seconds a sandbox probe may run before it is killed.
+The probe runs before every shell action, so its deadline is short:
+a sandbox that cannot answer in ten seconds is broken for this
+purpose regardless of why."
+  :type 'number
+  :group 'scalpel)
 
 (defcustom scalpel-sandbox-extra-network-grants nil
   "Additional outbound network grants for the macOS sandbox-exec profile.
@@ -145,7 +164,10 @@ an internal detail of `scalpel-sandbox-supported-p'."
                            (string=
                             (string-trim (cdr result))
                             scalpel-sandbox--probe-sentinel)))))
-          (scalpel-sandbox-error nil))
+          ;; Best effort: this probe answers a capability question, so a
+          ;; sandbox refusal, a killed child and a launch failure all mean
+          ;; the same thing here -- not usable.
+          (error nil))
       (condition-case err
           (delete-file scratch)
         (file-error
@@ -505,14 +527,22 @@ FILES is the list of context files to expose, read-only."
         (scalpel-sandbox--macos-profile files)
         "/bin/sh" "-c" command))
 
+(defun scalpel-sandbox--probe-result-p (result)
+  "Return non-nil when RESULT, a `scalpel-proc-run' plist, exited zero.
+A probe that timed out or was killed has no exit status to compare,
+so it counts as a failed probe."
+  (and (integerp (plist-get result :status))
+       (zerop (plist-get result :status))))
+
 (defun scalpel-sandbox--darwin-probe-p ()
   "Run a trivial sandbox-exec profile; return non-nil when it is honored.
 On some macOS setups sandbox-exec exists but refuses to apply profiles
 \(exit 71), so existence alone is not enough."
-  (let ((exit-code
-         (call-process scalpel-sandbox-macos-program nil nil nil
-                       "-p" "(version 1)(allow default)" "/usr/bin/true")))
-    (eq exit-code 0)))
+  (scalpel-sandbox--probe-result-p
+   (scalpel-proc-run scalpel-sandbox-macos-program
+                     (list "-p" "(version 1)(allow default)" "/usr/bin/true")
+                     :timeout scalpel-sandbox-probe-timeout
+                     :label "sandbox-probe-macos")))
 
 (defun scalpel-sandbox--linux-probe-p ()
   "Return non-nil if the Linux sandbox backend is usable.
@@ -521,12 +551,14 @@ an actual executable probe rather than a name lookup, keeping this
 function safe to call from `scalpel-sandbox-supported-p' without
 triggering byte-compile warnings about an undefined helper."
   (and (executable-find "bwrap")
-       (zerop
-        (call-process "bwrap" nil nil nil
-                      "--unshare-all"
-                      "--die-with-parent"
-                      "--ro-bind" "/" "/"
-                      "/bin/true"))))
+       (scalpel-sandbox--probe-result-p
+        (scalpel-proc-run "bwrap"
+                          (list "--unshare-all"
+                                "--die-with-parent"
+                                "--ro-bind" "/" "/"
+                                "/bin/true")
+                          :timeout scalpel-sandbox-probe-timeout
+                          :label "sandbox-probe-bwrap"))))
 
 (defun scalpel-sandbox-supported-p ()
   "Return non-nil when a sandbox backend is available for this system.
@@ -565,7 +597,7 @@ command from ever reaching the operating system unserialized."
 macOS `sandbox-exec' has no `--chdir' equivalent, so the child
 inherits the caller's `default-directory'.  When that directory is
 not readable under the profile, `/bin/sh' cannot resolve its own
-cwd and writes a getcwd warning to stderr; because `call-process'
+cwd and writes a getcwd warning to stderr; because the runner
 captures stderr together with stdout, that warning lands in the
 captured output and the preflight sentinel comparison fails.
 A context file's parent cannot serve as the cwd: its directory
@@ -587,7 +619,12 @@ but through the caller's binary reporting path instead.
 Signal `user-error' when no backend exists, when the built ARGV is
 not a sandbox invocation, or when the sandbox runtime dies from a
 signal: a command whose sandbox failed must never be reported as if
-it had run."
+it had run.  Signal the same error when the command outlives
+`scalpel-sandbox-timeout' or outruns `scalpel-proc-max-output-bytes',
+because both are conditions under which continuing would cost Emacs
+its responsiveness or its memory, and both are already recorded in
+`scalpel-proc-log-file' with the command, pid, verdict and captured
+diagnostics."
   (let ((argv (cond
                ((eq system-type 'gnu/linux)
                 (scalpel-sandbox--bwrap-argv command files))
@@ -599,20 +636,30 @@ it had run."
     (unless (scalpel-sandbox--sandbox-argv-p argv)
       (scalpel-sandbox--fail
        "Scalpel: refusing to run a command outside the sandbox"))
-    (with-temp-buffer
-      (let* ((coding-system-for-read 'utf-8)
-             (coding-system-for-write 'utf-8-unix)
-             (default-directory (scalpel-sandbox--workdir))
-             (status (apply #'call-process (car argv) nil t nil (cdr argv))))
-        ;; A string status is Emacs' report of a signal (for example
-        ;; "Abort trap: 6"): the sandbox runtime died before the command
-        ;; could run.  Refuse instead of handing back a result the caller
-        ;; would mistake for command output.
-        (unless (integerp status)
-          (scalpel-sandbox--fail
-           "Scalpel: sandbox failed (%S); refusing to run shell command outside the sandbox"
-           status))
-        (cons status (buffer-string))))))
+    (let* ((coding-system-for-read 'utf-8)
+           (coding-system-for-write 'utf-8-unix)
+           (default-directory (scalpel-sandbox--workdir))
+           (result (scalpel-proc-run (car argv) (cdr argv)
+                                     :timeout scalpel-sandbox-timeout
+                                     :label "sandbox"))
+           (status (plist-get result :status)))
+      (cond
+       ;; The deadline fired: the command itself is what hung, and the
+       ;; journal already holds its argv, pid, verdict and diagnostics.
+       ((scalpel-proc-timeout-p result)
+        (scalpel-proc-check-result result))
+       ;; The child outran the output cap.  Reading the rest would cost
+       ;; memory rather than time, so it is refused the same way.
+       ((scalpel-proc-capped-p result)
+        (scalpel-proc-check-result result))
+       ;; A signal means the sandbox runtime or the command died before
+       ;; returning a status: refuse instead of handing back a result the
+       ;; caller would mistake for command output.
+       ((eq (plist-get result :status-symbol) 'signal)
+        (scalpel-sandbox--fail
+         "Scalpel: sandbox failed (%S); refusing to run shell command outside the sandbox"
+         status))
+       (t (cons status (plist-get result :output)))))))
 
 (defun scalpel-sandbox--preflight (files)
   "Prove the sandbox can run commands before any real command is sent.
@@ -625,14 +672,26 @@ context files are bound read-only, so the probe must not use one.
 FILES is the context file list, which defines the rest of the policy.
 Signal `user-error' when the probe does not come back with exit 0 and
 the sentinel, so a broken sandbox blocks shell actions instead of
-degrading them."
-  (let* ((result (scalpel-sandbox--invoke
-                  (format "printf %s > %s && cat %s && rm -f %s"
-                          scalpel-sandbox--probe-sentinel
-                          scalpel-sandbox--probe-file
-                          scalpel-sandbox--probe-file
-                          scalpel-sandbox--probe-file)
-                  files))
+degrading them.
+A probe that is killed rather than answered is an environment failure,
+not a planner one: the two conditions the runner raises are re-raised
+here as the sandbox error, so the console blames the sandbox and not
+the command the planner wrote."
+  (let* ((result (condition-case nil
+                     (scalpel-sandbox--invoke
+                      (format "printf %s > %s && cat %s && rm -f %s"
+                              scalpel-sandbox--probe-sentinel
+                              scalpel-sandbox--probe-file
+                              scalpel-sandbox--probe-file
+                              scalpel-sandbox--probe-file)
+                      files)
+                   (scalpel-proc-timeout-error
+                    (scalpel-sandbox--fail
+                     "Scalpel: sandbox probe did not answer within %ss; refusing to run shell command (%s)"
+                     scalpel-sandbox-timeout scalpel-proc-log-file))
+                   (scalpel-proc-oversized-error
+                    (scalpel-sandbox--fail
+                     "Scalpel: sandbox probe exceeded the output cap; refusing to run shell command"))))
          (output (string-trim (cdr result))))
     (unless (and (= (car result) 0)
                  (string= output scalpel-sandbox--probe-sentinel))
@@ -647,7 +706,11 @@ FILES is the list of context files to expose, read-only.
 Return (EXIT . OUTPUT).  Signal `user-error' when no backend exists,
 when the sandbox probe fails, or when the sandbox runtime dies: a
 command that cannot be proven to run inside the sandbox is refused
-rather than run outside it."
+rather than run outside it.  Signal `scalpel-proc-timeout-error' when
+COMMAND outlives `scalpel-sandbox-timeout' and
+`scalpel-proc-oversized-error' when it outruns
+`scalpel-proc-max-output-bytes'; both name the command, and the caller
+reports them as the planner's to fix rather than as a sandbox failure."
   (unless (scalpel-sandbox-supported-p)
     (scalpel-sandbox--fail
      "Scalpel: no supported command sandbox for %s" system-type))

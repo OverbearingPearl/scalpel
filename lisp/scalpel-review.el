@@ -17,6 +17,14 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'scalpel-proc)
+
+(defcustom scalpel-review-diff-timeout 60
+  "Seconds an external diff program may run before it is killed.
+A diff program that waits for a terminal, a pager or a lock would
+otherwise stop Emacs itself for as long as it waits."
+  :type 'number
+  :group 'scalpel)
 
 (defvar scalpel-review-mode-map
   (let ((map (make-sparse-keymap)))
@@ -604,20 +612,25 @@ The whole block (including the separator line) is tagged with the
                 (insert (or old-text "")))
               (with-temp-file new-file
                 (insert (or new-text "")))
-              ;; Run the diff program synchronously, capturing its
-              ;; stdout into a temp buffer, then insert the full text
-              ;; at point under the File header.  Pass the labels
-              ;; through two -L options before the two temp file
-              ;; operands, so the diff headers name the real file
-              ;; (before/after) rather than the temp file paths.
-              (let ((diff-start (point))
-                    (diff-output (with-temp-buffer
-                                   (call-process program nil t nil
-                                                 "-u"
-                                                 "-L" (concat "before/" (file-name-nondirectory file))
-                                                 "-L" (concat "after/" (file-name-nondirectory file))
-                                                 old-file new-file)
-                                   (buffer-substring (point-min) (point-max)))))
+              ;; Run the diff program with a deadline, capturing its
+              ;; stdout, then insert the full text at point under the File
+              ;; header.  Pass the labels through two -L options before the
+              ;; two temp file operands, so the diff headers name the real
+              ;; file (before/after) rather than the temp file paths.  A
+              ;; program that never exits used to freeze the whole review;
+              ;; the runner kills it and names it in the journal instead.
+              (let* ((diff-start (point))
+                     (result (scalpel-proc-run
+                              program
+                              (list "-u"
+                                    "-L" (concat "before/" (file-name-nondirectory file))
+                                    "-L" (concat "after/" (file-name-nondirectory file))
+                                    old-file new-file)
+                              :timeout scalpel-review-diff-timeout
+                              :label "review-diff"))
+                     (diff-output (plist-get result :output)))
+                (when (scalpel-proc-timeout-p result)
+                  (user-error "%s" (scalpel-proc-timeout-message result)))
                 (insert diff-output)
                 ;; Remove the diff program's own header lines
                 ;; ("--- before/<name>" and "+++ after/<name>") so

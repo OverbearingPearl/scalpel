@@ -20,7 +20,7 @@
 (defconst scalpel-diagnose-planner-types
   '(parse tool-call prose unknown-tool missing-field malformed no-replacement
           oversized oversized-target no-such-symbol pattern-no-match bad-path
-          unbalanced no-validation)
+          unbalanced no-validation command-timeout command-oversized)
   "Error types caused by the planner's reply, not by Scalpel or the user.
 Under the default-allow self-heal policy every type in this list is
 eligible for an automatic retry round except the two names held in the
@@ -49,7 +49,12 @@ request because the target definition's byte size exceeds the
 pre-flight budget; nothing was executed.  The blame is the planner's
 choice of an over-large edit target, so the failure is planner-side
 and stays eligible for self-heal retry with advice to split the edit
-into smaller targets or rebuild the definition with file-create.")
+into smaller targets or rebuild the definition with file-create.
+COMMAND-TIMEOUT and COMMAND-OVERSIZED mean a command or a perl rewrite
+the planner wrote was killed by the subprocess runner: the first
+exceeded its deadline, the second its output cap.  Neither is a Scalpel
+bug; the remedy is to narrow the command, split the rewrite, or filter
+the output, and the journal names the exact argv that was killed.")
 
 (defconst scalpel-diagnose-context-types
   '(file-outside-context)

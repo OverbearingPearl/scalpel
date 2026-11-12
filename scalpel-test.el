@@ -305,11 +305,18 @@ results buffer is recreated with the invoking directory as its
     (scalpel-test--load-entry-tests)
     (scalpel-test--kill-temp-file-buffers)
     (let ((default-directory dir))
-      ;; reload-modules unloads scalpel-llm, and unload-feature/defvar
-      ;; destroys the dynamic let binding established by the caller in
-      ;; scalpel-test-run, so the gate must be bound again after the
-      ;; reload finishes, around the ert run itself.
-      (let ((scalpel-llm-probe-inhibit t))
+      ;; The gates are bound here, not in the caller: reload-modules
+      ;; unloads scalpel-llm and scalpel-proc, and unload-feature/defvar
+      ;; destroys the dynamic binding established by the caller in
+      ;; scalpel-test-run, so they must be bound again after the reload
+      ;; finishes, around the ert run itself.
+      (let ((scalpel-llm-probe-inhibit t)
+            ;; A test run must not append to the user's process journal:
+            ;; the suite calls real code paths, and the journal is the
+            ;; evidence a freeze investigation reads.
+            (scalpel-proc-log-file
+             (expand-file-name "scalpel-test-journal.log"
+                               temporary-file-directory)))
         (if noninteractive
             (progn
               (message "Scalpel: running tests in batch mode...")
