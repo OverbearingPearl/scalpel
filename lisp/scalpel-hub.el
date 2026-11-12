@@ -103,6 +103,46 @@ idle, or \"-\" when BUF is no longer live."
             "no")))
     "-"))
 
+(defun scalpel-hub--planner-error-p (buf)
+  "Return t when BUF is a live, idle console whose last round hit a planner error.
+Dead buffers and busy sessions yield nil.  Otherwise locate the last
+assistant role segment and decide by text content instead of text
+properties: search from the segment start to the end of BUF for the
+last error header (`Scalpel [bug]' or `Scalpel [planner error]') and
+the last success header (a line beginning with `Scalpel<'); return t
+only when an error header exists and is later than any success header
+\(or no success header exists).  This avoids the false positive caused
+by the `scalpel-console-planner-error' property bleeding backwards
+into later successful rounds inserted after the error text."
+  (when (and (buffer-live-p buf)
+             (not (scalpel-hub--busy buf)))
+    (with-current-buffer buf
+      (catch 'found
+        (let ((pos (point-max)))
+          (while (> pos (point-min))
+            (setq pos (previous-single-property-change
+                       pos 'scalpel-console-role nil (point-min)))
+            (when (and (integerp pos)
+                       (eq (get-text-property pos 'scalpel-console-role)
+                           'assistant))
+              (throw 'found
+                     (save-excursion
+                       (save-restriction
+                         (widen)
+                         (let ((err-pos nil)
+                               (ok-pos nil))
+                           (goto-char (point-max))
+                           (when (re-search-backward
+                                  "Scalpel \\[\\(?:bug\\|planner error\\)\\]"
+                                  pos t)
+                             (setq err-pos (match-beginning 0)))
+                           (goto-char (point-max))
+                           (when (re-search-backward "^Scalpel<" pos t)
+                             (setq ok-pos (match-beginning 0)))
+                           (and err-pos
+                                (or (null ok-pos) (> err-pos ok-pos))
+                                t))))))))))))
+
 (defun scalpel-hub--tokens (buf)
   "Return the cumulative token total for console BUF, or a dash.
 Zero is shown as 0; a missing token record or an unavailable
@@ -169,7 +209,9 @@ single line so the tabulated-list row structure is preserved."
                           ((string= busy "yes")
                            (propertize busy 'face 'bold 'font-lock-face 'error))
                           ((string= busy "no")
-                           (propertize busy 'face 'shadow))
+                           (if (scalpel-hub--planner-error-p buf)
+                               (propertize "err" 'face 'bold 'font-lock-face 'error)
+                             (propertize busy 'face 'shadow)))
                           (t busy)))
               (root-cell (if (and (funcall root-duplicated root)
                                   (not (string= root name)))
@@ -237,6 +279,13 @@ minibuffer is active, so no guard is needed."
   (when (buffer-live-p (get-buffer scalpel-hub--buffer-name))
     (scalpel-hub--refresh)))
 
+(defun scalpel-hub--uninstall-refresh-hook ()
+  "Remove `scalpel-hub--refresh-on-event' from `buffer-list-update-hook'.
+
+Invoked when the hub buffer is killed so the hook registration
+does not outlive the buffer it serves."
+  (remove-hook 'buffer-list-update-hook #'scalpel-hub--refresh-on-event))
+
 (defun scalpel-hub-refresh ()
   "Refresh the hub listing in place."
   (interactive)
@@ -302,7 +351,9 @@ be toggled with `toggle-truncate-lines'."
   (setq revert-buffer-function
         (lambda (&optional _ignore-auto _noconfirm) (scalpel-hub--refresh)))
   (setq truncate-lines t)
-  (tabulated-list-init-header))
+  (tabulated-list-init-header)
+  (add-hook 'buffer-list-update-hook #'scalpel-hub--refresh-on-event)
+  (add-hook 'kill-buffer-hook #'scalpel-hub--uninstall-refresh-hook nil t))
 
 (defun scalpel-hub-open ()
   "Open the Scalpel session hub.
