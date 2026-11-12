@@ -83,6 +83,77 @@ their contents never disturb the depth count."
                 ((scalpel-locate-js--skip-comment-at))
                 (t (forward-char))))))))
 
+(defun scalpel-locate-js--object-entry-end ()
+  "Return the end of the object entry value starting at point.
+Scanning skips strings, template literals and comments, and
+stops before the comma or closing brace that ends the entry at
+the object's own depth, so the caller can step entry by entry."
+  (let ((depth 0)
+        (stop nil))
+    (catch 'done
+      (while (and (not stop) (not (eobp)))
+        (let ((ch (char-after)))
+          (cond
+           ((scalpel-locate-js--skip-comment-at))
+           ((memq ch (list 34 39)) (scalpel-locate-js--skip-string ch))
+           ((eq ch 96) (scalpel-locate-js--skip-template))
+           ((memq ch (list 123 40 91))
+            (setq depth (1+ depth))
+            (forward-char))
+           ((memq ch (list 125 41 93))
+            (if (= depth 0)
+                (setq stop t)
+              (setq depth (1- depth))
+              (forward-char)))
+           ((and (= depth 0) (eq ch 44))
+            (setq stop t))
+           (t (forward-char))))))
+    (point)))
+
+(defun scalpel-locate-js--object-entry-range (object key)
+  "Return the bounds of one entry in a top level object literal.
+The bounds are (BEG . END) of entry KEY in the first top level
+object literal declared as OBJECT.
+Return nil when OBJECT or KEY is absent.
+OBJECT names a const, let or var declaration; entry keys are
+matched only at the object's own depth and values are skipped
+with strings, template literals and comments intact."
+  (save-excursion
+    (goto-char (point-min))
+    (catch 'done
+      (let (found)
+        (while (and (not found)
+                    (re-search-forward
+                     scalpel-locate-js--decl-regexp nil t))
+          (let ((name (or (match-string-no-properties 1)
+                          (match-string-no-properties 2))))
+            (goto-char (match-end 0))
+            (when (and name (string= name object))
+              (skip-chars-forward " \t\n\r")
+              (when (eq (char-after) 61)
+                (forward-char)
+                (skip-chars-forward " \t\n\r"))
+              (when (eq (char-after) 123)
+                (forward-char)
+                (while (not found)
+                  (skip-chars-forward " \t\n\r,")
+                  (cond
+                   ((eobp) (throw 'done nil))
+                   ((eq (char-after) 125) (throw 'done nil))
+                   ((looking-at
+                     "\\([A-Za-z_$][A-Za-z0-9_$]*\\)[ \t\n\r]*:")
+                    (let ((beg (match-beginning 0))
+                          (kname
+                           (match-string-no-properties 1)))
+                      (goto-char (match-end 0))
+                      (let ((end
+                             (scalpel-locate-js--object-entry-end)))
+                        (if (string= kname key)
+                            (setq found (cons beg end))
+                          (goto-char end)))))
+                   (t (forward-char))))))))
+        found))))
+
 (defun scalpel-locate-js--skip-regex ()
   "Skip a regex literal starting at the slash at point.
 A backslash escapes the next character and a bracketed class is
@@ -226,45 +297,139 @@ directly."
              (looking-at scalpel-locate-js--decl-regexp))))))
 
 (defun scalpel-locate-js--definition-end ()
-  "Return the end position of the declaration whose name just matched.
-A function or class declaration is ended by its brace group; a
-variable declaration runs to a semicolon or a newline at depth
-zero."
-  (skip-chars-forward " \t\n\r")
-  (if (eq (char-after) 40)
-      (progn
-        (scalpel-locate-js--skip-balanced 40 41)
-        (skip-chars-forward " \t\n\r")
-        (if (eq (char-after) 123)
-            (progn
-              (scalpel-locate-js--skip-balanced 123 125)
-              (point))
-          (point)))
-    (let ((depth 0)
-          (stop nil))
-      (while (and (not stop) (not (eobp)))
-        (let ((ch (char-after)))
-          (cond
-           ((scalpel-locate-js--skip-comment-at))
-           ((memq ch (list 34 39)) (scalpel-locate-js--skip-string ch))
-           ((eq ch 96) (scalpel-locate-js--skip-template))
-           ((and (eq ch 47) (scalpel-locate-js--regex-context-p))
-            (scalpel-locate-js--skip-regex))
-           ((memq ch (list 40 91 123))
-            (setq depth (1+ depth))
-            (forward-char))
-           ((memq ch (list 41 93 125))
-            (if (= depth 0)
-                (setq stop t)
-              (setq depth (1- depth))
-              (forward-char)))
-           ((and (= depth 0) (eq ch 59))
-            (forward-char)
-            (setq stop t))
-           ((and (= depth 0) (eq ch 10))
-            (setq stop t))
-           (t (forward-char)))))
-      (point))))
+  "Locate the end of the definition whose keyword is at point.
+Point must sit at the start of a definition.  A function
+declaration is ended by the closing brace of its body: the
+parameter list is crossed by paren balancing and the body by
+brace balancing, and point is returned just after the closing
+brace.  A variable declaration ends at the first semicolon or
+newline encountered at bracket depth zero; point is returned
+just before the terminator.  Strings, template literals and
+comments are consumed as whole units so terminator detection is
+not disturbed.  Return nil when the end cannot be located."
+  (save-excursion
+    (catch 'scalpel-locate-js--no-end
+      (if (looking-at "\\(?:async[ \t\n\r]+\\)?function\\b")
+          ;; Function declaration: balance the parameter parens, then
+          ;; balance the body braces.
+          (progn
+            (goto-char (match-end 0))
+            (skip-chars-forward " \t\n\r*")
+            (skip-chars-forward "A-Za-z0-9_$")
+            (skip-chars-forward " \t\n\r")
+            (unless (eq (char-after) ?\() (throw 'scalpel-locate-js--no-end nil))
+            (forward-char 1)
+            (let ((depth 1) done)
+              (while (not done)
+                (let ((ch (char-after)))
+                  (cond
+                   ((eobp) (throw 'scalpel-locate-js--no-end nil))
+                   ((eq ch ?\") (forward-char 1)
+                    (while (and (not (eobp)) (not (eq (char-after) ?\")))
+                      (if (eq (char-after) ?\\) (forward-char 2) (forward-char 1)))
+                    (forward-char 1))
+                   ((eq ch ?\') (forward-char 1)
+                    (while (and (not (eobp)) (not (eq (char-after) ?\')))
+                      (if (eq (char-after) ?\\) (forward-char 2) (forward-char 1)))
+                    (forward-char 1))
+                   ((eq ch ?\\) (forward-char 2))
+                   ((eq ch ?\() (setq depth (1+ depth)) (forward-char 1))
+                   ((eq ch ?\))
+                    (setq depth (1- depth) done (= depth 0))
+                    (if done (forward-char 1) (forward-char 1)))
+                   (t (forward-char 1))))))
+            (skip-chars-forward " \t\n\r")
+            (unless (eq (char-after) ?\{) (throw 'scalpel-locate-js--no-end nil))
+            (let ((depth 0) done)
+              (while (not done)
+                (let ((ch (char-after)))
+                  (cond
+                   ((eobp) (throw 'scalpel-locate-js--no-end nil))
+                   ((eq ch ?\") (forward-char 1)
+                    (while (and (not (eobp)) (not (eq (char-after) ?\")))
+                      (if (eq (char-after) ?\\) (forward-char 2) (forward-char 1)))
+                    (forward-char 1))
+                   ((eq ch ?\') (forward-char 1)
+                    (while (and (not (eobp)) (not (eq (char-after) ?\')))
+                      (if (eq (char-after) ?\\) (forward-char 2) (forward-char 1)))
+                    (forward-char 1))
+                   ((eq ch ?\`)
+                    (forward-char 1)
+                    (while (and (not (eobp)) (not (eq (char-after) ?\`)))
+                      (if (eq (char-after) ?\\)
+                          (forward-char 2)
+                        (if (and (eq (char-after) ?\$)
+                                 (eq (char-after (1+ (point))) ?\{))
+                            (let ((pdepth 1))
+                              (forward-char 2)
+                              (while (and (> pdepth 0) (not (eobp)))
+                                (cond
+                                 ((eq (char-after) ?\{)
+                                  (setq pdepth (1+ pdepth)) (forward-char 1))
+                                 ((eq (char-after) ?\})
+                                  (setq pdepth (1- pdepth)) (forward-char 1))
+                                 (t (forward-char 1)))))
+                          (forward-char 1))))
+                    (forward-char 1))
+                   ((and (eq ch ?/) (looking-at "//")) (forward-line 1))
+                   ((and (eq ch ?/) (looking-at "/\\*"))
+                    (goto-char (match-end 0))
+                    (search-forward "*/" nil t))
+                   ((eq ch ?\{) (setq depth (1+ depth)) (forward-char 1))
+                   ((eq ch ?\})
+                    (if (= depth 0)
+                        (progn (forward-char 1) (setq done t))
+                      (setq depth (1- depth)) (forward-char 1)))
+                   (t (forward-char 1)))))
+              (point)))
+        ;; Variable declaration: stop at semicolon or newline at depth zero.
+        (let ((depth 0) end done)
+          (while (not done)
+            (let ((ch (char-after)))
+              (cond
+               ((eobp) (setq done t))
+               ((eq ch ?\") (forward-char 1)
+                (while (and (not (eobp)) (not (eq (char-after) ?\")))
+                  (if (eq (char-after) ?\\) (forward-char 2) (forward-char 1)))
+                (forward-char 1))
+               ((eq ch ?\') (forward-char 1)
+                (while (and (not (eobp)) (not (eq (char-after) ?\')))
+                  (if (eq (char-after) ?\\) (forward-char 2) (forward-char 1)))
+                (forward-char 1))
+               ((eq ch ?\`)
+                (forward-char 1)
+                (while (and (not (eobp)) (not (eq (char-after) ?\`)))
+                  (if (eq (char-after) ?\\)
+                      (forward-char 2)
+                    (if (and (eq (char-after) ?\$)
+                             (eq (char-after (1+ (point))) ?\{))
+                        (let ((pdepth 1))
+                          (forward-char 2)
+                          (while (and (> pdepth 0) (not (eobp)))
+                            (cond
+                             ((eq (char-after) ?\{)
+                              (setq pdepth (1+ pdepth)) (forward-char 1))
+                             ((eq (char-after) ?\})
+                              (setq pdepth (1- pdepth)) (forward-char 1))
+                             (t (forward-char 1)))))
+                      (forward-char 1))))
+                (forward-char 1))
+               ((and (eq ch ?/) (looking-at "//")) (forward-line 1))
+               ((and (eq ch ?/) (looking-at "/\\*"))
+                (goto-char (match-end 0))
+                (search-forward "*/" nil t))
+               ((eq ch ?\[) (setq depth (1+ depth)) (forward-char 1))
+               ((eq ch ?\]) (setq depth (1- depth)) (forward-char 1))
+               ((eq ch ?\{) (setq depth (1+ depth)) (forward-char 1))
+               ((eq ch ?\}) (setq depth (1- depth)) (forward-char 1))
+               ((eq ch ?\() (setq depth (1+ depth)) (forward-char 1))
+               ((eq ch ?\)) (setq depth (1- depth)) (forward-char 1))
+               ((and (eq ch ?\;) (= depth 0))
+                (setq end (point) done t))
+               ((and (eq ch ?\n) (= depth 0))
+                (setq end (point) done t))
+               (t (forward-char 1)))))
+          end)))))
 
 (defun scalpel-locate-js-range (_file symbol)
   "Return the bounds of SYMBOL's declaration in the current buffer.

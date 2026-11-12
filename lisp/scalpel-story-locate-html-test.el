@@ -74,6 +74,16 @@
   (:then (should (equal result '("s" "s.x" "ok")))
          (should (equal text "<script id=\"s\">var x = \"<div id=\\\"nope\\\">\";</script>"))))
 
+(ert-gwt-deftest
+  (:given ((content "<html><body>\n<script>\nconst D = { c2_2: {a:1}, c2_2b: {b:2} };\n</script>\n<p id=\"p1\">x</p>\n</body></html>\n")
+           (range nil)
+           (text nil)))
+  (:when (with-temp-buffer
+           (insert content)
+           (setq range (scalpel-locate-html-range nil "D.c2_2"))
+           (setq text (and range (buffer-substring-no-properties (car range) (cdr range))))))
+  (:then (should (and range text (string-match-p "c2_2" text)))))
+
 (provide 'scalpel-story-locate-html-test)
 
 ;;; scalpel-story-locate-html-test.el ends here

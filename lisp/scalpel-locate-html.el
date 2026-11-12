@@ -201,56 +201,320 @@ tag), group 2 the tag name."
           (setq pos (1+ pos)))))
       (zerop depth))))
 
-(defun scalpel-locate-html--top-definition-range (symbol)
-  "Return (BEG . END) of the element whose id is SYMBOL.
-BEG is the start tag's `<'; END is just past the matching end
-tag.  Trailing blank lines are excluded.  Return nil when no
-element in the buffer carries that id.
-When SYMBOL is dotted as scriptId.jsName, first resolve the
-element whose id is scriptId, then locate the JS declaration of
-jsName inside that element's body and return its full JS
-definition (BEG . END), matching the semantics of ranges
-produced for .js files."
-  (if (string-match "\\`\\([^.]+\\)\\.\\([^.]+\\)\\'" symbol)
-      (let* ((script-id (match-string 1 symbol))
-             (js-name (match-string 2 symbol))
-             (range (scalpel-locate-html--top-definition-range script-id)))
-        (when range
-          (save-excursion
-            (save-restriction
-              (narrow-to-region (car range) (cdr range))
-              (goto-char (point-min))
-              (let (found)
-                (while (and (not found)
-                            (re-search-forward
-                             scalpel-locate-js--decl-regexp nil t))
-                  (let ((name (or (match-string 1) (match-string 2))))
-                    (when (and name (string= name js-name))
-                      (setq found
-                            (cons (match-beginning 0)
-                                  (scalpel-locate-js--definition-end))))))
-                found)))))
-    (save-excursion
+(defun scalpel-locate-html--js-entry-range (symbol)
+  "Return the range of entry KEY in the top-level JS object NAME.
+SYMBOL is the dot form `NAME.key' in the current HTML buffer, and
+may be given either as a symbol or as a string.
+The object must be declared at top level of an inline <script>
+element carrying no id attribute (and no src), as either
+`const/let/var NAME = {' or a bare `NAME = {' assignment.  Raw
+text of script and style elements outside such inline scripts is
+never scanned, so `scriptId.jsName' style references cannot be
+confused with object entries.
+Returns (BEG . END), where BEG is the start of the declaration
+head and END is the end of the located entry with trailing
+whitespace removed; nil when the object declaration or the key is
+not found."
+  (require 'scalpel-locate-js)
+  (let* ((raw (if (symbolp symbol) (symbol-name symbol) symbol))
+         (parts (split-string raw "\\."))
+         (name (string-join (butlast parts) "."))
+         (key (car (last parts)))
+         (decl-re
+          (concat "\\<\\(?:\\(?:const\\|let\\|var\\)[ \t\r\n]+\\)?"
+                  (regexp-quote name)
+                  "[ \t\r\n]*=[ \t\r\n]*{")))
+    (when (and (> (length parts) 1) (not (string-empty-p name)))
+      (save-excursion
+        (goto-char (point-min))
+        (catch 'found
+          (while (re-search-forward "<\\(script\\|style\\)\\b[^>]*>" nil t)
+            (let* ((tag-name (downcase (match-string 1)))
+                   (attrs (substring (match-string 0) 0 -1))
+                   (body-beg (match-end 0))
+                   (body-end
+                    (save-excursion
+                      (if (re-search-forward
+                           (concat "</" (regexp-quote (match-string 1)))
+                           nil t)
+                          (match-beginning 0)
+                        (point-max)))))
+              (when (and (string= tag-name "script")
+                         (not (string-match-p "\\bid[ \t\r\n]*=" (downcase attrs)))
+                         (not (string-match-p "\\bsrc[ \t\r\n]*=" (downcase attrs))))
+                (goto-char body-beg)
+                (when (re-search-forward decl-re body-end t)
+                  (let ((entry (save-excursion
+                                 (goto-char (match-end 0))
+                                 (scalpel-locate-js--object-entry-range
+                                  name key))))
+                    (when entry
+                      (throw 'found
+                             (cons (match-beginning 0)
+                                   (save-excursion
+                                     (goto-char (cdr entry))
+                                     (skip-chars-backward " \t\r\n" (car entry))
+                                     (point))))))))))
+          nil)))))
+
+(defun scalpel-locate-html--script-declaration-range (symbol)
+  "Return the (BEG . END) range of dotted SYMBOL's JS declaration.
+The declaration lives in the script element whose id is SYMBOL's
+prefix.
+The prefix names a script element carrying an id attribute; the
+body is scanned with the JS locator, so function, class and
+const/let/var declarations are all recognized.  Return nil when
+the script element or the declaration cannot be found."
+  (let* ((parts (split-string
+                 (if (symbolp symbol) (symbol-name symbol) symbol)
+                 "\\."))
+         (script-id (nth 0 parts))
+         (js-name (nth 1 parts)))
+    (when (and script-id js-name)
+      (save-excursion
+        (goto-char (point-min))
+        (when (re-search-forward
+               (concat "<script\\(?:[ \t\n]+[^<>]*\\)?"
+                       "[ \t\n]id[ \t\n]*=[ \t\n]*\\(['\"]\\)"
+                       (regexp-quote script-id) "\\1")
+               nil t)
+          (let ((body-beg (point))
+                (body-end
+                 (save-excursion
+                   (scalpel-locate-html--skip-raw-text "script")
+                   (point))))
+            (when (> body-end body-beg)
+              (let* ((body-text
+                      (buffer-substring-no-properties
+                       body-beg body-end))
+                     (range
+                      (with-temp-buffer
+                        (insert body-text)
+                        (scalpel-locate-js-range nil js-name))))
+                (when range
+                  (cons (+ body-beg (car range) -1)
+                        (+ body-beg (cdr range) -1)))))))))))
+
+(defun scalpel-locate-html--js--skip-noise ()
+  "Skip over a comment, string, or template literal at point.
+Return non-nil when such a token was consumed; the point then
+sits right after it."
+  (cond
+   ((looking-at "//")
+    (search-forward "\n" nil t))
+   ((looking-at "/\\*")
+    (search-forward "*/" nil t))
+   ((looking-at "[\"']")
+    (let ((quote (char-after))
+          (closed nil))
+      (forward-char)
+      (while (and (not closed) (not (eobp)))
+        (cond
+         ((eq (char-after) ?\\) (forward-char 2))
+         ((eq (char-after) quote) (forward-char) (setq closed t))
+         ((eq (char-after) ?\n) (setq closed t))
+         (t (forward-char))))
+      t))
+   ((eq (char-after) ?`)
+    (forward-char)
+    (while (and (not (eobp)) (not (eq (char-after) ?`)))
+      (if (eq (char-after) ?\\)
+          (forward-char 2)
+        (forward-char)))
+    (unless (eobp) (forward-char))
+    t)
+   (t nil)))
+
+(defun scalpel-locate-html--js--skip-ws ()
+  "Advance over whitespace at point."
+  (while (and (not (eobp))
+              (memq (char-after) '(?\s ?\t ?\n ?\r)))
+    (forward-char)))
+
+(defun scalpel-locate-html--js--scan-object-keys (name result)
+  "Enumerate the keys of the object literal assigned to NAME.
+Point sits before the opening brace; the keys declared at that
+object's own depth, pushing NAME.key onto RESULT.  Keys are
+recognized solely by string matching of identifiers or quoted
+strings, so numeric positions never become key names; values are
+skipped wholesale (strings, template literals and comments cannot
+disturb the scan) and nested objects are not entered."
+  (forward-char)                       ; enter the opening brace
+  (let ((depth 1)
+        (expect t)
+        (key-re
+         (concat
+          "\\(?:\\([A-Za-z_$][A-Za-z0-9_$]*\\)"
+          "\\|'\\([^']*\\)'"
+          "\\|\"\\([^\"]*\\)\"\\)"
+          "\\s-*[:=,}]")))
+    (while (and (not (eobp)) (> depth 0))
+      (cond
+       ((scalpel-locate-html--js--skip-noise))
+       ((memq (char-after) '(?\{ ?\[ ?\())
+        (setq depth (1+ depth))
+        (forward-char))
+       ((memq (char-after) '(?\} ?\] ?\)))
+        (setq depth (1- depth))
+        (forward-char))
+       ((and (= depth 1) expect (looking-at key-re))
+        (push (concat name "."
+                      (or (match-string 1)
+                          (match-string 2)
+                          (match-string 3)))
+              result)
+        (goto-char (match-end 0))
+        ;; a key followed by `:` or `=` carries a value; the generic
+        ;; branches below consume it, so stop expecting keys until the
+        ;; next comma at the object's own depth.
+        (setq expect nil))
+       ((eq (char-after) ?\,)
+        (setq expect (= depth 1))
+        (forward-char))
+       (t (forward-char))))
+    result))
+
+(defun scalpel-locate-html--js-inline-top-level-decls (text)
+  "Return the top-level declared names in inline script TEXT.
+For every top-level declaration whose initializer is an object
+literal, the keys enumerated at that object's own depth are
+appended as NAME.key entries.  Comments, strings and template
+literals are skipped so they cannot produce spurious names; keys
+are matched as strings only, never derived from numeric positions."
+  (let ((result nil))
+    (with-temp-buffer
+      (insert text)
       (goto-char (point-min))
-      (let (beg name)
-        (while (and (not beg)
-                    (re-search-forward
-                     scalpel-locate-html--tag-regexp nil t))
-          (let* ((tag-beg (match-beginning 0))
-                 (tag-name (match-string 1))
-                 (id (scalpel-locate-html--tag-id tag-beg)))
-            (when (and id (string= id symbol))
-              (setq beg tag-beg name tag-name))
-            (unless beg
-              (scalpel-locate-html--skip-raw-text tag-name))))
-        (when beg
-          (goto-char beg)
-          (let ((end (scalpel-locate-html--element-end name)))
-            (goto-char end)
-            (skip-chars-backward " \t\n\r")
-            (if (< (point) beg)
-                (cons beg (1+ beg))
-              (cons beg (point)))))))))
+      (let ((depth 0)
+            (decl-re
+             (concat
+              "\\_<\\(?:const\\|let\\|var\\|function\\|class\\)\\_>"
+              "\\s-*\\*?\\s-*"
+              "\\([A-Za-z_$][A-Za-z0-9_$]*\\)")))
+        (while (not (eobp))
+          (cond
+           ((scalpel-locate-html--js--skip-noise))
+           ((eq (char-after) ?\{)
+            (setq depth (1+ depth))
+            (forward-char))
+           ((eq (char-after) ?\})
+            (setq depth (1- depth))
+            (forward-char))
+           ((and (= depth 0) (looking-at decl-re))
+            (let* ((name (match-string 1))
+                   (plain-decl
+                    (string-match-p
+                     "\\`\\(?:const\\|let\\|var\\)"
+                     (match-string 0))))
+              (goto-char (match-end 0))
+              (if (not plain-decl)
+                  (push name result)
+                ;; Variable declaration: walk its declarator list.
+                (let ((more t) (pending t))
+                  (while more
+                    (cond
+                     ((scalpel-locate-html--js--skip-noise))
+                     ((looking-at "\\s-*=")
+                      (goto-char (match-end 0))
+                      (push name result)
+                      (setq pending nil)
+                      (scalpel-locate-html--js--skip-ws)
+                      (if (eq (char-after) ?\{)
+                          (setq result
+                                (scalpel-locate-html--js--scan-object-keys
+                                 name result))
+                        ;; Skip the initializer up to a declarator
+                        ;; separator, keeping brackets balanced.
+                        (let ((vdepth 0) (stop nil))
+                          (while (and (not stop) (not (eobp)))
+                            (cond
+                             ((scalpel-locate-html--js--skip-noise))
+                             ((memq (char-after) '(?\{ ?\[ ?\())
+                              (setq vdepth (1+ vdepth))
+                              (forward-char))
+                             ((memq (char-after) '(?\} ?\] ?\)))
+                              (setq vdepth (1- vdepth))
+                              (forward-char))
+                             ((and (= vdepth 0)
+                                   (memq (char-after) '(?\; ?\, ?\n)))
+                              (setq stop t))
+                             (t (forward-char)))))))
+                     ((looking-at "\\s-*\\([,;]\\)")
+                      (when pending (push name result))
+                      (setq pending nil)
+                      (if (string= (match-string 1) ",")
+                          (progn
+                            (goto-char (match-end 0))
+                            (scalpel-locate-html--js--skip-noise)
+                            (scalpel-locate-html--js--skip-ws)
+                            (if (looking-at "[A-Za-z_$][A-Za-z0-9_$]*")
+                                (setq name (match-string 0)
+                                      pending t)
+                              (setq more nil)))
+                        (setq more nil)))
+                     (t (setq more nil))))))))
+           (t (forward-char))))))
+    (nreverse result)))
+
+(defun scalpel-locate-html--top-definition-range (symbol)
+  "Locate the top-level definition range for SYMBOL in the current HTML buffer.
+SYMBOL may be a symbol or a string.  A non-dotted SYMBOL resolves to the
+element bearing that id.  A dotted SYMBOL first resolves its prefix: when
+the prefix names a script element carrying an id, the original
+scriptId.jsName declaration scan applies; otherwise
+`scalpel-locate-html--js-entry-range' resolves the NAME.key object entry,
+falling back to the script declaration scan when no object entry matches.
+Return a cons (BEG . END) or nil when SYMBOL cannot be located."
+  (let ((parts (split-string
+                (if (symbolp symbol) (symbol-name symbol) symbol)
+                "\\."))
+        (case-fold-search nil))
+    (save-excursion
+      (save-restriction
+        (widen)
+        (cond
+         ;; Non-dotted symbol: locate the element with matching id by
+         ;; scanning tag by tag so void/img elements and raw-text
+         ;; elements get exact boundaries.
+         ((= (length parts) 1)
+          (let ((id (regexp-quote (car parts))))
+            (goto-char (point-min))
+            (catch 'found
+              (while (re-search-forward
+                      scalpel-locate-html--tag-regexp nil t)
+                (let* ((tag-beg (match-beginning 0))
+                       (tag-name (save-excursion
+                                   (goto-char tag-beg)
+                                   (if (looking-at
+                                        "<\\([[:alpha:]][[:alnum:]:_-]*\\)")
+                                       (match-string 1)
+                                     nil))))
+                  (when tag-name
+                    (if (equal (scalpel-locate-html--tag-id tag-beg) id)
+                        (let ((end (scalpel-locate-html--element-end
+                                    tag-name)))
+                          (when end
+                            (goto-char end)
+                            (skip-chars-backward " \t\r\n")
+                            (throw 'found
+                                   (cons tag-beg (point)))))
+                      (scalpel-locate-html--skip-raw-text
+                       tag-name))))))))
+         ;; Dotted symbol: resolve the prefix first.
+         ((= (length parts) 2)
+          (let ((prefix (nth 0 parts)))
+            (goto-char (point-min))
+            (if (re-search-forward
+                 (concat "<script\\(?:[ \t\n]+[^<>]*\\)?"
+                         "[ \t\n]id[ \t\n]*=[ \t\n]*\\(['\"]\\)"
+                         (regexp-quote prefix) "\\1")
+                 nil t)
+                ;; Prefix is an id'd script element: scriptId.jsName scan.
+                (scalpel-locate-html--script-declaration-range symbol)
+              ;; Otherwise resolve NAME.key object entry, falling back to
+              ;; the script declaration scan when no entry matches.
+              (or (scalpel-locate-html--js-entry-range symbol)
+                  (scalpel-locate-html--script-declaration-range symbol))))))))))
 
 (defun scalpel-locate-html-range (_file symbol)
   "Return the range of SYMBOL's element as (BEG . END).
@@ -264,7 +528,15 @@ their raw text is never mistaken for ids, while the ids of the
 script or style tags themselves are still collected, making them
 locatable definitions.  For scripts carrying an id, the JS
 scanner runs over the body and each JS name is emitted as
-scriptId.name; scripts without an id contribute no JS names."
+scriptId.name; scripts without an id contribute no JS names.
+
+For inline scripts without an id attribute, the body is still
+skipped as raw text, but its top-level declarations are scanned
+via \`scalpel-locate-html--js-inline-top-level-decls', which yields
+top-level const/let/var names together with each key of their
+top-level object literal as NAME.key; nested objects are not
+descended into.  Scripts with an id keep their existing behavior
+and do not emit NAME.key symbols."
   (save-excursion
     (goto-char (point-min))
     (require 'scalpel-locate-js)
@@ -280,17 +552,22 @@ scriptId.name; scripts without an id contribute no JS names."
                 (when id (push id ids))
                 (let ((body-beg (point)))
                   (scalpel-locate-html--skip-raw-text tag-name)
-                  (when (and id (string= tag-type "script"))
-                    (let* ((body-end (point))
-                           (body-text (and (> body-end body-beg)
-                                           (buffer-substring
-                                            body-beg body-end))))
-                      (when body-text
-                        (with-temp-buffer
-                          (insert body-text)
-                          (dolist (name (car (scalpel-locate-js-scan-region
-                                              (point-min) (point-max))))
-                            (push (concat id "." name) ids))))))))
+                  (let* ((body-end (point))
+                         (body-text (and (> body-end body-beg)
+                                         (buffer-substring
+                                          body-beg body-end))))
+                    (when body-text
+                      (if (and id (string= tag-type "script"))
+                          (with-temp-buffer
+                            (insert body-text)
+                            (dolist (name (car (scalpel-locate-js-scan-region
+                                                (point-min) (point-max))))
+                              (push (concat id "." name) ids)))
+                        (when (string= tag-type "script")
+                          (dolist (name
+                                   (scalpel-locate-html--js-inline-top-level-decls
+                                    body-text))
+                            (push name ids))))))))
             (when id (push id ids)))))
       (nreverse ids))))
 
