@@ -59,6 +59,10 @@ nil yield the full vocabulary minus \"web-search\".  The result is
 always a subset of `scalpel-agent--tool-vocabulary', so it stays
 in sync with that constant.
 
+`shell-mode' is unrestricted apart from \"web-search\": the shell
+tool itself can write files, so the mode is not read-only and no
+edit or file tools are excluded.
+
 The \"web-search\" tool is only visible when MODE itself starts
 with the `web-search' prefix (the @ prefix on the console selects
 such modes), so callers control its visibility via MODE rather
@@ -83,9 +87,6 @@ restrictions as their corresponding base modes."
             ('consult '("block-edit" "block-insert" "block-delete"
                         "file-create" "file-rename" "file-delete"
                         "file-substitute-dry-run" "confirm"))
-            ('shell-mode '("block-edit" "block-insert" "block-delete"
-                           "file-create" "file-rename" "file-delete"
-                           "file-substitute-dry-run"))
             ('readonly-shell '("block-edit" "block-insert" "block-delete"
                                "file-create" "file-rename" "file-delete"
                                "file-substitute-dry-run" "confirm"))
@@ -4400,9 +4401,10 @@ reload and must not survive reloads.")
 
 :normal is the default and grants the unrestricted vocabulary.
 :consult restricts the planner to read-only tools (file-peek, shell,
-reply).  :shell-mode restricts the planner to shell-flavoured tools
-\(file-peek, shell, reply, confirm).  :readonly-shell restricts the
-planner to read-only shell tools (file-peek, shell, reply).
+reply).  :shell-mode also grants the unrestricted vocabulary, same as
+:normal; it is not a read-only restriction, and the shell tool it
+enables can modify files.  :readonly-shell restricts the planner to
+read-only shell tools (file-peek, shell, reply).
 
 The console resets this variable to :normal around each run so the
 restriction never leaks across rounds.  It is deliberately transient
