@@ -65,12 +65,21 @@ such modes), so callers control its visibility via MODE rather
 than by mutating the vocabulary.  Independently of MODE,
 \"web-search\" is excluded when the dynamic variable
 `scalpel-agent--web-search-suppressed' is non-nil; the console
-binds it via a let around --run-rounds/--run-round execution."
-  (let* ((web-search-mode
-          (and (symbolp mode)
-               (string-prefix-p "web-search" (symbol-name mode))))
+binds it via a let around --run-rounds/--run-round execution.
+
+Combined modes strip the `-no-reasoning' suffix before matching,
+so that `!~', `?~', `@?!~' and the like share the same tool
+restrictions as their corresponding base modes."
+  (let* ((name (and (symbolp mode) (symbol-name mode)))
+         (core (if (and name
+                        (string-suffix-p "-no-reasoning" name))
+                   (intern (substring name 0 -13))
+                 mode))
+         (web-search-mode
+          (and (symbolp core)
+               (string-prefix-p "web-search" (symbol-name core))))
          (base-excluded
-          (pcase mode
+          (pcase core
             ('consult '("block-edit" "block-insert" "block-delete"
                         "file-create" "file-rename" "file-delete"
                         "file-substitute-dry-run" "confirm"))
