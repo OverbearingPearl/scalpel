@@ -251,9 +251,7 @@ while a refresh is already running."
                               (regexp-quote prev-id)
                               "[^\n]*$")
                       nil t))
-                (progn
-                  (goto-char (line-beginning-position))
-                  (forward-line 0))
+                (beginning-of-line)
               (goto-char (point-min))))
         (setq scalpel-hub--refresh-running nil)))))
 
