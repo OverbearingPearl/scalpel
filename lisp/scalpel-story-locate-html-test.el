@@ -84,6 +84,15 @@
            (setq text (and range (buffer-substring-no-properties (car range) (cdr range))))))
   (:then (should (and range text (string-match-p "c2_2" text)))))
 
+(ert-gwt-deftest
+  (:given ((content "<html><body><script>const f = (a) => a;</script><p id=\"p1\"></p></body></html>")
+           (result nil)))
+  (:when (with-temp-buffer
+           (insert content)
+           (setq result (scalpel-locate-html-list-symbols nil))))
+  (:then (should (member "f" result)))
+  (:then (should (member "p1" result))))
+
 (provide 'scalpel-story-locate-html-test)
 
 ;;; scalpel-story-locate-html-test.el ends here

@@ -296,6 +296,8 @@ the review module is unavailable does this fall back to opening
 `scalpel-review-open' directly.  A session that was already offered
 when `run-rounds' ended (reported by
 `scalpel-lineage-session-closed-p') is not offered a second time.
+After cleanup, the hub is refreshed immediately so a console killed
+with \\[kill-buffer] disappears from the hub list without delay.
 Teardown never resets global lineage state, so the dialogues chain
 survives the console being killed.  Everything stays silent when
 there is no change.  Safe when the reasoning buffer does not exist."
@@ -328,7 +330,9 @@ there is no change.  Safe when the reasoning buffer does not exist."
      ((fboundp 'scalpel-review-open)
       (condition-case nil
           (scalpel-review-open)
-        (error nil))))))
+        (error nil)))))
+  (when (fboundp 'scalpel-hub--refresh-on-event)
+    (scalpel-hub--refresh-on-event)))
 
 (defconst scalpel-console--session-variables
   '(scalpel-console--root

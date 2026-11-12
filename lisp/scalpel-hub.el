@@ -59,14 +59,26 @@
   "Mnemonic set on a console buffer via `scalpel-hub-set-mnemonic'.")
 
 (defun scalpel-hub--console-buffer-p (name)
-  "Return non-nil when buffer NAME fits the console name format.
+  "Return t when buffer NAME fits the console name format, nil otherwise.
 The `%s' slot of `scalpel-console-buffer-name-format' is matched
 wildly: everything before it must prefix NAME and everything
-after it must suffix NAME."
+after it must suffix NAME.  Emacs's buffer-uniqueness suffix
+\"<N>\" appended after the trailing part is also tolerated, so a
+second console at the same root (e.g. \"*scalpel: ~/proj*<2>\")
+is still recognized.  The return value is always t or nil so
+callers can compare with `eq' against t."
   (let ((fmt scalpel-console-buffer-name-format))
-    (when (and fmt (string-match (regexp-quote "%s") fmt))
-      (and (string-prefix-p (substring fmt 0 (match-beginning 0)) name)
-           (string-suffix-p (substring fmt (match-end 0)) name)))))
+    (and fmt
+         (string-match (regexp-quote "%s") fmt)
+         (and (string-match
+               (concat "\\`"
+                       (regexp-quote (substring fmt 0 (match-beginning 0)))
+                       ".*"
+                       (regexp-quote (substring fmt (match-end 0)))
+                       "\\(?:<[0-9]+>\\)?"
+                       "\\'")
+               name)
+              t))))
 
 (defun scalpel-hub--consoles ()
   "Return the live console buffers, newest first by buffer order."
@@ -76,10 +88,19 @@ after it must suffix NAME."
    (buffer-list)))
 
 (defun scalpel-hub--busy (buf)
-  "Return the busy state of console BUF, or a dash when unreadable."
+  "Return the busy state of console BUF.
+The value is \"yes\" when the console is busy, \"err\" when the
+buffer carries a scalpel-console-planner-error text property (a
+persistent marker the console leaves on failed turns), \"no\" when
+idle, or \"-\" when BUF is no longer live."
   (if (buffer-live-p buf)
       (with-current-buffer buf
-        (if (bound-and-true-p scalpel-console--busy) "yes" "no"))
+        (if (bound-and-true-p scalpel-console--busy)
+            "yes"
+          (if (text-property-any 1 (1+ (buffer-size))
+                                 'scalpel-console-planner-error t)
+              "err"
+            "no")))
     "-"))
 
 (defun scalpel-hub--tokens (buf)
@@ -119,34 +140,93 @@ single line so the tabulated-list row structure is preserved."
 
 (defun scalpel-hub--entries ()
   "Build the tabulated entries, one per live console buffer."
-  (mapcar
-   (lambda (buf)
-     (let* ((name (buffer-name buf))
-            (root (with-current-buffer buf
-                    (if (bound-and-true-p scalpel-console--root)
-                        (abbreviate-file-name scalpel-console--root)
-                      name)))
-            (mnemonic (with-current-buffer buf
-                        (or (bound-and-true-p scalpel-hub-mnemonic) "")))
-            (busy (scalpel-hub--busy buf))
-            (tokens (scalpel-hub--tokens buf))
-            (last (or (scalpel-hub--last-instruction name) ""))
-            (busy-cell (cond
-                        ((string= busy "yes")
-                         (propertize busy 'face 'bold 'font-lock-face 'error))
-                        ((string= busy "no")
-                         (propertize busy 'face 'shadow))
-                        (t busy))))
-       (list name
-             (vector root mnemonic busy-cell tokens last))))
-   (scalpel-hub--consoles)))
+  (let* ((consoles (scalpel-hub--consoles))
+         (root-counts
+          (let ((counts (make-hash-table :test 'equal)))
+            (dolist (buf consoles)
+              (let ((root (with-current-buffer buf
+                            (when (bound-and-true-p scalpel-console--root)
+                              (abbreviate-file-name scalpel-console--root)))))
+                (when root
+                  (puthash root (1+ (gethash root counts 0)) counts))))
+            counts))
+         (root-duplicated
+          (lambda (root)
+            (> (gethash root root-counts 0) 1))))
+    (mapcar
+     (lambda (buf)
+       (let* ((name (buffer-name buf))
+              (root (with-current-buffer buf
+                      (if (bound-and-true-p scalpel-console--root)
+                          (abbreviate-file-name scalpel-console--root)
+                        name)))
+              (mnemonic (with-current-buffer buf
+                          (or (bound-and-true-p scalpel-hub-mnemonic) "")))
+              (busy (scalpel-hub--busy buf))
+              (tokens (scalpel-hub--tokens buf))
+              (last (or (scalpel-hub--last-instruction name) ""))
+              (busy-cell (cond
+                          ((string= busy "yes")
+                           (propertize busy 'face 'bold 'font-lock-face 'error))
+                          ((string= busy "no")
+                           (propertize busy 'face 'shadow))
+                          (t busy)))
+              (root-cell (if (and (funcall root-duplicated root)
+                                  (not (string= root name)))
+                             name
+                           root)))
+         (list name
+               (vector root-cell mnemonic busy-cell tokens last))))
+     consoles)))
 
 (defun scalpel-hub--refresh ()
-  "Rebuild the hub listing from the live console buffers."
+  "Rebuild the hub listing from the live console buffers.
+
+After recomputing the entries, widen the Root (first) column to
+the widest displayed Root cell among the current entries, never
+narrower than the base width 30, so first-column content is not
+truncated by the column width.  The header is re-initialized before
+printing so `tabulated-list-print' picks up the new width.
+
+The entry id of the line under point is recorded before the
+rebuild; after printing, if that id still exists among the fresh
+entries, point is restored to its row, otherwise point falls back
+to the first line."
   (when (buffer-live-p (get-buffer scalpel-hub--buffer-name))
     (with-current-buffer scalpel-hub--buffer-name
-      (setq tabulated-list-entries (scalpel-hub--entries))
-      (tabulated-list-print))))
+      (let ((current-id (tabulated-list-get-id)))
+        (setq tabulated-list-entries (scalpel-hub--entries))
+        (let* ((fmt (copy-sequence tabulated-list-format))
+               (max-width 30))
+          (dolist (entry tabulated-list-entries)
+            ;; Entries are (NAME VECTOR) two-element lists: the row
+            ;; vector is the second element, wrapped in the list.
+            (let* ((row (cadr entry))
+                   (root-cell (and (vectorp row) (aref row 0))))
+              (when (stringp root-cell)
+                (setq max-width
+                      (max max-width (string-width root-cell))))))
+          (catch 'found
+            (dotimes (i (length fmt))
+              (let ((col (aref fmt i)))
+                (when (and (consp col)
+                           (equal (car col) "Root"))
+                  ;; Column entries are lists (NAME WIDTH ...): mutate
+                  ;; the width slot in place via setcar on the cdr.
+                  (setcar (cdr col) max-width)
+                  (throw 'found nil)))))
+          (setq tabulated-list-format fmt)
+          (tabulated-list-init-header)
+          (tabulated-list-print))
+        (let ((target-line
+               (when current-id
+                 (cl-position current-id tabulated-list-entries
+                              :key #'car :test #'equal))))
+          (if target-line
+              (progn
+                (goto-char (point-min))
+                (forward-line target-line))
+            (goto-char (point-min))))))))
 
 (defun scalpel-hub--refresh-on-event ()
   "Event-driven refresh entry point.

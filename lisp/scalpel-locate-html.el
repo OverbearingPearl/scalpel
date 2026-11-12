@@ -550,7 +550,7 @@ and do not emit NAME.key symbols."
           (if (member tag-type '("script" "style"))
               (progn
                 (when id (push id ids))
-                (let ((body-beg (point)))
+                (let ((body-beg (progn (skip-chars-forward "^>") (forward-char) (point))))
                   (scalpel-locate-html--skip-raw-text tag-name)
                   (let* ((body-end (point))
                          (body-text (and (> body-end body-beg)

@@ -1382,12 +1382,6 @@ words of a name.  A name differing in a letter keeps its difference:
 the comparison catches a separator, it does not guess at a typo."
   (replace-regexp-in-string "[-_]" "" name))
 
-(defconst scalpel-agent--resolve-hint-max-symbols 20
-  "Maximum number of definitions a zero-hit refusal names.
-The list is evidence about what the locator can read, not a file
-listing; a longer dump would cost the planner tokens on every
-prompt the refusal is part of.")
-
 (defun scalpel-agent--resolve-hint (file symbol)
   "Return a report line describing what the locator can read in FILE.
 FILE is the file SYMBOL was asked for and not found in.  The line
@@ -1453,9 +1447,7 @@ one -- keeps producing.  That cause gets its own line."
                              (or (string-prefix-p skeleton other)
                                  (string-prefix-p other skeleton))))
                          symbols)))
-                 (shown (cl-subseq symbols 0
-                                   (min (length symbols)
-                                        scalpel-agent--resolve-hint-max-symbols))))
+                 (shown symbols))
             (concat
              (format (concat "\nNote: %s is in the context and defines %d "
                              "definition(s); %s is not one of them.")
