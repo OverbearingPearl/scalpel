@@ -144,25 +144,29 @@ token module degrades to a dash rather than an error."
 
 (defun scalpel-hub--last-instruction (name)
   "Return the most recent recorded question for session NAME.
-Scans the global lineage dialogue chain for entries whose :session
-matches the console buffer name NAME; only entries carrying a
-:question qualify.  When `scalpel-lineage' is not loadable, or no
-matching entry exists, return nil so the column stays blank.
-The full question text is returned without any length truncation;
-overly wide cells simply extend off-screen, which truncated-lines
-handling takes care of.  Multi-line questions are folded to a
-single line so the tabulated-list row structure is preserved."
+Looks the session up in the per-session index hash table when it is
+available, falling back to a linear scan of the global lineage
+dialogue chain otherwise; only entries carrying a :question qualify.
+When `scalpel-lineage' is not loadable, or no matching entry exists,
+return nil so the column stays blank.  The full question text is
+returned without any length truncation; overly wide cells simply
+extend off-screen, which truncated-lines handling takes care of.
+Multi-line questions are folded to a single line so the
+tabulated-list row structure is preserved."
   (when (require 'scalpel-lineage nil t)
-    (when (boundp 'scalpel-lineage--dialogues)
-      (let ((last nil))
-        (dolist (d scalpel-lineage--dialogues)
-          (when (and (equal (plist-get d :session) name)
-                     (plist-get d :question))
-            (setq last (plist-get d :question))))
-        (when last
-          ;; Layout compromise: tabulated-list renders one physical row
-          ;; per entry, so embedded newlines must be folded to spaces.
-          (replace-regexp-in-string "\n" " " (string-trim last)))))))
+    (let ((last nil))
+      (if (and (boundp 'scalpel-lineage--session-index)
+               (hash-table-p scalpel-lineage--session-index))
+          (setq last (gethash name scalpel-lineage--session-index))
+        (when (boundp 'scalpel-lineage--dialogues)
+          (dolist (d scalpel-lineage--dialogues)
+            (when (and (equal (plist-get d :session) name)
+                       (plist-get d :question))
+              (setq last (plist-get d :question))))))
+      (when last
+        ;; Layout compromise: tabulated-list renders one physical row
+        ;; per entry, so embedded newlines must be folded to spaces.
+        (replace-regexp-in-string "\n" " " (string-trim last))))))
 
 (defun scalpel-hub--entries ()
   "Build the tabulated entries, one per live console buffer."
@@ -207,63 +211,102 @@ single line so the tabulated-list row structure is preserved."
                (vector root-cell mnemonic busy-cell tokens last))))
      consoles)))
 
+(defvar scalpel-hub--refresh-running nil
+  "Non-nil while a hub refresh is in progress; guards against reentrancy.")
+
 (defun scalpel-hub--refresh ()
-  "Rebuild the hub listing from the live console buffers.
+  "Rebuild the hub listing from live console buffers.
+Recompute `tabulated-list-entries`, widen the \"Root\" column to the
+widest displayed Root cell (never below 30), re-initialize the header,
+print, and restore point to the row carrying the previously recorded
+entry id, falling back to `point-min'.  Reentrant calls are ignored
+while a refresh is already running."
+  (unless scalpel-hub--refresh-running
+    (let ((prev-id (and (tabulated-list-get-entry)
+                        (let ((id (tabulated-list-get-id)))
+                          (and id (format "%s" id)))))
+          (inhibit-read-only t))
+      (setq scalpel-hub--refresh-running t)
+      (unwind-protect
+          (progn
+            (setq tabulated-list-entries (scalpel-hub--entries))
+            (let* ((root-width (max 30
+                                    (apply #'max 0
+                                           (mapcar (lambda (entry)
+                                                     (length (or (aref (cadr entry) 0) "")))
+                                                   tabulated-list-entries)))))
+              (setq tabulated-list-format
+                    (vconcat
+                     (mapcar (lambda (col)
+                               (if (equal (car col) "Root")
+                                   (list "Root" root-width (nth 2 col))
+                                 col))
+                             tabulated-list-format))))
+            (tabulated-list-init-header)
+            (tabulated-list-print t)
+            (goto-char (point-min))
+            (if (and prev-id
+                     (re-search-forward
+                      (concat "^[^\n]*?"
+                              (regexp-quote prev-id)
+                              "[^\n]*$")
+                      nil t))
+                (progn
+                  (goto-char (line-beginning-position))
+                  (forward-line 0))
+              (goto-char (point-min))))
+        (setq scalpel-hub--refresh-running nil)))))
 
-After recomputing the entries, widen the Root (first) column to
-the widest displayed Root cell among the current entries, never
-narrower than the base width 30, so first-column content is not
-truncated by the column width.  The header is re-initialized before
-printing so `tabulated-list-print' picks up the new width.
+(defvar scalpel-hub--entries nil
+  "Alist of hub entry descriptors, keyed by symbol.
 
-The entry id of the line under point is recorded before the
-rebuild; after printing, if that id still exists among the fresh
-entries, point is restored to its row, otherwise point falls back
-to the first line."
-  (when (buffer-live-p (get-buffer scalpel-hub--buffer-name))
-    (with-current-buffer scalpel-hub--buffer-name
-      (let ((current-id (tabulated-list-get-id)))
-        (setq tabulated-list-entries (scalpel-hub--entries))
-        (let* ((fmt (copy-sequence tabulated-list-format))
-               (max-width 30))
-          (dolist (entry tabulated-list-entries)
-            ;; Entries are (NAME VECTOR) two-element lists: the row
-            ;; vector is the second element, wrapped in the list.
-            (let* ((row (cadr entry))
-                   (root-cell (and (vectorp row) (aref row 0))))
-              (when (stringp root-cell)
-                (setq max-width
-                      (max max-width (string-width root-cell))))))
-          (catch 'found
-            (dotimes (i (length fmt))
-              (let ((col (aref fmt i)))
-                (when (and (consp col)
-                           (equal (car col) "Root"))
-                  ;; Column entries are lists (NAME WIDTH ...): mutate
-                  ;; the width slot in place via setcar on the cdr.
-                  (setcar (cdr col) max-width)
-                  (throw 'found nil)))))
-          (setq tabulated-list-format fmt)
-          (tabulated-list-init-header)
-          (tabulated-list-print))
-        (let ((target-line
-               (when current-id
-                 (cl-position current-id tabulated-list-entries
-                              :key #'car :test #'equal))))
-          (if target-line
-              (progn
-                (goto-char (point-min))
-                (forward-line target-line))
-            (goto-char (point-min))))))))
+Each element is (KEY . PLIST) where PLIST carries the entry's
+display name, command, and grouping metadata.  Declared here so
+`scalpel-hub--refresh' can reference it before its first use.")
+
+(defvar scalpel-hub--refresh-pending nil
+  "Non-nil when an event has requested a rebuild that has not yet run.")
+
+(defvar scalpel-hub--refresh-running nil
+  "Non-nil while a rebuild is in progress.
+Further refresh requests are ignored meanwhile.")
+
+(defvar scalpel-hub--refresh-timer nil
+  "Idle timer armed for the next debounced rebuild, or nil.")
+
+(defconst scalpel-hub--refresh-debounce 0.2
+  "Idle seconds to wait before running a requested rebuild.")
+
+(defun scalpel-hub--live-buffer-p (buffer)
+  "Return non-nil when BUFFER is a live buffer."
+  (and (bufferp buffer) (buffer-live-p buffer)))
 
 (defun scalpel-hub--refresh-on-event ()
-  "Event-driven refresh entry point.
-Refresh the hub buffer immediately when it exists; return
-silently otherwise.  Event invocations never run while the
-minibuffer is active, so no guard is needed."
-  (interactive)
+  "Single event entry point for hub refresh requests.
+Records a pending refresh and arms one idle timer calling
+`scalpel-hub--refresh-scheduled', unless a rebuild is already
+running or a timer is already armed."
+  (setq scalpel-hub--refresh-pending t)
+  (unless (or scalpel-hub--refresh-running scalpel-hub--refresh-timer)
+    (setq scalpel-hub--refresh-timer
+          (run-with-idle-timer scalpel-hub--refresh-debounce nil
+                               #'scalpel-hub--refresh-scheduled))))
+
+(defun scalpel-hub--refresh-scheduled ()
+  "Rebuild the hub once, debounced, re-arming only for mid-rebuild requests.
+Clears the timer slot and the pending flag before rebuilding so a request
+arriving during the rebuild sets the flag again; rebuilds under a
+reentrancy guard when a hub buffer is live; re-arms the timer afterwards
+only when a request was recorded during the rebuild."
+  (setq scalpel-hub--refresh-timer nil)
+  (setq scalpel-hub--refresh-pending nil)
   (when (buffer-live-p (get-buffer scalpel-hub--buffer-name))
-    (scalpel-hub--refresh)))
+    (setq scalpel-hub--refresh-running t)
+    (scalpel-hub--refresh))
+  (when scalpel-hub--refresh-pending
+    (setq scalpel-hub--refresh-timer
+          (run-with-idle-timer scalpel-hub--refresh-debounce nil
+                               #'scalpel-hub--refresh-scheduled))))
 
 (defun scalpel-hub--uninstall-refresh-hook ()
   "Remove `scalpel-hub--refresh-on-event' from `buffer-list-update-hook'.

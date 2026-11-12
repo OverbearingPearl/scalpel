@@ -1205,15 +1205,11 @@ exactly as `scalpel-console--history' derives the trimming, so the
 marks and the conversation cannot disagree.  Clearing before marking
 keeps the result idempotent, and a call with
 `scalpel-console-trim-consumed-output' nil clears the marks left from
-before it was turned off.  When the hub module is loaded, trigger one
-event-driven hub refresh so hub buffers stay current after report
-appends and error-header rendering."
+before it was turned off."
   (let ((inhibit-read-only t))
     (scalpel-console--clear-consumed-body-markers)
     (dolist (region (scalpel-console--consumed-body-regions))
-      (scalpel-console--mark-consumed-body region)))
-  (when (fboundp 'scalpel-hub--refresh-on-event)
-    (scalpel-hub--refresh-on-event)))
+      (scalpel-console--mark-consumed-body region))))
 
 (defun scalpel-console--history ()
   "Return the conversation recorded in the current buffer, as text.
