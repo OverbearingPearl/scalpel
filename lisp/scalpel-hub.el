@@ -106,14 +106,13 @@ idle, or \"-\" when BUF is no longer live."
 (defun scalpel-hub--planner-error-p (buf)
   "Return t when BUF is a live, idle console whose last round hit a planner error.
 Dead buffers and busy sessions yield nil.  Otherwise locate the last
-assistant role segment and decide by text content instead of text
-properties: search from the segment start to the end of BUF for the
-last error header (`Scalpel [bug]' or `Scalpel [planner error]') and
-the last success header (a line beginning with `Scalpel<'); return t
-only when an error header exists and is later than any success header
-\(or no success header exists).  This avoids the false positive caused
-by the `scalpel-console-planner-error' property bleeding backwards
-into later successful rounds inserted after the error text."
+assistant role segment, compute its exact boundaries via
+`next-single-property-change', and return t only when the
+`scalpel-console-planner-error' property is set at the segment's
+beginning -- the error turn's own header.  A later successful round's
+header never carries the property, and earlier error turns fall
+outside the last segment, so both the stale-property false positive
+and the quoted-error-header false positive disappear."
   (when (and (buffer-live-p buf)
              (not (scalpel-hub--busy buf)))
     (with-current-buffer buf
@@ -126,22 +125,9 @@ into later successful rounds inserted after the error text."
                        (eq (get-text-property pos 'scalpel-console-role)
                            'assistant))
               (throw 'found
-                     (save-excursion
-                       (save-restriction
-                         (widen)
-                         (let ((err-pos nil)
-                               (ok-pos nil))
-                           (goto-char (point-max))
-                           (when (re-search-backward
-                                  "Scalpel \\[\\(?:bug\\|planner error\\)\\]"
-                                  pos t)
-                             (setq err-pos (match-beginning 0)))
-                           (goto-char (point-max))
-                           (when (re-search-backward "^Scalpel<" pos t)
-                             (setq ok-pos (match-beginning 0)))
-                           (and err-pos
-                                (or (null ok-pos) (> err-pos ok-pos))
-                                t))))))))))))
+                     (eq (get-text-property pos
+                                            'scalpel-console-planner-error)
+                         t)))))))))
 
 (defun scalpel-hub--tokens (buf)
   "Return the cumulative token total for console BUF, or a dash.

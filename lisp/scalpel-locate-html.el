@@ -456,6 +456,63 @@ are matched as strings only, never derived from numeric positions."
            (t (forward-char))))))
     (nreverse result)))
 
+(defun scalpel-locate-html--js-inline-top-level-single-entry-p (text)
+  "Return non-nil when TEXT is exactly one complete top-level JS object entry.
+A valid entry looks like NAME = { ... }, optionally with a dotted key such
+as NAME.KEY = { ... }, or a colon-separated key such as NAME:{ ... };
+the entry passes only when the object literal closes and nothing but
+whitespace follows it."
+  (when (require 'scalpel-locate-js nil t)
+    (let ((trimmed (string-trim text)))
+      (when (string-match
+              (concat
+                "\\`[ \t\r\n]*"
+                "[A-Za-z_$][A-Za-z0-9_$]*"
+                "\\(?:\\.[A-Za-z_$][A-Za-z0-9_$]*\\)*"
+                "[ \t\r\n]*[:=][ \t\r\n]*{")
+              trimmed)
+        (let ((string-fn (intern-soft "scalpel-locate-js--skip-string"))
+              (template-fn (intern-soft "scalpel-locate-js--skip-template"))
+              (comment-fn (intern-soft "scalpel-locate-js--skip-comment-at")))
+          (when (and (functionp string-fn)
+                     (functionp template-fn)
+                     (functionp comment-fn))
+            (with-temp-buffer
+              (insert trimmed)
+              (goto-char (point-min))
+              (let ((closed nil)
+                    (depth 0)
+                    (done nil))
+                (while (not done)
+                  (cond
+                    ((eobp)
+                     (setq done t))
+                    ((= (following-char) ?{)
+                     (forward-char)
+                     (setq depth (1+ depth)))
+                    ((= (following-char) ?})
+                     (forward-char)
+                     (setq depth (1- depth))
+                     (when (= depth 0)
+                       (setq closed t
+                             done t)))
+                    ((memq (following-char) '(?\" ?'))
+                     (funcall string-fn (following-char)))
+                    ((= (following-char) ?`)
+                     (funcall template-fn))
+                    ((and (= (following-char) ?/)
+                          (< (1+ (point)) (point-max))
+                          (memq (char-after (1+ (point))) '(?/ ?\*)))
+                     (funcall comment-fn))
+                    (t
+                     (forward-char))))
+                (and closed
+                     (= depth 0)
+                     (string-match-p
+                       "\\`[ \t\r\n]*\\'"
+                       (buffer-substring-no-properties
+                         (point) (point-max))))))))))))
+
 (defun scalpel-locate-html--top-definition-range (symbol)
   "Locate the top-level definition range for SYMBOL in the current HTML buffer.
 SYMBOL may be a symbol or a string.  A non-dotted SYMBOL resolves to the
@@ -572,28 +629,31 @@ and do not emit NAME.key symbols."
       (nreverse ids))))
 
 (defun scalpel-locate-html--single-definition-p (text)
-  "Return non-nil when TEXT is exactly one element with one id.
-TEXT must carry exactly one id attribute, and only whitespace may
-follow the element's matching end tag, so a replacement can only
-ever land on one element."
-  (let ((count 0) (pos 0))
-    (save-match-data
-      (while (string-match scalpel-locate-html--id-regexp text pos)
-        (setq count (1+ count)
-              pos (match-end 0))))
-    (and (= count 1)
-         (with-temp-buffer
-           (insert text)
-           (goto-char (point-min))
-           (when (re-search-forward
-                  scalpel-locate-html--tag-regexp nil t)
-             (let* ((beg (match-beginning 0))
-                    (name (match-string 1)))
-               (goto-char beg)
-               (string-blank-p
-                (buffer-substring-no-properties
-                 (scalpel-locate-html--element-end name)
-                 (point-max)))))))))
+  "Return non-nil when TEXT is exactly one legal definition target.
+Two shapes are accepted: a single JS dotted entry, or exactly one
+element with one id -- in the latter case TEXT must carry exactly
+one id attribute, and only whitespace may follow the element's
+matching end tag, so a replacement can only ever land on one
+target."
+  (or (scalpel-locate-html--js-inline-top-level-single-entry-p text)
+      (let ((count 0) (pos 0))
+        (save-match-data
+          (while (string-match scalpel-locate-html--id-regexp text pos)
+            (setq count (1+ count)
+                  pos (match-end 0))))
+        (and (= count 1)
+             (with-temp-buffer
+               (insert text)
+               (goto-char (point-min))
+               (when (re-search-forward
+                      scalpel-locate-html--tag-regexp nil t)
+                 (let* ((beg (match-beginning 0))
+                        (name (match-string 1)))
+                   (goto-char beg)
+                   (string-blank-p
+                    (buffer-substring-no-properties
+                     (scalpel-locate-html--element-end name)
+                     (point-max))))))))))
 
 ;; Register with `scalpel-locate' at load time; see the Commentary.
 (scalpel-locate-register-provider

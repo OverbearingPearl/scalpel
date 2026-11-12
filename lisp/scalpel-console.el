@@ -2351,7 +2351,7 @@ the `~@' combination."
                                  (put-text-property err-beg (point)
                                                     'scalpel-console-planner-error t)
                                  (scalpel-console--make-nonsticky
-                                  err-beg (point) '(face)))
+                                  err-beg (point) '(face scalpel-console-planner-error)))
                              ;; An error turn is a conversation turn too: it becomes the
                              ;; newest assistant turn, so the report before it has to be
                              ;; marked.  The insertion stays direct rather than going
